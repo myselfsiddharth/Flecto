@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm --version)",
+      "Bash(npm install:*)",
+      "Bash(node --test test/differ.test.js)",
+      "Bash(node index.js --help)",
+      "Bash(node index.js watch --help)",
+      "Bash(node index.js watch /tmp/test-config.json --snapshot)",
+      "Bash(node index.js watch /tmp/test-config.json --diff)",
+      "Bash(echo \"Exit code: $?\")",
+      "Bash(node index.js watch /tmp/nonexistent.json)",
+      "Bash(echo \"Exit: $?\")",
+      "Bash(printf \"HOST=localhost\\\\nPORT=5432\\\\nDEBUG=false\\\\n\")",
+      "Bash(node index.js watch /tmp/test.env --snapshot)",
+      "Bash(printf \"HOST=prod.example.com\\\\nPORT=5432\\\\nDEBUG=true\\\\nNEW_VAR=hello\\\\n\")",
+      "Bash(node index.js watch /tmp/test.env --diff)"
+    ]
+  }
+}

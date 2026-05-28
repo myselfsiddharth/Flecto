@@ -1,0 +1,6 @@
+node_modules/
+.sentinel-snapshots/
+.sentinel-queue/
+.DS_Store
+*.log
+npm-debug.log*
