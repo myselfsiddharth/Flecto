@@ -6,7 +6,7 @@ import { tmpdir } from 'os';
 import { startWatcher } from '../src/watcher.js';
 
 test('watcher emits semantic change events', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'sentinel-watcher-'));
+  const dir = mkdtempSync(join(tmpdir(), 'driff-watcher-'));
   const file = join(dir, 'config.json');
   writeFileSync(file, JSON.stringify({ a: 1 }, null, 2), 'utf8');
 

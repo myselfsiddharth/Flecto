@@ -1,4 +1,4 @@
-# sentinel
+# Driff
 
 A semantic file watcher that detects *meaningful* changes in structured config files and reports them in plain English — not raw line diffs.
 
@@ -18,12 +18,19 @@ Recruiter-focused overview: see `README_RECRUITERS.md`.
 ## Install
 
 ```bash
-# Clone / download the project, then:
+npm install -g driff
+```
+
+Or from source:
+
+```bash
+git clone https://github.com/siddharrth2005/sentinel.git
+cd sentinel
 npm install
 npm install -g .
 ```
 
-After that, `sentinel` is available globally.
+After install, `driff` is available globally.
 
 ---
 
@@ -32,22 +39,22 @@ After that, `sentinel` is available globally.
 ### Watch a file
 
 ```bash
-sentinel watch config/prod.yaml
-sentinel watch .env
-sentinel watch settings.json
-sentinel watch pyproject.toml
+driff watch config/prod.yaml
+driff watch .env
+driff watch settings.json
+driff watch pyproject.toml
 ```
 
 ### Watch multiple files/globs
 
 ```bash
-sentinel watch "config/**/*.yaml" ".env"
+driff watch "config/**/*.yaml" ".env"
 ```
 
 ### Watch with verbose output
 
 ```bash
-sentinel watch config/prod.yaml --mode verbose
+driff watch config/prod.yaml --mode verbose
 ```
 
 Verbose mode shows before/after values on separate lines and adds a blank line between change events.
@@ -55,7 +62,7 @@ Verbose mode shows before/after values on separate lines and adds a blank line b
 ### Ignore specific key paths
 
 ```bash
-sentinel watch config/prod.yaml --ignore "updated_at,meta.timestamp"
+driff watch config/prod.yaml --ignore "updated_at,meta.timestamp"
 ```
 
 Comma-separated paths. Supports:
@@ -67,28 +74,28 @@ Comma-separated paths. Supports:
 ### Run a shell command on every change
 
 ```bash
-sentinel watch .env --command "docker-compose restart app"
+driff watch .env --command "docker-compose restart app"
 ```
 
-Changes are passed to the command as JSON in the `SENTINEL_CHANGES` environment variable, and the watched file path in `SENTINEL_FILE`.
+Changes are passed to the command as JSON in the `DRIFF_CHANGES` environment variable, and the watched file path in `DRIFF_FILE`.
 
-If the change payload is too large for env vars, Sentinel writes it to `SENTINEL_CHANGES_FILE` and sets `SENTINEL_CHANGES` to `[]`.
+If the change payload is too large for env vars, Driff writes it to `DRIFF_CHANGES_FILE` and sets `DRIFF_CHANGES` to `[]`.
 
 ### POST changes to a webhook
 
 ```bash
-sentinel watch config/prod.yaml --webhook https://hooks.example.com/notify
+driff watch config/prod.yaml --webhook https://hooks.example.com/notify
 ```
 
 Add custom headers (repeatable):
 
 ```bash
-sentinel watch config/prod.yaml \
+driff watch config/prod.yaml \
   --webhook https://hooks.example.com/notify \
   --webhook-header "Authorization: Bearer TOKEN"
 ```
 
-Sentinel webhook payloads include an event envelope with:
+Driff webhook payloads include an event envelope with:
 - `schema_version`
 - `event_id`
 - `batch_id`
@@ -119,7 +126,7 @@ Payload shape:
 Both can be active at the same time:
 
 ```bash
-sentinel watch .env \
+driff watch .env \
   --command "make reload" \
   --webhook https://hooks.example.com/notify
 ```
@@ -127,7 +134,7 @@ sentinel watch .env \
 ### Delivery semantics and failure policy
 
 ```bash
-sentinel watch config/prod.yaml \
+driff watch config/prod.yaml \
   --webhook https://hooks.example.com/notify \
   --delivery-mode at-least-once \
   --on-alert-failure retry
@@ -142,7 +149,7 @@ sentinel watch config/prod.yaml \
 For network drives or editors that write via temp files, tune the polling interval:
 
 ```bash
-sentinel watch config/prod.yaml --polling --interval 500
+driff watch config/prod.yaml --polling --interval 500
 ```
 
 Default polling interval is `100ms` (polling is **off** unless you pass `--polling`).
@@ -154,7 +161,7 @@ Default polling interval is `100ms` (polling is **off** unless you pass `--polli
 Run semantic diffs in CI against snapshots or git refs:
 
 ```bash
-sentinel ci "config/**/*.yaml" \
+driff ci "config/**/*.yaml" \
   --snapshot-ref HEAD~1 \
   --format github-annotations \
   --fail-on "changed,policy,error"
@@ -180,14 +187,14 @@ sentinel ci "config/**/*.yaml" \
 ### Save a baseline snapshot
 
 ```bash
-sentinel watch config/prod.yaml --snapshot
-# → .sentinel-snapshots/<id>.json
+driff watch config/prod.yaml --snapshot
+# → .driff-snapshots/<id>.json
 ```
 
 ### Diff the current file against the saved snapshot
 
 ```bash
-sentinel watch config/prod.yaml --diff
+driff watch config/prod.yaml --diff
 ```
 
 Prints all changes since the snapshot was taken. Exits with:
@@ -267,13 +274,13 @@ Policy findings can trigger CI failures with `--fail-on policy,error`.
 
 ---
 
-## .sentinelrc configuration
+## .driffrc configuration
 
-Use `.sentinelrc`, `.sentinelrc.json`, `.sentinelrc.yaml`, or `.sentinelrc.yml`.
+Use `.driffrc`, `.driffrc.json`, `.driffrc.yaml`, or `.driffrc.yml`.
 Bootstrap one with:
 
 ```bash
-sentinel init
+driff init
 ```
 
 Example:
@@ -301,14 +308,14 @@ CLI flags take precedence over profile/default values.
 Use a profile with:
 
 ```bash
-sentinel watch --profile dev
-sentinel ci --profile ci
+driff watch --profile dev
+driff ci --profile ci
 ```
 
 Check setup with:
 
 ```bash
-sentinel doctor
+driff doctor
 ```
 
 ---

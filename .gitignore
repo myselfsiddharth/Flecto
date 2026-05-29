@@ -1,4 +1,7 @@
 node_modules/
+.driff-snapshots/
+.driff-queue/
+.driff-tmp/
 .sentinel-snapshots/
 .sentinel-queue/
 .DS_Store

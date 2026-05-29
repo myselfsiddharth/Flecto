@@ -16,7 +16,7 @@ import { createEnvelope } from './src/envelope.js';
 import { evaluatePolicies, highestSeverity } from './src/policy.js';
 import { loadRcConfig, resolveEffectiveOptions, resolveFiles, initRcFile } from './src/config.js';
 
-const SNAPSHOT_DIR = '.sentinel-snapshots';
+const SNAPSHOT_DIR = '.driff-snapshots';
 
 function snapshotIdForPath(absPath) {
   // Stable across platforms and avoids basename collisions
@@ -102,7 +102,7 @@ function readSnapshotStateFromRef(filePath, snapshotRef) {
     return readSnapshotStateFromFile(maybePath);
   }
 
-  // git ref mode: sentinel ci file --snapshot-ref HEAD~1
+  // git ref mode: driff ci file --snapshot-ref HEAD~1
   const rel = relative(process.cwd(), filePath).replaceAll('\\', '/');
   const raw = execSync(`git show ${snapshotRef}:${rel}`, { encoding: 'utf8' });
   return parseContent(filePath, raw);
@@ -137,7 +137,7 @@ function printCiOutput(results, format) {
   if (format === 'github-annotations') {
     for (const result of results) {
       for (const event of result.envelope.changes) {
-        const title = `sentinel ${event.type}`;
+        const title = `driff ${event.type}`;
         console.log(`::warning file=${result.file},title=${title}::${event.path}`);
       }
       for (const finding of result.policies) {
@@ -149,14 +149,14 @@ function printCiOutput(results, format) {
 }
 
 program
-  .name('sentinel')
-  .description('Semantic file watcher — detects meaningful changes in structured config files')
+  .name('driff')
+  .description('Driff — semantic config watcher for meaningful structured file changes')
   .version('1.0.0');
 
 program
   .command('watch [files...]')
   .description('Watch config files/globs for semantic changes')
-  .option('-p, --profile <name>', 'Use profile from .sentinelrc')
+  .option('-p, --profile <name>', 'Use profile from .driffrc')
   .option('-i, --interval <ms>', 'Polling fallback interval in ms', '100')
   .option('--polling', 'Force polling mode (useful on network drives / some editors)', false)
   .option('-m, --mode <mode>', 'Output mode: compact | verbose', 'compact')
@@ -179,7 +179,7 @@ program
       const effective = resolveEffectiveOptions(config, opts.profile, opts);
       const targets = (await resolveTargetFiles(files, config)).map((f) => resolve(f));
       if (targets.length === 0) {
-        throw new Error('No files matched. Provide files or configure .sentinelrc files/include.');
+        throw new Error('No files matched. Provide files or configure .driffrc files/include.');
       }
 
       const ignorePaths = parseCsv(effective.ignore);
@@ -229,7 +229,7 @@ program
           continue;
         }
 
-        renderInfo(`sentinel watching ${chalk.cyan(filepath)}`);
+        renderInfo(`driff watching ${chalk.cyan(filepath)}`);
         const watcher = startWatcher(
           filepath,
           { interval, mode, ignorePaths, polling: Boolean(effective.polling) },
@@ -286,7 +286,7 @@ program
       const closeAll = async (exitCode) => {
         await Promise.all(watchers.map((w) => w.close()));
         if (exitCode === 0) {
-          console.log(chalk.dim('\nsentinel stopped.'));
+          console.log(chalk.dim('\ndriff stopped.'));
         }
         process.exit(exitCode);
       };
@@ -301,7 +301,7 @@ program
 program
   .command('ci [files...]')
   .description('Run semantic diff in CI mode')
-  .option('-p, --profile <name>', 'Use profile from .sentinelrc')
+  .option('-p, --profile <name>', 'Use profile from .driffrc')
   .option('--snapshot-ref <ref>', 'Snapshot reference: snapshot path or git ref')
   .option('--format <type>', 'Output format: json | ndjson | github-annotations', 'json')
   .option('--fail-on <rules>', 'Comma-separated fail rules: changed,added,removed,policy,error,warn', 'changed,policy,error')
@@ -312,7 +312,7 @@ program
       const effective = resolveEffectiveOptions(config, opts.profile, opts);
       const targets = (await resolveTargetFiles(files, config)).map((f) => resolve(f));
       if (targets.length === 0) {
-        throw new Error('No files matched. Provide files or configure .sentinelrc files/include.');
+        throw new Error('No files matched. Provide files or configure .driffrc files/include.');
       }
 
       const ignorePaths = parseCsv(effective.ignore);
@@ -359,7 +359,7 @@ program
 
 program
   .command('init')
-  .description('Create starter .sentinelrc configuration')
+  .description('Create starter .driffrc configuration')
   .action(() => {
     const path = initRcFile(process.cwd());
     renderInfo(`Initialized config: ${path}`);
@@ -367,14 +367,14 @@ program
 
 program
   .command('doctor')
-  .description('Check Sentinel setup, config, and environment')
+  .description('Check Driff setup, config, and environment')
   .action(async () => {
     try {
       const { path, config } = loadRcConfig(process.cwd());
       if (path) {
         renderInfo(`config: ${path}`);
       } else {
-        renderWarn('No .sentinelrc found (optional). Run "sentinel init" to scaffold.');
+        renderWarn('No .driffrc found (optional). Run "driff init" to scaffold.');
       }
 
       const files = await resolveFiles({

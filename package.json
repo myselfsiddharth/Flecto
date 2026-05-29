@@ -1,8 +1,12 @@
 {
-  "name": "sentinel",
+  "name": "driff",
+  "publishConfig": {
+    "access": "public"
+  },
   "version": "1.0.0",
-  "description": "Semantic file watcher — detects meaningful changes in structured config files",
+  "description": "Driff — semantic config watcher that reports meaningful changes in plain English",
   "keywords": [
+    "driff",
     "cli",
     "watcher",
     "config",
@@ -24,7 +28,7 @@
   "type": "module",
   "main": "index.js",
   "bin": {
-    "sentinel": "./index.js"
+    "driff": "index.js"
   },
   "files": [
     "index.js",

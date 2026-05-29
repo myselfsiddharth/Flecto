@@ -1,4 +1,4 @@
-# Releasing Sentinel
+# Releasing Driff
 
 Use this checklist before publishing a new version.
 
@@ -26,7 +26,7 @@ This updates `package.json` and creates a git tag.
 ## 3) Publish
 
 - Login once per machine: `npm login`
-- Publish: `npm publish --access public`
+- Publish: `npm publish` (public access is set in `publishConfig`)
 
 ## 4) Post-release
 
@@ -36,5 +36,5 @@ This updates `package.json` and creates a git tag.
   - breaking changes (if any)
   - upgrade guidance
 - Verify install in a clean directory:
-  - `npm i -g sentinel`
-  - `sentinel --help`
+  - `npm i -g driff`
+  - `driff --help`
