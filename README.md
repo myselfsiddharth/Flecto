@@ -1,6 +1,8 @@
 # Flecto
 
-A semantic file watcher that detects *meaningful* changes in structured config files and reports them in plain English — not raw line diffs.
+**Flecto watches your config files and tells you exactly what changed — in plain English.**
+
+No more staring at raw line diffs. When your `.env`, `YAML`, `JSON`, or `TOML` file changes, Flecto shows you what actually happened:
 
 ```
 [10:42:31] config/prod.yaml — 3 changes
@@ -9,9 +11,11 @@ A semantic file watcher that detects *meaningful* changes in structured config f
   - deprecated.old_key
 ```
 
-Supports **JSON**, **YAML**, **TOML**, and **ENV** files.
+---
 
-Recruiter-focused overview: see `README_RECRUITERS.md`.
+## Why Flecto?
+
+Standard file watchers tell you *a file changed*. Flecto tells you *what* changed and *why it might matter* — flagging secrets, dangerous toggles, and risky config jumps automatically.
 
 ---
 
@@ -21,22 +25,13 @@ Recruiter-focused overview: see `README_RECRUITERS.md`.
 npm install -g flecto
 ```
 
-Or from source:
-
-```bash
-git clone https://github.com/siddharrth2005/sentinel.git
-cd sentinel
-npm install
-npm install -g .
-```
-
-After install, `flecto` is available globally.
+After that, `flecto` is available globally from anywhere.
 
 ---
 
-## Usage
+## Quick Start
 
-### Watch a file
+Watch any config file:
 
 ```bash
 flecto watch config/prod.yaml
@@ -45,49 +40,54 @@ flecto watch settings.json
 flecto watch pyproject.toml
 ```
 
-### Watch multiple files/globs
+That's it. Flecto starts watching and prints a clear summary every time something changes.
+
+---
+
+## Common Use Cases
+
+### Watch multiple files at once
 
 ```bash
 flecto watch "config/**/*.yaml" ".env"
 ```
 
-### Watch with verbose output
+### See detailed before/after values
 
 ```bash
 flecto watch config/prod.yaml --mode verbose
 ```
 
-Verbose mode shows before/after values on separate lines and adds a blank line between change events.
-
-### Ignore specific key paths
+### Ignore noisy keys (like timestamps)
 
 ```bash
 flecto watch config/prod.yaml --ignore "updated_at,meta.timestamp"
 ```
 
-Comma-separated paths. Supports:
-- exact path ignore: `meta.timestamp`
-- subtree ignore: `meta` (ignores `meta.*` and `meta[0].*`)
-- wildcard segment: `servers[*].meta.timestamp`
-- key anywhere: `**.updated_at`
+You can ignore exact keys, entire subtrees, wildcards, or keys anywhere in the file:
 
-### Run a shell command on every change
+| Pattern | What it ignores |
+|---|---|
+| `meta.timestamp` | That exact key |
+| `meta` | Everything under `meta.*` |
+| `servers[*].meta.timestamp` | That key inside any array item |
+| `**.updated_at` | Any key named `updated_at`, anywhere |
+
+### Run a command when something changes
 
 ```bash
 flecto watch .env --command "docker-compose restart app"
 ```
 
-Changes are passed to the command as JSON in the `FLECTO_CHANGES` environment variable, and the watched file path in `FLECTO_FILE`.
+Flecto passes the changes as JSON to your command via the `FLECTO_CHANGES` environment variable.
 
-If the change payload is too large for env vars, Flecto writes it to `FLECTO_CHANGES_FILE` and sets `FLECTO_CHANGES` to `[]`.
-
-### POST changes to a webhook
+### Send changes to a webhook
 
 ```bash
 flecto watch config/prod.yaml --webhook https://hooks.example.com/notify
 ```
 
-Add custom headers (repeatable):
+Add auth headers if needed:
 
 ```bash
 flecto watch config/prod.yaml \
@@ -95,24 +95,13 @@ flecto watch config/prod.yaml \
   --webhook-header "Authorization: Bearer TOKEN"
 ```
 
-Flecto webhook payloads include an event envelope with:
-- `schema_version`
-- `event_id`
-- `batch_id`
-- `event_type` (`changes` or `lifecycle`)
-- `source`
-- `emitted_at`
-- `file`
-- `changes`
+Each webhook payload includes a full event envelope:
 
-Payload shape:
 ```json
 {
   "schema_version": "1.1",
   "event_id": "uuid",
-  "batch_id": "uuid",
   "event_type": "changes",
-  "source": "watch",
   "emitted_at": "2026-04-14T10:42:31.000Z",
   "file": "/absolute/path/to/config/prod.yaml",
   "changes": [
@@ -121,9 +110,7 @@ Payload shape:
 }
 ```
 
-### Combine command + webhook
-
-Both can be active at the same time:
+### Use both command and webhook together
 
 ```bash
 flecto watch .env \
@@ -131,7 +118,7 @@ flecto watch .env \
   --webhook https://hooks.example.com/notify
 ```
 
-### Delivery semantics and failure policy
+### Retry on failure
 
 ```bash
 flecto watch config/prod.yaml \
@@ -140,25 +127,39 @@ flecto watch config/prod.yaml \
   --on-alert-failure retry
 ```
 
-- `--delivery-mode best-effort` (default): no persistent retries
-- `--delivery-mode at-least-once`: failed webhook events are persisted and retried
-- `--on-alert-failure warn|exit|retry`: controls behavior when command/webhook fails
-
-### Polling interval
-
-For network drives or editors that write via temp files, tune the polling interval:
-
-```bash
-flecto watch config/prod.yaml --polling --interval 500
-```
-
-Default polling interval is `100ms` (polling is **off** unless you pass `--polling`).
+| Flag | Options | What it does |
+|---|---|---|
+| `--delivery-mode` | `best-effort` (default), `at-least-once` | Whether to persist and retry failed webhook events |
+| `--on-alert-failure` | `warn`, `exit`, `retry` | What happens if a command or webhook fails |
 
 ---
 
-## CI mode
+## Snapshots & Diffs
 
-Run semantic diffs in CI against snapshots or git refs:
+Save a baseline snapshot of your file:
+
+```bash
+flecto watch config/prod.yaml --snapshot
+# Saved to .flecto-snapshots/<id>.json
+```
+
+Then compare the current file against it anytime:
+
+```bash
+flecto watch config/prod.yaml --diff
+```
+
+Exit codes:
+- `0` — no changes (file is clean)
+- `1` — changes detected
+
+This is useful in deployment scripts and pre-commit hooks.
+
+---
+
+## CI Mode
+
+Catch risky config changes before they ship:
 
 ```bash
 flecto ci "config/**/*.yaml" \
@@ -167,121 +168,47 @@ flecto ci "config/**/*.yaml" \
   --fail-on "changed,policy,error"
 ```
 
-`--format` supports:
-- `json`
-- `ndjson`
-- `github-annotations`
+**Output formats:** `json`, `ndjson`, `github-annotations`
 
-`--fail-on` supports:
-- `changed`
-- `added`
-- `removed`
-- `policy`
-- `error`
-- `warn`
+**Fail triggers:** `changed`, `added`, `removed`, `policy`, `error`, `warn`
 
 ---
 
-## Snapshot & diff mode
+## Built-in Policy Checks
 
-### Save a baseline snapshot
+Flecto automatically flags changes that look risky:
+
+- 🔑 **Secrets touched** — keys named `secret`, `token`, `password`, `api_key`, etc.
+- ⚠️ **Dangerous toggles** — `debug: true`, `disable_tls`, `skip_tls_verify`, `allow_insecure`
+- 📈 **Large pool size jumps** — `pool_size` doubled or more
+
+Policy violations can fail your CI pipeline with `--fail-on policy`.
+
+---
+
+## Tuning for Network Drives or Odd Editors
+
+Some editors write files via a temp file swap, which can confuse standard watchers. Enable polling mode:
 
 ```bash
-flecto watch config/prod.yaml --snapshot
-# → .flecto-snapshots/<id>.json
+flecto watch config/prod.yaml --polling --interval 500
 ```
 
-### Diff the current file against the saved snapshot
-
-```bash
-flecto watch config/prod.yaml --diff
-```
-
-Prints all changes since the snapshot was taken. Exits with:
-- **code 0** — file is clean (no changes)
-- **code 1** — changes detected (useful in CI pipelines)
+Default polling interval is `100ms`. Polling is off by default.
 
 ---
 
-## Output format
+## Config File (.flectorc)
 
-### Compact (default)
+Set your defaults once so you don't have to repeat flags every time.
 
-```
-[HH:MM:SS] <filepath> — N changes
-  ~ <path>: <before> → <after>
-  + <path>: <value>
-  - <path>: <value>
-```
-
-- `~` (yellow) — value changed
-- `+` (green)  — key added
-- `-` (red)    — key removed
-
-### Verbose (`--mode verbose`)
-
-```
-[HH:MM:SS] <filepath> — N changes
-  ~ <path>
-    before: <value>
-    after:  <value>
-  + <path>: <value>
-    (key added)
-
-```
-
----
-
-## Change event shape
-
-Each semantic change is represented as:
-
-```ts
-{
-  type: 'added' | 'removed' | 'changed',
-  path: string,      // dot-notation key path, e.g. "database.pool_size"
-  before?: unknown,  // previous value (absent for 'added')
-  after?: unknown,   // new value (absent for 'removed')
-  note?: string,     // optional note, e.g. "type changed from string to number"
-}
-```
-
-Array items use index notation: `servers[1].port`.
-
----
-
-## Policy checks
-
-Built-in policy findings are evaluated from semantic changes:
-- secret-looking keys changed (`secret`, `token`, `password`, `api_key`, etc.)
-- dangerous toggles enabled (`debug`, `allow_insecure`, `disable_tls`, `skip_tls_verify`)
-- large `pool_size` jumps (>=2x)
-
-Policy findings can trigger CI failures with `--fail-on policy,error`.
-
----
-
-## Error handling
-
-| Situation | Behavior |
-|---|---|
-| File not found | Error message + exit 1 |
-| Unsupported format | Lists supported extensions + exit 1 |
-| Parse error during watch | Warning shown, last valid state kept, watching continues |
-| Command failure | Warning shown, watcher continues |
-| Webhook failure | Warning shown, watcher continues |
-| Ctrl+C | Clean shutdown message |
-
----
-
-## .flectorc configuration
-
-Use `.flectorc`, `.flectorc.json`, `.flectorc.yaml`, or `.flectorc.yml`.
-Bootstrap one with:
+Generate a starter config:
 
 ```bash
 flecto init
 ```
+
+Flecto looks for `.flectorc`, `.flectorc.json`, `.flectorc.yaml`, or `.flectorc.yml`.
 
 Example:
 
@@ -303,16 +230,16 @@ Example:
 }
 ```
 
-CLI flags take precedence over profile/default values.
-
-Use a profile with:
+Use a named profile:
 
 ```bash
 flecto watch --profile dev
 flecto ci --profile ci
 ```
 
-Check setup with:
+CLI flags always override profile/default values.
+
+Verify your setup:
 
 ```bash
 flecto doctor
@@ -320,7 +247,46 @@ flecto doctor
 
 ---
 
-## Running tests
+## Output Format Reference
+
+### Compact (default)
+
+```
+[HH:MM:SS] <filepath> — N changes
+  ~ path: before → after     (yellow — value changed)
+  + path: value              (green  — key added)
+  - path: value              (red    — key removed)
+```
+
+### Verbose (`--mode verbose`)
+
+```
+[HH:MM:SS] <filepath> — N changes
+  ~ path
+    before: old_value
+    after:  new_value
+  + path: value
+    (key added)
+```
+
+---
+
+## Error Handling
+
+Flecto is designed to keep running even when things go wrong:
+
+| Situation | Behavior |
+|---|---|
+| File not found | Error message + exit 1 |
+| Unsupported file format | Lists supported extensions + exit 1 |
+| File has a parse error | Warning shown, last valid state kept, watching continues |
+| Command fails | Warning shown, watcher continues |
+| Webhook fails | Warning shown, watcher continues |
+| Ctrl+C | Clean shutdown message |
+
+---
+
+## Running Tests
 
 ```bash
 npm test
@@ -328,15 +294,21 @@ npm test
 node --test test/*.test.js
 ```
 
-Tests cover differ, watcher behavior, alert webhook delivery, policy logic, and CI command behavior.
+Tests cover the differ, watcher behavior, webhook delivery, policy logic, and CI command behavior.
 
 ---
 
-## How it works
+## How It Works
 
-1. **Parser** — detects format by file extension and parses the file into JS values.
-2. **Watcher** — uses [chokidar](https://github.com/paulmillr/chokidar) with debouncing and lifecycle events.
-3. **Differ** — computes semantic changes (supports object/array/scalar roots, ignore rules).
-4. **Policy engine** — derives severity findings from change patterns.
-5. **Envelope** — wraps change batches in a versioned automation event schema.
-6. **Alerter** — runs commands and/or webhook delivery with configurable retry semantics.
+1. **Parser** — detects the file format by extension and parses it into structured JS values.
+2. **Watcher** — uses [chokidar](https://github.com/paulmillr/chokidar) with debouncing so rapid saves don't flood you with events.
+3. **Differ** — computes a semantic diff (not a line diff), supporting objects, arrays, scalars, and ignore rules.
+4. **Policy engine** — inspects the changes for patterns that look risky and adds severity findings.
+5. **Envelope** — wraps each batch of changes in a versioned event schema ready for automation.
+6. **Alerter** — delivers events via command execution and/or webhook, with configurable retry logic.
+
+---
+
+## License
+
+MIT — see [LICENSE](./LICENSE).
