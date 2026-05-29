@@ -1,12 +1,12 @@
 {
-  "name": "driff",
+  "name": "flecto",
   "publishConfig": {
     "access": "public"
   },
   "version": "1.0.0",
-  "description": "Driff — semantic config watcher that reports meaningful changes in plain English",
+  "description": "Flecto — semantic config watcher that reports meaningful changes in plain English",
   "keywords": [
-    "driff",
+    "flecto",
     "cli",
     "watcher",
     "config",
@@ -28,7 +28,7 @@
   "type": "module",
   "main": "index.js",
   "bin": {
-    "driff": "index.js"
+    "flecto": "index.js"
   },
   "files": [
     "index.js",

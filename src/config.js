@@ -3,7 +3,7 @@ import { resolve } from 'path';
 import fg from 'fast-glob';
 import yaml from 'js-yaml';
 
-const RC_CANDIDATES = ['.driffrc', '.driffrc.json', '.driffrc.yaml', '.driffrc.yml'];
+const RC_CANDIDATES = ['.flectorc', '.flectorc.json', '.flectorc.yaml', '.flectorc.yml'];
 
 /**
  * @typedef {{
@@ -12,12 +12,12 @@ const RC_CANDIDATES = ['.driffrc', '.driffrc.json', '.driffrc.yaml', '.driffrc.y
  *  files?: string[],
  *  include?: string[],
  *  exclude?: string[]
- * }} DriffRc
+ * }} FlectoRc
  */
 
 /**
  * @param {string} cwd
- * @returns {{ path: string | null, config: DriffRc | null }}
+ * @returns {{ path: string | null, config: FlectoRc | null }}
  */
 export function loadRcConfig(cwd = process.cwd()) {
   for (const candidate of RC_CANDIDATES) {
@@ -45,7 +45,7 @@ export function loadRcConfig(cwd = process.cwd()) {
 
 /**
  * Resolve effective options with optional profile and CLI overrides.
- * @param {DriffRc | null} config
+ * @param {FlectoRc | null} config
  * @param {string | undefined} profile
  * @param {Record<string, unknown>} cliOverrides
  */
@@ -84,7 +84,7 @@ export async function resolveFiles(input) {
  * @returns {string}
  */
 export function initRcFile(cwd = process.cwd()) {
-  const path = resolve(cwd, '.driffrc.json');
+  const path = resolve(cwd, '.flectorc.json');
   if (existsSync(path)) return path;
   const starter = {
     defaults: {

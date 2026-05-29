@@ -1,4 +1,4 @@
-# Driff
+# Flecto
 
 A semantic file watcher that detects *meaningful* changes in structured config files and reports them in plain English — not raw line diffs.
 
@@ -18,7 +18,7 @@ Recruiter-focused overview: see `README_RECRUITERS.md`.
 ## Install
 
 ```bash
-npm install -g driff
+npm install -g flecto
 ```
 
 Or from source:
@@ -30,7 +30,7 @@ npm install
 npm install -g .
 ```
 
-After install, `driff` is available globally.
+After install, `flecto` is available globally.
 
 ---
 
@@ -39,22 +39,22 @@ After install, `driff` is available globally.
 ### Watch a file
 
 ```bash
-driff watch config/prod.yaml
-driff watch .env
-driff watch settings.json
-driff watch pyproject.toml
+flecto watch config/prod.yaml
+flecto watch .env
+flecto watch settings.json
+flecto watch pyproject.toml
 ```
 
 ### Watch multiple files/globs
 
 ```bash
-driff watch "config/**/*.yaml" ".env"
+flecto watch "config/**/*.yaml" ".env"
 ```
 
 ### Watch with verbose output
 
 ```bash
-driff watch config/prod.yaml --mode verbose
+flecto watch config/prod.yaml --mode verbose
 ```
 
 Verbose mode shows before/after values on separate lines and adds a blank line between change events.
@@ -62,7 +62,7 @@ Verbose mode shows before/after values on separate lines and adds a blank line b
 ### Ignore specific key paths
 
 ```bash
-driff watch config/prod.yaml --ignore "updated_at,meta.timestamp"
+flecto watch config/prod.yaml --ignore "updated_at,meta.timestamp"
 ```
 
 Comma-separated paths. Supports:
@@ -74,28 +74,28 @@ Comma-separated paths. Supports:
 ### Run a shell command on every change
 
 ```bash
-driff watch .env --command "docker-compose restart app"
+flecto watch .env --command "docker-compose restart app"
 ```
 
-Changes are passed to the command as JSON in the `DRIFF_CHANGES` environment variable, and the watched file path in `DRIFF_FILE`.
+Changes are passed to the command as JSON in the `FLECTO_CHANGES` environment variable, and the watched file path in `FLECTO_FILE`.
 
-If the change payload is too large for env vars, Driff writes it to `DRIFF_CHANGES_FILE` and sets `DRIFF_CHANGES` to `[]`.
+If the change payload is too large for env vars, Flecto writes it to `FLECTO_CHANGES_FILE` and sets `FLECTO_CHANGES` to `[]`.
 
 ### POST changes to a webhook
 
 ```bash
-driff watch config/prod.yaml --webhook https://hooks.example.com/notify
+flecto watch config/prod.yaml --webhook https://hooks.example.com/notify
 ```
 
 Add custom headers (repeatable):
 
 ```bash
-driff watch config/prod.yaml \
+flecto watch config/prod.yaml \
   --webhook https://hooks.example.com/notify \
   --webhook-header "Authorization: Bearer TOKEN"
 ```
 
-Driff webhook payloads include an event envelope with:
+Flecto webhook payloads include an event envelope with:
 - `schema_version`
 - `event_id`
 - `batch_id`
@@ -126,7 +126,7 @@ Payload shape:
 Both can be active at the same time:
 
 ```bash
-driff watch .env \
+flecto watch .env \
   --command "make reload" \
   --webhook https://hooks.example.com/notify
 ```
@@ -134,7 +134,7 @@ driff watch .env \
 ### Delivery semantics and failure policy
 
 ```bash
-driff watch config/prod.yaml \
+flecto watch config/prod.yaml \
   --webhook https://hooks.example.com/notify \
   --delivery-mode at-least-once \
   --on-alert-failure retry
@@ -149,7 +149,7 @@ driff watch config/prod.yaml \
 For network drives or editors that write via temp files, tune the polling interval:
 
 ```bash
-driff watch config/prod.yaml --polling --interval 500
+flecto watch config/prod.yaml --polling --interval 500
 ```
 
 Default polling interval is `100ms` (polling is **off** unless you pass `--polling`).
@@ -161,7 +161,7 @@ Default polling interval is `100ms` (polling is **off** unless you pass `--polli
 Run semantic diffs in CI against snapshots or git refs:
 
 ```bash
-driff ci "config/**/*.yaml" \
+flecto ci "config/**/*.yaml" \
   --snapshot-ref HEAD~1 \
   --format github-annotations \
   --fail-on "changed,policy,error"
@@ -187,14 +187,14 @@ driff ci "config/**/*.yaml" \
 ### Save a baseline snapshot
 
 ```bash
-driff watch config/prod.yaml --snapshot
-# → .driff-snapshots/<id>.json
+flecto watch config/prod.yaml --snapshot
+# → .flecto-snapshots/<id>.json
 ```
 
 ### Diff the current file against the saved snapshot
 
 ```bash
-driff watch config/prod.yaml --diff
+flecto watch config/prod.yaml --diff
 ```
 
 Prints all changes since the snapshot was taken. Exits with:
@@ -274,13 +274,13 @@ Policy findings can trigger CI failures with `--fail-on policy,error`.
 
 ---
 
-## .driffrc configuration
+## .flectorc configuration
 
-Use `.driffrc`, `.driffrc.json`, `.driffrc.yaml`, or `.driffrc.yml`.
+Use `.flectorc`, `.flectorc.json`, `.flectorc.yaml`, or `.flectorc.yml`.
 Bootstrap one with:
 
 ```bash
-driff init
+flecto init
 ```
 
 Example:
@@ -308,14 +308,14 @@ CLI flags take precedence over profile/default values.
 Use a profile with:
 
 ```bash
-driff watch --profile dev
-driff ci --profile ci
+flecto watch --profile dev
+flecto ci --profile ci
 ```
 
 Check setup with:
 
 ```bash
-driff doctor
+flecto doctor
 ```
 
 ---

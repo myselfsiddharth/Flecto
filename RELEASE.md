@@ -1,4 +1,4 @@
-# Releasing Driff
+# Releasing Flecto
 
 Use this checklist before publishing a new version.
 
@@ -36,5 +36,5 @@ This updates `package.json` and creates a git tag.
   - breaking changes (if any)
   - upgrade guidance
 - Verify install in a clean directory:
-  - `npm i -g driff`
-  - `driff --help`
+  - `npm i -g flecto`
+  - `flecto --help`

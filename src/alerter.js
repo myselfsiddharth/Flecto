@@ -3,8 +3,8 @@ import { mkdirSync, writeFileSync, readFileSync, readdirSync, unlinkSync } from 
 import { resolve } from 'path';
 import { renderWarn } from './renderer.js';
 
-const ALERT_TMP_DIR = '.driff-tmp';
-const ALERT_QUEUE_DIR = '.driff-queue';
+const ALERT_TMP_DIR = '.flecto-tmp';
+const ALERT_QUEUE_DIR = '.flecto-queue';
 const MAX_ENV_CHANGES_CHARS = 16_000;
 
 /** @type {Promise<void>} */
@@ -26,14 +26,14 @@ function buildCommandEnv(envelope) {
   const json = JSON.stringify(envelope.changes);
   const env = {
     ...process.env,
-    DRIFF_FILE: envelope.file,
-    DRIFF_EVENT_ID: envelope.event_id,
-    DRIFF_BATCH_ID: envelope.batch_id,
-    DRIFF_SCHEMA_VERSION: envelope.schema_version,
+    FLECTO_FILE: envelope.file,
+    FLECTO_EVENT_ID: envelope.event_id,
+    FLECTO_BATCH_ID: envelope.batch_id,
+    FLECTO_SCHEMA_VERSION: envelope.schema_version,
   };
 
   if (json.length <= MAX_ENV_CHANGES_CHARS) {
-    env.DRIFF_CHANGES = json;
+    env.FLECTO_CHANGES = json;
     return env;
   }
 
@@ -41,12 +41,12 @@ function buildCommandEnv(envelope) {
     mkdirSync(ALERT_TMP_DIR, { recursive: true });
     const outPath = resolve(`${ALERT_TMP_DIR}/changes-${Date.now()}-${envelope.event_id}.json`);
     writeFileSync(outPath, json, 'utf8');
-    env.DRIFF_CHANGES_FILE = outPath;
-    env.DRIFF_CHANGES = '[]';
+    env.FLECTO_CHANGES_FILE = outPath;
+    env.FLECTO_CHANGES = '[]';
     return env;
   } catch (err) {
-    env.DRIFF_CHANGES = '[]';
-    env.DRIFF_CHANGES_TRUNCATED = '1';
+    env.FLECTO_CHANGES = '[]';
+    env.FLECTO_CHANGES_TRUNCATED = '1';
     renderWarn(`Could not write changes payload to temp file: ${err.message}`);
     return env;
   }
@@ -143,9 +143,9 @@ export async function postWebhook(url, envelope, options = {}) {
   const retries = options.retries ?? 2;
   const headers = {
     'Content-Type': 'application/json',
-    'X-Driff-Event-Id': envelope.event_id,
-    'X-Driff-Batch-Id': envelope.batch_id,
-    'X-Driff-Schema': envelope.schema_version,
+    'X-Flecto-Event-Id': envelope.event_id,
+    'X-Flecto-Batch-Id': envelope.batch_id,
+    'X-Flecto-Schema': envelope.schema_version,
     ...(options.headers ?? {}),
   };
 

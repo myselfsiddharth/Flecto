@@ -6,7 +6,7 @@ import { tmpdir } from 'os';
 import { spawnSync } from 'child_process';
 
 test('ci mode returns non-zero when fail-on changed', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'driff-cli-'));
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-'));
   const file = join(dir, 'config.json');
   const snapshot = join(dir, 'snapshot.json');
   writeFileSync(file, JSON.stringify({ a: 2 }, null, 2), 'utf8');
