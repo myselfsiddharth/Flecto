@@ -14,13 +14,13 @@
     "devops",
     "ci"
   ],
-  "homepage": "https://github.com/siddharrth2005/sentinel#readme",
+  "homepage": "https://github.com/myselfsiddharth/Flecto#readme",
   "bugs": {
-    "url": "https://github.com/siddharrth2005/sentinel/issues"
+    "url": "https://github.com/myselfsiddharth/Flecto/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/siddharrth2005/sentinel.git"
+    "url": "git+https://github.com/myselfsiddharth/Flecto.git"
   },
   "engines": {
     "node": ">=18"
