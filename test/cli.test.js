@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync } from 'fs';
+import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'fs';
 import { join, resolve } from 'path';
 import { tmpdir } from 'os';
 import { spawnSync } from 'child_process';
@@ -22,5 +22,48 @@ test('ci mode returns non-zero when fail-on changed', () => {
   rmSync(dir, { recursive: true, force: true });
   assert.equal(run.status, 1);
   assert.match(run.stdout, /"changes"/);
+});
+
+test('ci mode reads git snapshot refs for paths with spaces', () => {
+  const gitVersion = spawnSync('git', ['--version'], { encoding: 'utf8' });
+  if (gitVersion.status !== 0) {
+    return;
+  }
+
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-git-ref-'));
+  const nested = join(dir, 'config files');
+  const file = join(nested, 'app config.json');
+  const rootIndex = resolve(process.cwd(), 'index.js');
+
+  try {
+    mkdirSync(nested, { recursive: true });
+    writeFileSync(file, JSON.stringify({ limit: 1 }, null, 2), 'utf8');
+
+    assert.equal(spawnSync('git', ['init'], { cwd: dir, encoding: 'utf8' }).status, 0);
+    assert.equal(spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir, encoding: 'utf8' }).status, 0);
+    assert.equal(spawnSync('git', ['config', 'user.name', 'Flecto Test'], { cwd: dir, encoding: 'utf8' }).status, 0);
+    assert.equal(spawnSync('git', ['add', '.'], { cwd: dir, encoding: 'utf8' }).status, 0);
+    assert.equal(spawnSync('git', ['commit', '-m', 'baseline'], { cwd: dir, encoding: 'utf8' }).status, 0);
+
+    writeFileSync(file, JSON.stringify({ limit: 2 }, null, 2), 'utf8');
+
+    const run = spawnSync(
+      process.execPath,
+      [rootIndex, 'ci', file, '--snapshot-ref', 'HEAD', '--format', 'json', '--fail-on', 'changed'],
+      { cwd: dir, encoding: 'utf8' }
+    );
+
+    assert.equal(run.status, 1);
+    const results = JSON.parse(run.stdout);
+    assert.equal(results[0].envelope.changes.length, 1);
+    assert.deepEqual(results[0].envelope.changes[0], {
+      type: 'changed',
+      path: 'limit',
+      before: 1,
+      after: 2,
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
