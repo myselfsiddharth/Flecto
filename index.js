@@ -4,7 +4,7 @@ import { program } from 'commander';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
 import { resolve, relative } from 'path';
 import { createHash } from 'crypto';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import chalk from 'chalk';
 
 import { parseFile, isSupported, parseContent } from './src/parser.js';
@@ -104,7 +104,7 @@ function readSnapshotStateFromRef(filePath, snapshotRef) {
 
   // git ref mode: flecto ci file --snapshot-ref HEAD~1
   const rel = relative(process.cwd(), filePath).replaceAll('\\', '/');
-  const raw = execSync(`git show ${snapshotRef}:${rel}`, { encoding: 'utf8' });
+  const raw = execFileSync('git', ['show', `${snapshotRef}:${rel}`], { encoding: 'utf8' });
   return parseContent(filePath, raw);
 }
 
