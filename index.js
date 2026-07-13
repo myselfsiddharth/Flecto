@@ -2,7 +2,8 @@
 
 import { program } from 'commander';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
-import { resolve, relative } from 'path';
+import { resolve, relative, dirname, join } from 'path';
+import { fileURLToPath } from 'url';
 import { createHash } from 'crypto';
 import { execFileSync } from 'child_process';
 import chalk from 'chalk';
@@ -15,6 +16,10 @@ import { fireAlerts } from './src/alerter.js';
 import { createEnvelope } from './src/envelope.js';
 import { evaluatePolicies, highestSeverity } from './src/policy.js';
 import { loadRcConfig, resolveEffectiveOptions, resolveFiles, initRcFile } from './src/config.js';
+
+const PKG = JSON.parse(
+  readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'package.json'), 'utf8'),
+);
 
 const SNAPSHOT_DIR = '.flecto-snapshots';
 
@@ -151,7 +156,7 @@ function printCiOutput(results, format) {
 program
   .name('flecto')
   .description('Flecto — semantic config watcher for meaningful structured file changes')
-  .version('1.0.0');
+  .version(PKG.version);
 
 program
   .command('watch [files...]')

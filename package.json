@@ -6,6 +6,7 @@
   },
   "version": "1.0.1",
   "description": "Flecto — semantic config watcher that reports meaningful changes in plain English",
+  "license": "MIT",
   "keywords": [
     "flecto",
     "cli",
@@ -35,7 +36,7 @@
     "index.js",
     "src/**/*",
     "README.md",
-    "README_RECRUITERS.md"
+    "LICENSE"
   ],
   "scripts": {
     "test": "node --test test/*.test.js",

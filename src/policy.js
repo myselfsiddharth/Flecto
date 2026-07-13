@@ -19,12 +19,14 @@ export function evaluatePolicies(changes) {
     const path = change.path ?? '';
     const pathLower = path.toLowerCase();
 
-    if (SECRET_KEY_RE.test(pathLower) && change.type === 'changed') {
+    if (SECRET_KEY_RE.test(pathLower) && (change.type === 'changed' || change.type === 'added')) {
       findings.push({
         id: 'secret-key-changed',
         severity: 'error',
         path,
-        message: 'Sensitive-looking key changed. Confirm secret rotation and access controls.',
+        message: change.type === 'added'
+          ? 'Sensitive-looking key added. Confirm secret storage and access controls.'
+          : 'Sensitive-looking key changed. Confirm secret rotation and access controls.',
       });
     }
 

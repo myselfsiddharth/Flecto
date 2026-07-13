@@ -11,6 +11,16 @@ describe('policy engine', () => {
     assert.equal(findings[0].severity, 'error');
   });
 
+  test('flags secret-looking keys that are newly added', () => {
+    const findings = evaluatePolicies([
+      { type: 'added', path: 'auth.api_key', after: 'new-secret' },
+    ]);
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0].id, 'secret-key-changed');
+    assert.equal(findings[0].severity, 'error');
+    assert.match(findings[0].message, /added/i);
+  });
+
   test('flags large pool size increase', () => {
     const findings = evaluatePolicies([
       { type: 'changed', path: 'database.pool_size', before: 10, after: 40 },
