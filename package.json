@@ -1,7 +1,8 @@
 {
   "name": "flecto",
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "provenance": true
   },
   "version": "1.0.0",
   "description": "Flecto — semantic config watcher that reports meaningful changes in plain English",
