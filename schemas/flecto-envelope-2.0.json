@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/myselfsiddharth/Flecto/schemas/flecto-envelope-2.0.json",
+  "title": "FlectoEnvelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "event_id",
+    "batch_id",
+    "event_type",
+    "source",
+    "emitted_at",
+    "file",
+    "changes"
+  ],
+  "properties": {
+    "schema_version": { "const": "2.0" },
+    "event_id": { "type": "string", "minLength": 1 },
+    "batch_id": { "type": "string", "minLength": 1 },
+    "event_type": { "enum": ["changes", "lifecycle"] },
+    "source": { "enum": ["watch", "ci", "diff"] },
+    "emitted_at": { "type": "string", "format": "date-time" },
+    "file": { "type": "string" },
+    "changes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "path"],
+        "properties": {
+          "type": { "enum": ["added", "removed", "changed"] },
+          "path": { "type": "string" },
+          "before": true,
+          "after": true,
+          "note": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "policies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "severity", "path", "message"],
+        "properties": {
+          "id": { "type": "string" },
+          "severity": { "enum": ["info", "warn", "error"] },
+          "path": { "type": "string" },
+          "message": { "type": "string" },
+          "pack": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "lifecycle": {
+      "type": "object",
+      "required": ["type", "message"],
+      "properties": {
+        "type": { "type": "string" },
+        "message": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

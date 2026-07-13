@@ -11,6 +11,8 @@ import { renderWarn, renderInfo } from './renderer.js';
  * @property {boolean}  [polling]      Force polling mode (default: false)
  * @property {string}   [mode]         Output mode: 'compact' | 'verbose'
  * @property {string[]} [ignorePaths]  Key paths to suppress in diffs
+ * @property {string | null} [arrayIdKey]
+ * @property {boolean} [arrayIgnoreOrder]
  */
 
 /**
@@ -25,6 +27,11 @@ export function startWatcher(filepath, options = {}, onEvent) {
   const interval = options.interval ?? 100;
   const ignorePaths = options.ignorePaths ?? [];
   const polling = options.polling ?? false;
+  const diffOpts = {
+    ignorePaths,
+    arrayIdKey: options.arrayIdKey ?? null,
+    arrayIgnoreOrder: Boolean(options.arrayIgnoreOrder),
+  };
 
   /** @type {unknown | null} */
   let lastGoodState = null;
@@ -60,7 +67,7 @@ export function startWatcher(filepath, options = {}, onEvent) {
   const scheduleRead = (reason) => {
     if (debounceTimer) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
-      handleChange(filepath, ignorePaths, lastGoodState, (newState, events, lifecycle) => {
+      handleChange(filepath, diffOpts, lastGoodState, (newState, events, lifecycle) => {
         if (newState !== null) {
           lastGoodState = newState;
         }
@@ -111,11 +118,11 @@ export function startWatcher(filepath, options = {}, onEvent) {
 /**
  * Internal: re-parse the file and diff against the previous state.
  * @param {string} filepath
- * @param {string[]} ignorePaths
+ * @param {{ ignorePaths?: string[], arrayIdKey?: string | null, arrayIgnoreOrder?: boolean }} diffOpts
  * @param {unknown | null} lastGoodState
  * @param {(newState: unknown | null, events: ChangeEvent[], lifecycle: { type: string, message: string } | null) => void} callback
  */
-function handleChange(filepath, ignorePaths, lastGoodState, callback) {
+function handleChange(filepath, diffOpts, lastGoodState, callback) {
   let newState;
   try {
     newState = parseFile(filepath);
@@ -132,6 +139,6 @@ function handleChange(filepath, ignorePaths, lastGoodState, callback) {
     return;
   }
 
-  const events = diffTrees(lastGoodState, newState, { ignorePaths });
+  const events = diffTrees(lastGoodState, newState, diffOpts);
   callback(newState, events, null);
 }

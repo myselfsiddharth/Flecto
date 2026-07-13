@@ -1,40 +1,31 @@
 # Releasing Flecto
 
-Use this checklist before publishing a new version.
+Automated publish via GitHub Actions (OIDC trusted publishing). You do **not** need `npm login` for normal releases.
 
 ## 1) Preflight
 
 - Update code and docs
-- Run tests:
-  - `npm test`
-- Verify package contents:
-  - `npm run pack:check`
-- Confirm CLI works:
-  - `node index.js --help`
-  - `node index.js doctor`
+- Run tests: `npm test`
+- Verify package contents: `npm run pack:check`
+- Confirm CLI: `node index.js --help` and `node index.js doctor`
 
 ## 2) Version bump
 
-Pick one:
+```bash
+npm version patch   # or minor / major
+git push origin main --follow-tags
+```
 
-- `npm version patch`
-- `npm version minor`
-- `npm version major`
+## 3) GitHub Release (triggers npm publish)
 
-This updates `package.json` and creates a git tag.
+```bash
+gh release create vX.Y.Z --title "vX.Y.Z" --notes "..."
+```
 
-## 3) Publish
-
-- Login once per machine: `npm login`
-- Publish: `npm publish` (public access is set in `publishConfig`)
+Or create a release in the GitHub UI from the tag. Workflow: `.github/workflows/publish.yml`.
 
 ## 4) Post-release
 
-- Create a GitHub release from the version tag
-- Add release notes with:
-  - key features/changes
-  - breaking changes (if any)
-  - upgrade guidance
-- Verify install in a clean directory:
-  - `npm i -g flecto`
-  - `flecto --help`
+- Confirm Actions run succeeded
+- Verify: `npm view flecto version`
+- Optional: `npm i -g flecto` and `flecto --help`

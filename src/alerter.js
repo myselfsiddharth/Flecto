@@ -20,7 +20,7 @@ function enqueue(fn) {
 }
 
 /**
- * @param {import('./envelope.js').SentinelEnvelope} envelope
+ * @param {import('./envelope.js').FlectoEnvelope} envelope
  */
 function buildCommandEnv(envelope) {
   const json = JSON.stringify(envelope.changes);
@@ -54,7 +54,7 @@ function buildCommandEnv(envelope) {
 
 /**
  * @param {string} command
- * @param {import('./envelope.js').SentinelEnvelope} envelope
+ * @param {import('./envelope.js').FlectoEnvelope} envelope
  * @returns {Promise<boolean>}
  */
 export function runCommand(command, envelope) {
@@ -93,7 +93,7 @@ function sleep(ms) {
 }
 
 /**
- * @param {import('./envelope.js').SentinelEnvelope} envelope
+ * @param {import('./envelope.js').FlectoEnvelope} envelope
  */
 function enqueuePersistent(envelope) {
   mkdirSync(ALERT_QUEUE_DIR, { recursive: true });
@@ -102,7 +102,7 @@ function enqueuePersistent(envelope) {
 }
 
 /**
- * @param {(envelope: import('./envelope.js').SentinelEnvelope) => Promise<boolean>} deliver
+ * @param {(envelope: import('./envelope.js').FlectoEnvelope) => Promise<boolean>} deliver
  */
 async function flushPersistentQueue(deliver) {
   try {
@@ -133,7 +133,7 @@ async function flushPersistentQueue(deliver) {
 
 /**
  * @param {string} url
- * @param {import('./envelope.js').SentinelEnvelope} envelope
+ * @param {import('./envelope.js').FlectoEnvelope} envelope
  * @param {{ headers?: Record<string, string>, timeoutMs?: number, retries?: number }} [options]
  * @returns {Promise<boolean>}
  */
@@ -186,7 +186,7 @@ export async function postWebhook(url, envelope, options = {}) {
 
 /**
  * @param {{ webhook?: string, webhookHeaders?: Record<string, string>, webhookTimeoutMs?: number, webhookRetries?: number }} options
- * @param {import('./envelope.js').SentinelEnvelope} envelope
+ * @param {import('./envelope.js').FlectoEnvelope} envelope
  */
 async function deliverWebhook(options, envelope) {
   if (!options.webhook) return true;
@@ -219,7 +219,7 @@ function applyFailurePolicy(options, ok) {
  *  deliveryMode?: 'best-effort' | 'at-least-once',
  *  onAlertFailure?: 'warn' | 'exit' | 'retry'
  * }} options
- * @param {import('./envelope.js').SentinelEnvelope} envelope
+ * @param {import('./envelope.js').FlectoEnvelope} envelope
  * @returns {Promise<{ ok: boolean }>}
  */
 export async function fireAlerts(options, envelope) {

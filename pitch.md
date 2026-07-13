@@ -1,6 +1,6 @@
-# Why I Built Sentinel
+# Why I Built Flecto
 
-I did not build Sentinel because I wanted another CLI project on my resume.  
+I did not build Flecto because I wanted another CLI project on my resume.  
 I built it because I got tired of pretending line diffs were enough.
 
 If you have ever changed a production config file at 2 AM, you know the feeling.  
@@ -34,19 +34,19 @@ I wanted a tool that treats config changes like what they are: **operational dec
 
 ---
 
-## What Sentinel Does Differently
+## What Flecto Does Differently
 
-Sentinel watches config files and reports semantic changes in plain English:
+Flecto watches config files and reports semantic changes in plain English:
 
 - `database.pool_size: 5 -> 20`
 - `feature_flags.dark_mode: false -> true`
 - `deprecated.old_key removed`
 
-It supports JSON, YAML, TOML, and ENV files because real teams do not live in one format.
+It supports JSON, YAML, TOML, INI, and ENV files because real teams do not live in one format.
 
 It can run in live watch mode for local development, and in CI mode for merge gates.  
 It can trigger shell commands and webhooks so changes can flow into automation pipelines.  
-It can apply simple policy checks so risky toggles and secret-like changes are harder to miss.
+It applies policy packs (and optional local plugins) so risky toggles and secret-like changes are harder to miss.
 
 The goal is not to be clever.  
 The goal is to reduce ambiguity.
@@ -65,7 +65,7 @@ The best tooling is often boring in the right way:
 - useful defaults
 - easy integration with existing workflows
 
-Sentinel is my attempt at building exactly that kind of product.
+Flecto is my attempt at building exactly that kind of product.
 
 I did not want to ship a toy.  
 I wanted to ship something a team could actually adopt and depend on.
@@ -85,16 +85,15 @@ And we can do it without forcing teams to change their stack.
 
 ---
 
-## Where Sentinel Is Going
+## Where Flecto Is Going
 
-This is version one, not the finish line.
+Version 2 focuses on policy-native config ops: declarative packs, local plugins, richer CI annotations, and clearer automation envelopes (`schema_version: "2.0"`).
 
-I am exploring:
+Still exploring:
 
-- deeper policy packs by environment
-- richer CI annotations
-- team-level baselines and historical drift views
-- plugin hooks for custom rule engines
+- default-on array identity matching
+- historical drift / local baselines (`flecto history`)
+- more built-in policy packs by stack
 
 If you have ever been burned by "small" config changes, I would love your feedback.
 
@@ -108,6 +107,6 @@ Share it with the teammate who has cleaned up a postmortem caused by a config ty
 Share it with platform engineers trying to make operational risk visible.  
 Share it with teams that know good tooling is not about hype, it is about clarity.
 
-I built Sentinel for people who have to keep systems stable in the real world.
+I built Flecto for people who have to keep systems stable in the real world.
 
 And if that is you, this is for you.

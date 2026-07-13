@@ -2,7 +2,7 @@
 
 **Flecto watches your config files and tells you exactly what changed — in plain English.**
 
-No more staring at raw line diffs. When your `.env`, `YAML`, `JSON`, or `TOML` file changes, Flecto shows you what actually happened:
+No more staring at raw line diffs. When your `.env`, `YAML`, `JSON`, `TOML`, or `INI` file changes, Flecto shows you what actually happened:
 
 ```
 [10:42:31] config/prod.yaml — 3 changes
@@ -99,17 +99,67 @@ Each webhook payload includes a full event envelope:
 
 ```json
 {
-  "schema_version": "1.1",
+  "schema_version": "2.0",
   "event_id": "uuid",
   "event_type": "changes",
   "emitted_at": "2026-04-14T10:42:31.000Z",
   "file": "/absolute/path/to/config/prod.yaml",
   "changes": [
     { "type": "changed", "path": "database.pool_size", "before": 5, "after": 20 }
+  ],
+  "policies": [
+    {
+      "id": "pool-size-jump",
+      "severity": "warn",
+      "path": "database.pool_size",
+      "message": "Pool size increased from 5 to 20 (>=2x).",
+      "pack": "default"
+    }
   ]
 }
 ```
 
+Envelope JSON Schema: [`schemas/flecto-envelope-2.0.json`](schemas/flecto-envelope-2.0.json).
+
+### Policy packs and profiles
+
+```bash
+flecto ci config/prod.yaml --profile prod --snapshot-ref HEAD~1
+```
+
+`.flectorc.json` example:
+
+```json
+{
+  "defaults": {
+    "policies": ["default"],
+    "maskSecrets": false
+  },
+  "profiles": {
+    "prod": {
+      "policies": ["default", "strict-prod"],
+      "maskSecrets": true
+    }
+  }
+}
+```
+
+Profile selection: `--profile` > `FLECTO_PROFILE` > defaults. Custom packs live in `policies/<id>.json`. Local ESM plugins export `evaluate(changes, ctx)`.
+
+### Opt-in array identity matching
+
+```bash
+flecto watch config/services.yaml --array-id-key id
+```
+
+Without the flag, arrays still diff by index (1.x behavior).
+
+### Migrating from envelope 1.1
+
+- `schema_version` is now `"2.0"`
+- Envelope type name is `FlectoEnvelope` (was `SentinelEnvelope` in docs/types only)
+- New `policies` array on change envelopes
+- Webhook headers are unchanged (`X-Flecto-*`)
 ### Use both command and webhook together
 
 ```bash

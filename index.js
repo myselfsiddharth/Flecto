@@ -11,11 +11,26 @@ import chalk from 'chalk';
 import { parseFile, isSupported, parseContent } from './src/parser.js';
 import { diffTrees } from './src/differ.js';
 import { startWatcher } from './src/watcher.js';
-import { renderChanges, renderDiff, renderError, renderInfo, renderWarn, renderPolicyFindings } from './src/renderer.js';
+import {
+  renderChanges,
+  renderDiff,
+  renderError,
+  renderInfo,
+  renderWarn,
+  renderPolicyFindings,
+  maskChangeEvent,
+} from './src/renderer.js';
 import { fireAlerts } from './src/alerter.js';
 import { createEnvelope } from './src/envelope.js';
 import { evaluatePolicies, highestSeverity } from './src/policy.js';
-import { loadRcConfig, resolveEffectiveOptions, resolveFiles, initRcFile } from './src/config.js';
+import {
+  loadRcConfig,
+  resolveEffectiveOptions,
+  resolveFiles,
+  initRcFile,
+  resolveProfileName,
+  resolvePolicyOptions,
+} from './src/config.js';
 
 const PKG = JSON.parse(
   readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'package.json'), 'utf8'),
@@ -24,7 +39,6 @@ const PKG = JSON.parse(
 const SNAPSHOT_DIR = '.flecto-snapshots';
 
 function snapshotIdForPath(absPath) {
-  // Stable across platforms and avoids basename collisions
   const normalized = absPath.replaceAll('\\', '/');
   return createHash('sha256').update(normalized).digest('hex').slice(0, 16);
 }
@@ -64,6 +78,39 @@ function validateInterval(interval) {
   if (Number.isNaN(interval) || interval < 10) {
     throw new Error('--interval must be a number >= 10');
   }
+}
+
+function stripUnsetCliOverrides(opts) {
+  const out = { ...opts };
+  // Don't let Commander defaults wipe .flectorc values for optional features
+  for (const key of [
+    'policies',
+    'plugins',
+    'arrayIdKey',
+    'maskSecrets',
+    'maskSecretsWebhooks',
+    'arrayIgnoreOrder',
+    'snapshotRef',
+    'ignore',
+  ]) {
+    if (out[key] === undefined || out[key] === false || out[key] === null || out[key] === '') {
+      delete out[key];
+    }
+  }
+  return out;
+}
+
+function diffOptionsFromEffective(effective, ignorePaths) {
+  return {
+    ignorePaths,
+    arrayIdKey: effective.arrayIdKey || null,
+    arrayIgnoreOrder: Boolean(effective.arrayIgnoreOrder),
+  };
+}
+
+function maybeMaskChanges(events, maskSecrets) {
+  if (!maskSecrets) return events;
+  return events.map(maskChangeEvent);
 }
 
 async function resolveTargetFiles(cliFiles, rcConfig) {
@@ -107,7 +154,6 @@ function readSnapshotStateFromRef(filePath, snapshotRef) {
     return readSnapshotStateFromFile(maybePath);
   }
 
-  // git ref mode: flecto ci file --snapshot-ref HEAD~1
   const rel = relative(process.cwd(), filePath).replaceAll('\\', '/');
   const raw = execFileSync('git', ['show', `${snapshotRef}:${rel}`], { encoding: 'utf8' });
   return parseContent(filePath, raw);
@@ -143,11 +189,14 @@ function printCiOutput(results, format) {
     for (const result of results) {
       for (const event of result.envelope.changes) {
         const title = `flecto ${event.type}`;
-        console.log(`::warning file=${result.file},title=${title}::${event.path}`);
+        const detail = event.note ? `${event.path} (${event.note})` : event.path;
+        console.log(`::warning file=${result.file},title=${title}::${detail}`);
       }
       for (const finding of result.policies) {
         const level = finding.severity === 'error' ? 'error' : 'warning';
-        console.log(`::${level} file=${result.file},title=policy::${finding.path} ${finding.message}`);
+        const pack = finding.pack ? ` [${finding.pack}]` : '';
+        const title = `flecto policy ${finding.id}${pack}`;
+        console.log(`::${level} file=${result.file},title=${title}::${finding.path}: ${finding.message}`);
       }
     }
   }
@@ -161,7 +210,7 @@ program
 program
   .command('watch [files...]')
   .description('Watch config files/globs for semantic changes')
-  .option('-p, --profile <name>', 'Use profile from .flectorc')
+  .option('-p, --profile <name>', 'Use profile from .flectorc (else FLECTO_PROFILE)')
   .option('-i, --interval <ms>', 'Polling fallback interval in ms', '100')
   .option('--polling', 'Force polling mode (useful on network drives / some editors)', false)
   .option('-m, --mode <mode>', 'Output mode: compact | verbose', 'compact')
@@ -176,12 +225,20 @@ program
   .option('--webhook-timeout <ms>', 'Webhook timeout in ms', '5000')
   .option('--webhook-retries <n>', 'Webhook retries', '2')
   .option('--ignore <keys>', 'Comma-separated key paths to ignore (e.g. "updated_at,meta.ts")')
+  .option('--policies <ids>', 'Comma-separated policy pack ids (default: default)')
+  .option('--plugins <paths>', 'Comma-separated local ESM plugin paths')
+  .option('--array-id-key <key>', 'Diff arrays by this object identity key (opt-in)')
+  .option('--array-ignore-order', 'Treat array order as insignificant', false)
+  .option('--mask-secrets', 'Mask secret-like values in human output', false)
+  .option('--mask-secrets-webhooks', 'Also mask secrets in webhook payloads', false)
   .option('--snapshot', 'Save current state as baseline instead of watching')
   .option('--diff', 'Diff current file against saved baseline and exit')
   .action(async (files, opts) => {
     try {
       const { config } = loadRcConfig(process.cwd());
-      const effective = resolveEffectiveOptions(config, opts.profile, opts);
+      const profile = resolveProfileName(opts.profile);
+      const effective = resolveEffectiveOptions(config, profile, stripUnsetCliOverrides(opts));
+      const { policies, plugins } = resolvePolicyOptions(effective);
       const targets = (await resolveTargetFiles(files, config)).map((f) => resolve(f));
       if (targets.length === 0) {
         throw new Error('No files matched. Provide files or configure .flectorc files/include.');
@@ -193,6 +250,9 @@ program
       validateInterval(interval);
       const mode = String(effective.mode ?? 'compact');
       validateMode(mode);
+      const maskSecrets = Boolean(effective.maskSecrets);
+      const maskSecretsWebhooks = Boolean(effective.maskSecretsWebhooks);
+      const dOpts = diffOptionsFromEffective(effective, ignorePaths);
 
       if (effective.snapshot) {
         mkdirSync(SNAPSHOT_DIR, { recursive: true });
@@ -216,8 +276,8 @@ program
           }
           const before = readSnapshotStateFromFile(snapshotPath);
           const after = parseFile(filepath);
-          const events = diffTrees(before, after, { ignorePaths });
-          renderDiff(filepath, events);
+          const events = diffTrees(before, after, dOpts);
+          renderDiff(filepath, events, { maskSecrets });
           if (events.length > 0) hasChanges = true;
         }
         process.exit(hasChanges ? 1 : 0);
@@ -237,17 +297,32 @@ program
         renderInfo(`flecto watching ${chalk.cyan(filepath)}`);
         const watcher = startWatcher(
           filepath,
-          { interval, mode, ignorePaths, polling: Boolean(effective.polling) },
+          { interval, mode, ignorePaths, polling: Boolean(effective.polling), ...dOpts },
           async (event) => {
             if (event.kind === 'changes') {
-              renderChanges(event.filepath, event.events, mode);
-              const policyFindings = evaluatePolicies(event.events);
+              renderChanges(event.filepath, event.events, mode, { maskSecrets });
+              let policyFindings = [];
+              try {
+                policyFindings = await evaluatePolicies(event.events, {
+                  cwd: process.cwd(),
+                  file: event.filepath,
+                  profile: profile ?? null,
+                  source: 'watch',
+                  policies,
+                  plugins,
+                });
+              } catch (err) {
+                renderError(`policy evaluation failed: ${err.message}`);
+                if (String(effective.onAlertFailure) === 'exit') process.exitCode = 1;
+              }
               renderPolicyFindings(policyFindings);
               if (effective.command || effective.webhook) {
+                const outboundChanges = maybeMaskChanges(event.events, maskSecretsWebhooks);
                 const envelope = createEnvelope({
                   source: 'watch',
                   file: event.filepath,
-                  changes: event.events,
+                  changes: outboundChanges,
+                  policies: policyFindings,
                 });
                 await fireAlerts({
                   command: effective.command,
@@ -306,15 +381,22 @@ program
 program
   .command('ci [files...]')
   .description('Run semantic diff in CI mode')
-  .option('-p, --profile <name>', 'Use profile from .flectorc')
+  .option('-p, --profile <name>', 'Use profile from .flectorc (else FLECTO_PROFILE)')
   .option('--snapshot-ref <ref>', 'Snapshot reference: snapshot path or git ref')
   .option('--format <type>', 'Output format: json | ndjson | github-annotations', 'json')
   .option('--fail-on <rules>', 'Comma-separated fail rules: changed,added,removed,policy,error,warn', 'changed,policy,error')
   .option('--ignore <keys>', 'Comma-separated key paths to ignore')
+  .option('--policies <ids>', 'Comma-separated policy pack ids')
+  .option('--plugins <paths>', 'Comma-separated local ESM plugin paths')
+  .option('--array-id-key <key>', 'Diff arrays by this object identity key (opt-in)')
+  .option('--array-ignore-order', 'Treat array order as insignificant', false)
+  .option('--mask-secrets', 'Mask secret-like values in CI output', false)
   .action(async (files, opts) => {
     try {
       const { config } = loadRcConfig(process.cwd());
-      const effective = resolveEffectiveOptions(config, opts.profile, opts);
+      const profile = resolveProfileName(opts.profile);
+      const effective = resolveEffectiveOptions(config, profile, stripUnsetCliOverrides(opts));
+      const { policies: packIds, plugins } = resolvePolicyOptions(effective);
       const targets = (await resolveTargetFiles(files, config)).map((f) => resolve(f));
       if (targets.length === 0) {
         throw new Error('No files matched. Provide files or configure .flectorc files/include.');
@@ -326,6 +408,8 @@ program
       if (!['json', 'ndjson', 'github-annotations'].includes(format)) {
         throw new Error('--format must be json, ndjson, or github-annotations');
       }
+      const maskSecrets = Boolean(effective.maskSecrets);
+      const dOpts = diffOptionsFromEffective(effective, ignorePaths);
 
       /** @type {any[]} */
       const results = [];
@@ -334,22 +418,34 @@ program
       for (const filepath of targets) {
         if (!existsSync(filepath) || !isSupported(filepath)) continue;
         const after = parseFile(filepath);
-        let before = {};
+        let before;
         try {
           before = readSnapshotStateFromRef(filepath, effective.snapshotRef);
-        } catch {
-          before = {};
+        } catch (err) {
+          throw new Error(
+            `Failed to resolve snapshot baseline for "${filepath}"` +
+            `${effective.snapshotRef ? ` (ref: ${effective.snapshotRef})` : ''}: ${err.message}`
+          );
         }
-        const events = diffTrees(before, after, { ignorePaths });
-        const policies = evaluatePolicies(events);
+        const events = diffTrees(before, after, dOpts);
+        const policyFindings = await evaluatePolicies(events, {
+          cwd: process.cwd(),
+          file: filepath,
+          profile: profile ?? null,
+          source: 'ci',
+          policies: packIds,
+          plugins,
+        });
+        const outboundChanges = maybeMaskChanges(events, maskSecrets);
         const envelope = createEnvelope({
           source: 'ci',
           file: filepath,
-          changes: events,
+          changes: outboundChanges,
+          policies: policyFindings,
         });
-        results.push({ file: filepath, envelope, policies });
+        results.push({ file: filepath, envelope, policies: policyFindings });
 
-        if (shouldFailFromChanges(events, failOn) || shouldFailFromPolicy(policies, failOn)) {
+        if (shouldFailFromChanges(events, failOn) || shouldFailFromPolicy(policyFindings, failOn)) {
           shouldFail = true;
         }
       }
@@ -393,6 +489,7 @@ program
         throw new Error('Global fetch unavailable. Use Node.js >= 18.');
       }
       renderInfo('fetch: available');
+      renderInfo(`version: ${PKG.version}`);
       renderInfo('doctor: OK');
     } catch (err) {
       renderError(`doctor failed: ${err.message}`);
@@ -402,7 +499,6 @@ program
 
 program.parse(process.argv);
 
-// Show help if no command given
 if (!process.argv.slice(2).length) {
   program.help();
 }

@@ -44,6 +44,17 @@ export function loadRcConfig(cwd = process.cwd()) {
 }
 
 /**
+ * Resolve profile name: CLI > FLECTO_PROFILE > none.
+ * @param {string | undefined} cliProfile
+ * @returns {string | undefined}
+ */
+export function resolveProfileName(cliProfile) {
+  if (cliProfile) return String(cliProfile);
+  if (process.env.FLECTO_PROFILE) return String(process.env.FLECTO_PROFILE);
+  return undefined;
+}
+
+/**
  * Resolve effective options with optional profile and CLI overrides.
  * @param {FlectoRc | null} config
  * @param {string | undefined} profile
@@ -53,6 +64,26 @@ export function resolveEffectiveOptions(config, profile, cliOverrides = {}) {
   const defaults = config?.defaults ?? {};
   const profileOptions = profile && config?.profiles?.[profile] ? config.profiles[profile] : {};
   return { ...defaults, ...profileOptions, ...cliOverrides };
+}
+
+/**
+ * Normalize policy-related effective options.
+ * @param {Record<string, unknown>} effective
+ */
+export function resolvePolicyOptions(effective) {
+  const policiesRaw = effective.policies;
+  const pluginsRaw = effective.plugins;
+  const policies = Array.isArray(policiesRaw)
+    ? policiesRaw.map(String)
+    : typeof policiesRaw === 'string'
+      ? String(policiesRaw).split(',').map((s) => s.trim()).filter(Boolean)
+      : ['default'];
+  const plugins = Array.isArray(pluginsRaw)
+    ? pluginsRaw.map(String)
+    : typeof pluginsRaw === 'string'
+      ? String(pluginsRaw).split(',').map((s) => s.trim()).filter(Boolean)
+      : [];
+  return { policies, plugins };
 }
 
 /**
@@ -93,15 +124,20 @@ export function initRcFile(cwd = process.cwd()) {
       ignore: ['**.updated_at'],
       deliveryMode: 'best-effort',
       onAlertFailure: 'warn',
+      policies: ['default'],
+      plugins: [],
+      arrayIdKey: null,
+      arrayIgnoreOrder: false,
+      maskSecrets: false,
     },
     profiles: {
       dev: { mode: 'verbose' },
       ci: { failOn: 'policy,error' },
+      prod: { policies: ['default', 'strict-prod'], maskSecrets: true },
     },
-    files: ['config/**/*.yaml', '.env'],
+    files: ['config/**/*.{yaml,yml,json,toml,ini}', '.env', '.env.*', '*.env'],
     exclude: ['**/node_modules/**'],
   };
   writeFileSync(path, JSON.stringify(starter, null, 2), 'utf8');
   return path;
 }
-

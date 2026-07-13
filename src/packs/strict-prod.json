@@ -1,0 +1,37 @@
+{
+  "id": "strict-prod",
+  "rules": [
+    {
+      "id": "secret-key-changed",
+      "severity": "error",
+      "when": ["added", "changed", "removed"],
+      "match": {
+        "path": "(secret|token|password|api[_-]?key|private[_-]?key|credential)",
+        "pathFlags": "i"
+      },
+      "message": "Sensitive-looking key changed in production profile. Confirm rotation and access controls."
+    },
+    {
+      "id": "dangerous-toggle-enabled",
+      "severity": "error",
+      "when": ["added", "changed"],
+      "match": {
+        "path": "(debug|allow_insecure|disable_tls|skip_tls_verify|permit_all)",
+        "pathFlags": "i"
+      },
+      "afterEquals": true,
+      "message": "Dangerous toggle enabled in production profile."
+    },
+    {
+      "id": "pool-size-jump",
+      "severity": "error",
+      "when": ["changed"],
+      "match": {
+        "path": "pool_size$",
+        "pathFlags": "i"
+      },
+      "numericJump": { "minMultiple": 2 },
+      "messageTemplate": "Pool size increased from {before} to {after} (>=2x) in production."
+    }
+  ]
+}

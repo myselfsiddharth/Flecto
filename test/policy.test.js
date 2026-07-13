@@ -1,28 +1,28 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluatePolicies, highestSeverity } from '../src/policy.js';
+import { evaluatePolicies, highestSeverity, mergeFindings, loadPack } from '../src/policy.js';
 
 describe('policy engine', () => {
-  test('flags secret-looking key changes', () => {
-    const findings = evaluatePolicies([
+  test('flags secret-looking key changes', async () => {
+    const findings = await evaluatePolicies([
       { type: 'changed', path: 'auth.api_key', before: 'a', after: 'b' },
     ]);
     assert.equal(findings.length, 1);
     assert.equal(findings[0].severity, 'error');
+    assert.equal(findings[0].pack, 'default');
   });
 
-  test('flags secret-looking keys that are newly added', () => {
-    const findings = evaluatePolicies([
+  test('flags secret-looking keys that are newly added', async () => {
+    const findings = await evaluatePolicies([
       { type: 'added', path: 'auth.api_key', after: 'new-secret' },
     ]);
     assert.equal(findings.length, 1);
     assert.equal(findings[0].id, 'secret-key-changed');
     assert.equal(findings[0].severity, 'error');
-    assert.match(findings[0].message, /added/i);
   });
 
-  test('flags large pool size increase', () => {
-    const findings = evaluatePolicies([
+  test('flags large pool size increase', async () => {
+    const findings = await evaluatePolicies([
       { type: 'changed', path: 'database.pool_size', before: 10, after: 40 },
     ]);
     assert.equal(findings.length, 1);
@@ -36,5 +36,28 @@ describe('policy engine', () => {
     ]);
     assert.equal(sev, 'warn');
   });
-});
 
+  test('unknown pack id fails closed', () => {
+    assert.throws(() => loadPack('does-not-exist'), /Unknown policy pack/);
+  });
+
+  test('mergeFindings keeps highest severity for same id+path', () => {
+    const merged = mergeFindings([
+      { id: 'secret-key-changed', severity: 'warn', path: 'a.token', message: 'w', pack: 'a' },
+      { id: 'secret-key-changed', severity: 'error', path: 'a.token', message: 'e', pack: 'b' },
+    ]);
+    assert.equal(merged.length, 1);
+    assert.equal(merged[0].severity, 'error');
+    assert.equal(merged[0].pack, 'b');
+  });
+
+  test('strict-prod raises pool jump to error', async () => {
+    const findings = await evaluatePolicies(
+      [{ type: 'changed', path: 'database.pool_size', before: 10, after: 40 }],
+      { policies: ['strict-prod'] },
+    );
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0].severity, 'error');
+    assert.equal(findings[0].pack, 'strict-prod');
+  });
+});

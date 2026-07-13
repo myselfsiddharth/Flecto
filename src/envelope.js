@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 
-export const EVENT_SCHEMA_VERSION = '1.1';
+export const EVENT_SCHEMA_VERSION = '2.0';
 
 /**
  * @typedef {'watch' | 'ci' | 'diff'} EventSource
@@ -15,8 +15,9 @@ export const EVENT_SCHEMA_VERSION = '1.1';
  *  emitted_at: string,
  *  file: string,
  *  changes: import('./differ.js').ChangeEvent[],
+ *  policies?: import('./policy.js').PolicyFinding[],
  *  lifecycle?: { type: string, message: string }
- * }} SentinelEnvelope
+ * }} FlectoEnvelope
  */
 
 /**
@@ -25,10 +26,11 @@ export const EVENT_SCHEMA_VERSION = '1.1';
  *  file: string,
  *  source: EventSource,
  *  changes?: import('./differ.js').ChangeEvent[],
+ *  policies?: import('./policy.js').PolicyFinding[],
  *  lifecycle?: { type: string, message: string },
  *  batchId?: string
  * }} input
- * @returns {SentinelEnvelope}
+ * @returns {FlectoEnvelope}
  */
 export function createEnvelope(input) {
   const batchId = input.batchId ?? randomUUID();
@@ -41,7 +43,7 @@ export function createEnvelope(input) {
     emitted_at: new Date().toISOString(),
     file: input.file,
     changes: input.changes ?? [],
+    policies: input.policies ?? [],
     lifecycle: input.lifecycle,
   };
 }
-

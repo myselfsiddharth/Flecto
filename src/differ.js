@@ -139,8 +139,9 @@ function matchParts(patternParts, pathParts) {
  * @param {unknown} after
  * @param {string} path
  * @param {ChangeEvent[]} events  accumulator
+ * @param {{ arrayIdKey?: string | null, arrayIgnoreOrder?: boolean }} [options]
  */
-function diffValues(before, after, path, events) {
+function diffValues(before, after, path, events, options = {}) {
   const beforeIsObj = isPlainObject(before);
   const afterIsObj = isPlainObject(after);
   const beforeIsArr = Array.isArray(before);
@@ -148,13 +149,13 @@ function diffValues(before, after, path, events) {
 
   // Both plain objects → recurse into keys
   if (beforeIsObj && afterIsObj) {
-    diffObjects(before, after, path, events);
+    diffObjects(before, after, path, events, options);
     return;
   }
 
-  // Both arrays → diff by index
+  // Both arrays → diff by index or identity key
   if (beforeIsArr && afterIsArr) {
-    diffArrays(before, after, path, events);
+    diffArrays(before, after, path, events, options);
     return;
   }
 
@@ -199,8 +200,9 @@ function diffValues(before, after, path, events) {
  * @param {Record<string, unknown>} after
  * @param {string} basePath
  * @param {ChangeEvent[]} events
+ * @param {{ arrayIdKey?: string | null, arrayIgnoreOrder?: boolean }} [options]
  */
-function diffObjects(before, after, basePath, events) {
+function diffObjects(before, after, basePath, events, options = {}) {
   const beforeKeys = new Set(Object.keys(before));
   const afterKeys = new Set(Object.keys(after));
 
@@ -224,19 +226,100 @@ function diffObjects(before, after, basePath, events) {
   for (const key of beforeKeys) {
     if (afterKeys.has(key)) {
       const childPath = basePath ? `${basePath}.${key}` : key;
-      diffValues(before[key], after[key], childPath, events);
+      diffValues(before[key], after[key], childPath, events, options);
     }
   }
 }
 
 /**
- * Diff two arrays by index.
+ * @param {unknown} item
+ * @param {string} idKey
+ * @returns {string | null}
+ */
+function identityKey(item, idKey) {
+  if (!isPlainObject(item)) return null;
+  if (!Object.prototype.hasOwnProperty.call(item, idKey)) return null;
+  const v = item[idKey];
+  if (v == null || typeof v === 'object') return null;
+  return String(v);
+}
+
+/**
+ * Diff arrays by identity key when configured; otherwise by index.
  * @param {unknown[]} before
  * @param {unknown[]} after
  * @param {string} basePath
  * @param {ChangeEvent[]} events
+ * @param {{ arrayIdKey?: string | null, arrayIgnoreOrder?: boolean }} [options]
  */
-function diffArrays(before, after, basePath, events) {
+function diffArrays(before, after, basePath, events, options = {}) {
+  const idKey = options.arrayIdKey ? String(options.arrayIdKey) : null;
+
+  if (idKey) {
+    /** @type {Map<string, { value: unknown, index: number }>} */
+    const beforeMap = new Map();
+    /** @type {Map<string, { value: unknown, index: number }>} */
+    const afterMap = new Map();
+    let canUseIdentity = true;
+
+    for (let i = 0; i < before.length; i++) {
+      const key = identityKey(before[i], idKey);
+      if (key == null || beforeMap.has(key)) {
+        canUseIdentity = false;
+        break;
+      }
+      beforeMap.set(key, { value: before[i], index: i });
+    }
+    if (canUseIdentity) {
+      for (let i = 0; i < after.length; i++) {
+        const key = identityKey(after[i], idKey);
+        if (key == null || afterMap.has(key)) {
+          canUseIdentity = false;
+          break;
+        }
+        afterMap.set(key, { value: after[i], index: i });
+      }
+    }
+
+    if (canUseIdentity) {
+      for (const [key, afterItem] of afterMap) {
+        const childPath = `${basePath}[${JSON.stringify(key)}]`;
+        if (!beforeMap.has(key)) {
+          events.push({ type: 'added', path: childPath, after: afterItem.value });
+        } else {
+          diffValues(beforeMap.get(key).value, afterItem.value, childPath, events, options);
+        }
+      }
+      for (const [key, beforeItem] of beforeMap) {
+        if (!afterMap.has(key)) {
+          const childPath = `${basePath}[${JSON.stringify(key)}]`;
+          events.push({ type: 'removed', path: childPath, before: beforeItem.value });
+        }
+      }
+      return;
+    }
+  }
+
+  if (options.arrayIgnoreOrder) {
+    // Order-insensitive without id key: multiset compare via JSON signatures
+    const beforeSigs = before.map((v) => JSON.stringify(v));
+    const afterSigs = after.map((v) => JSON.stringify(v));
+    /** @type {Map<string, number>} */
+    const counts = new Map();
+    for (const s of beforeSigs) counts.set(s, (counts.get(s) ?? 0) + 1);
+    for (const s of afterSigs) {
+      const n = counts.get(s) ?? 0;
+      if (n > 0) counts.set(s, n - 1);
+      else events.push({ type: 'added', path: `${basePath}[*]`, after: JSON.parse(s) });
+    }
+    for (const [s, n] of counts) {
+      for (let i = 0; i < n; i++) {
+        events.push({ type: 'removed', path: `${basePath}[*]`, before: JSON.parse(s) });
+      }
+    }
+    return;
+  }
+
   const maxLen = Math.max(before.length, after.length);
   for (let i = 0; i < maxLen; i++) {
     const childPath = `${basePath}[${i}]`;
@@ -245,7 +328,7 @@ function diffArrays(before, after, basePath, events) {
     } else if (i >= after.length) {
       events.push({ type: 'removed', path: childPath, before: before[i] });
     } else {
-      diffValues(before[i], after[i], childPath, events);
+      diffValues(before[i], after[i], childPath, events, options);
     }
   }
 }
@@ -255,22 +338,26 @@ function diffArrays(before, after, basePath, events) {
  * Accepts any JSON-like values at the root (object/array/scalar/null).
  * @param {unknown} before
  * @param {unknown} after
- * @param {{ ignorePaths?: string[] }} [options]
+ * @param {{ ignorePaths?: string[], arrayIdKey?: string | null, arrayIgnoreOrder?: boolean }} [options]
  * @returns {ChangeEvent[]}
  */
 export function diffTrees(before, after, options = {}) {
   /** @type {ChangeEvent[]} */
   const events = [];
   const ignore = makeIgnoreMatcher(options.ignorePaths ?? []);
+  const diffOpts = {
+    arrayIdKey: options.arrayIdKey ?? null,
+    arrayIgnoreOrder: Boolean(options.arrayIgnoreOrder),
+  };
 
   // Root handling: avoid assuming object roots.
   if (isPlainObject(before) && isPlainObject(after)) {
-    diffObjects(before, after, '', events);
+    diffObjects(before, after, '', events, diffOpts);
   } else if (Array.isArray(before) && Array.isArray(after)) {
-    diffArrays(before, after, '', events);
+    diffArrays(before, after, '', events, diffOpts);
   } else {
     // Compare as a single root value. Use "<root>" so we can still ignore it if desired.
-    diffValues(before, after, '<root>', events);
+    diffValues(before, after, '<root>', events, diffOpts);
   }
 
   return events.filter(e => !ignore(e.path));

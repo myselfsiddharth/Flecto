@@ -3,8 +3,9 @@ demo/
 .flecto-snapshots/
 .flecto-queue/
 .flecto-tmp/
-.sentinel-snapshots/
-.sentinel-queue/
 .DS_Store
 *.log
 npm-debug.log*
+
+.claude/
+.sentinel-snapshots/

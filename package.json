@@ -35,6 +35,7 @@
   "files": [
     "index.js",
     "src/**/*",
+    "schemas/**/*",
     "README.md",
     "LICENSE"
   ],
