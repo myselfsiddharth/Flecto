@@ -153,6 +153,34 @@ describe('diffTrees', () => {
     assertEvent(events, { type: 'changed', path: 'port', before: 3000, after: 4000 });
   });
 
+  test('ignorePaths key-anywhere patterns match complete key segments only', () => {
+    const before = {
+      updated_at: 1,
+      meta: { updated_at: 2, updated_at_backup: 3 },
+      services: [{ updated_at: 4, updated_at_ms: 5 }],
+    };
+    const after = {
+      updated_at: 10,
+      meta: { updated_at: 20, updated_at_backup: 30 },
+      services: [{ updated_at: 40, updated_at_ms: 50 }],
+    };
+    const events = diffTrees(before, after, { ignorePaths: ['**.updated_at'] });
+
+    assert.equal(events.length, 2);
+    assertEvent(events, {
+      type: 'changed',
+      path: 'meta.updated_at_backup',
+      before: 3,
+      after: 30,
+    });
+    assertEvent(events, {
+      type: 'changed',
+      path: 'services[0].updated_at_ms',
+      before: 5,
+      after: 50,
+    });
+  });
+
   test('nested array of objects', () => {
     const before = { servers: [{ host: 'a', port: 80 }, { host: 'b', port: 443 }] };
     const after  = { servers: [{ host: 'a', port: 80 }, { host: 'b', port: 8443 }] };
