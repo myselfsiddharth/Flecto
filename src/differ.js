@@ -61,10 +61,9 @@ function makeIgnoreMatcher(patterns) {
     }
 
     if (keyAnywhere.size > 0) {
+      const pathParts = splitPathParts(path);
       for (const key of keyAnywhere) {
-        if (path === key) return true;
-        if (path.includes(`.${key}`)) return true;
-        if (path.includes(`].${key}`)) return true;
+        if (pathParts.includes(key)) return true;
       }
     }
 
