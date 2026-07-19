@@ -39,7 +39,7 @@ describe('policy packs and plugins', () => {
   test('plugin evaluate findings merge with packs', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'flecto-plugin-'));
     try {
-      const pluginPath = join(dir, 'plugin.js');
+      const pluginPath = join(dir, 'plugin.mjs');
       writeFileSync(pluginPath, `
         export function evaluate(changes) {
           return changes
