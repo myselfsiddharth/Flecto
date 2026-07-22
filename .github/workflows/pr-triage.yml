@@ -29,3 +29,6 @@ jobs:
             chore
             revert
           requireScope: false
+          ignoreLabels: |
+            dependencies
+            skip-changelog
