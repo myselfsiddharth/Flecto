@@ -1,0 +1,146 @@
+name: PR review bot
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+
+jobs:
+  auto-review:
+    name: Automated review
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install & test
+        id: tests
+        run: |
+          npm ci
+          npm test
+          npm run pack:check
+
+      - name: Collect PR signals
+        id: signals
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const body = (pr.body || '').trim();
+            const title = pr.title || '';
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              per_page: 100,
+            });
+
+            const touched = files.map(f => f.filename);
+            const additions = files.reduce((n, f) => n + (f.additions || 0), 0);
+            const deletions = files.reduce((n, f) => n + (f.deletions || 0), 0);
+
+            const problems = [];
+            if (body.length < 40) {
+              problems.push('PR description is too short — fill out the template (summary + test plan).');
+            }
+            if (!/npm test|tests? pass|test plan/i.test(body)) {
+              problems.push('Add a short test plan (how you verified the change).');
+            }
+            if (touched.some(f => /(^|\/)\.env($|\.)|credentials|id_rsa|\.pem$/i.test(f))) {
+              problems.push('Possible secret/credential file detected in the diff — remove it.');
+            }
+            if (additions + deletions > 1200) {
+              problems.push(`Large diff (+${additions}/-${deletions}). Consider splitting for easier review.`);
+            }
+
+            const semantic = /^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\(.+\))?:/.test(title);
+            if (!semantic) {
+              problems.push('Title should use Conventional Commits (e.g. `feat: ...`, `fix: ...`).');
+            }
+
+            core.setOutput('problems', problems.join('\n') || '');
+            core.setOutput('ok', problems.length === 0 ? 'true' : 'false');
+            core.setOutput('files', String(touched.length));
+            core.setOutput('additions', String(additions));
+            core.setOutput('deletions', String(deletions));
+
+            return { problems, files: touched.length, additions, deletions };
+
+      - name: Post review
+        uses: actions/github-script@v7
+        env:
+          PROBLEMS: ${{ steps.signals.outputs.problems }}
+          OK: ${{ steps.signals.outputs.ok }}
+          FILES: ${{ steps.signals.outputs.files }}
+          ADD: ${{ steps.signals.outputs.additions }}
+          DEL: ${{ steps.signals.outputs.deletions }}
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const problems = (process.env.PROBLEMS || '').split('\n').filter(Boolean);
+            const ok = process.env.OK === 'true';
+            // Never APPROVE — required reviews must come from CODEOWNERS / humans.
+            const event = ok ? 'COMMENT' : 'REQUEST_CHANGES';
+            const icon = ok ? '✅' : '🛑';
+
+            const body = [
+              `## ${icon} Flecto PR review bot`,
+              '',
+              `CI tests + pack check: **passed**`,
+              `Files touched: **${process.env.FILES}** (+${process.env.ADD}/-${process.env.DEL})`,
+              '',
+              ok
+                ? 'Automated checks look good. Waiting on a **human / CODEOWNER** approving review before merge.'
+                : 'Please address the following before merge:',
+              ...(ok ? [] : problems.map(p => `- ${p}`)),
+              '',
+              '_Automated review — does not count as a maintainer approval._',
+            ].join('\n');
+
+            const reviews = await github.paginate(github.rest.pulls.listReviews, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              per_page: 100,
+            });
+            const botReviews = reviews.filter(r => r.user?.login === 'github-actions[bot]');
+            for (const r of botReviews) {
+              if (r.state === 'CHANGES_REQUESTED') {
+                try {
+                  await github.rest.pulls.dismissReview({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    pull_number: pr.number,
+                    review_id: r.id,
+                    message: 'Superseded by a newer automated review.',
+                  });
+                } catch (_) {
+                  // ignore if already dismissed / not dismissible
+                }
+              }
+            }
+
+            await github.rest.pulls.createReview({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: pr.number,
+              event,
+              body,
+            });
+
+            if (!ok) {
+              core.setFailed('Automated review requested changes.');
+            }

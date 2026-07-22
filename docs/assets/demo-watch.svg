@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="420" viewBox="0 0 920 420" role="img" aria-label="Flecto watch demo">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0b1220"/>
+      <stop offset="100%" stop-color="#152238"/>
+    </linearGradient>
+    <style>
+      .muted { fill: #8fa3bf; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 16px; }
+      .cmd { fill: #e8eef7; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 16px; }
+      .dim { fill: #6b7c93; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 15px; }
+      .file { fill: #7dd3fc; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 15px; }
+      .chg { fill: #fbbf24; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 15px; }
+      .add { fill: #34d399; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 15px; }
+      .rm { fill: #f87171; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 15px; }
+      .pol { fill: #fb7185; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 15px; }
+      .line { opacity: 0; animation: fadeIn 0.35s ease forwards; }
+      .l1 { animation-delay: 0.4s; }
+      .l2 { animation-delay: 1.1s; }
+      .l3 { animation-delay: 1.5s; }
+      .l4 { animation-delay: 1.9s; }
+      .l5 { animation-delay: 2.3s; }
+      .l6 { animation-delay: 2.8s; }
+      @keyframes fadeIn { to { opacity: 1; } }
+    </style>
+  </defs>
+  <rect width="920" height="420" rx="18" fill="url(#bg)"/>
+  <rect x="1" y="1" width="918" height="418" rx="18" fill="none" stroke="#2a3b55"/>
+  <circle cx="36" cy="32" r="7" fill="#f87171"/>
+  <circle cx="60" cy="32" r="7" fill="#fbbf24"/>
+  <circle cx="84" cy="32" r="7" fill="#34d399"/>
+  <text x="120" y="37" class="muted">flecto  semantic config watcher</text>
+
+  <text x="36" y="88" class="muted">$</text>
+  <text x="56" y="88" class="cmd">flecto watch config/prod.yaml</text>
+
+  <g class="line l1">
+    <text x="36" y="140" class="dim">flecto watching</text>
+    <text x="178" y="140" class="file">config/prod.yaml</text>
+  </g>
+  <g class="line l2">
+    <text x="36" y="178" class="dim">[10:42:31]</text>
+    <text x="130" y="178" class="file">config/prod.yaml</text>
+    <text x="300" y="178" class="dim"> 3 changes</text>
+  </g>
+  <g class="line l3">
+    <text x="52" y="214" class="chg">~ database.pool_size: 5 ’ 20</text>
+  </g>
+  <g class="line l4">
+    <text x="52" y="246" class="add">+ feature_flags.dark_mode: true</text>
+  </g>
+  <g class="line l5">
+    <text x="52" y="278" class="rm">- deprecated.old_key</text>
+  </g>
+  <g class="line l6">
+    <text x="52" y="318" class="pol">! policy(warn) [default] database.pool_size: Pool size increased (&gt;=2x).</text>
+  </g>
+  <text x="36" y="372" class="muted">Meaning over noise. Risk over raw diffs.</text>
+</svg>
