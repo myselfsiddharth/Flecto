@@ -35,7 +35,7 @@ jobs:
 
       - name: Collect PR signals
         id: signals
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const pr = context.payload.pull_request;
@@ -80,7 +80,7 @@ jobs:
             return { problems, files: touched.length, additions, deletions };
 
       - name: Post review
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         env:
           PROBLEMS: ${{ steps.signals.outputs.problems }}
           OK: ${{ steps.signals.outputs.ok }}
