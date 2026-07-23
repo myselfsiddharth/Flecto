@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'fs';
 import { join, resolve } from 'path';
 import { tmpdir } from 'os';
 import { spawnSync } from 'child_process';
+import { createHash } from 'crypto';
 
 test('ci mode returns non-zero when fail-on changed', () => {
   const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-'));
@@ -142,6 +143,43 @@ test('history retains legacy snapshots without timestamped history', () => {
     assert.equal(history.status, 0);
     assert.match(history.stdout, /legacy\.json — 0 changes/);
     assert.match(history.stdout, /current\.json — 0 changes/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('history preserves a legacy baseline during first snapshot migration', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-history-migration-'));
+  const file = join(dir, 'config.json');
+  const snapshotDir = join(dir, '.flecto-snapshots');
+  const id = createHash('sha256').update(file.replaceAll('\\', '/')).digest('hex').slice(0, 16);
+  const rootIndex = resolve(process.cwd(), 'index.js');
+
+  try {
+    mkdirSync(snapshotDir, { recursive: true });
+    writeFileSync(
+      join(snapshotDir, `${id}.json`),
+      JSON.stringify({ file, state: { pool_size: 5 } }),
+      'utf8',
+    );
+    writeFileSync(file, JSON.stringify({ pool_size: 20 }, null, 2), 'utf8');
+
+    const snapshot = spawnSync(
+      process.execPath,
+      [rootIndex, 'watch', file, '--snapshot'],
+      { cwd: dir, encoding: 'utf8' },
+    );
+    const history = spawnSync(
+      process.execPath,
+      [rootIndex, 'history', file, '--limit', '2'],
+      { cwd: dir, encoding: 'utf8' },
+    );
+
+    assert.equal(snapshot.status, 0);
+    assert.equal(history.status, 0);
+    assert.match(history.stdout, /Local snapshot history \(2 snapshots\)/);
+    assert.match(history.stdout, /config\.json — 1 change/);
+    assert.match(history.stdout, /config\.json — 0 changes/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

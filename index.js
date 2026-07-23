@@ -50,7 +50,34 @@ function snapshotPathForFile(absPath) {
 
 function snapshotHistoryPathForFile(absPath) {
   const id = snapshotIdForPath(absPath);
-  return resolve(`${SNAPSHOT_DIR}/${id}.${Date.now()}.json`);
+  let timestamp = Date.now();
+  let path = resolve(`${SNAPSHOT_DIR}/${id}.${timestamp}.json`);
+  while (existsSync(path)) {
+    timestamp += 1;
+    path = resolve(`${SNAPSHOT_DIR}/${id}.${timestamp}.json`);
+  }
+  return path;
+}
+
+function hasSnapshotHistoryForFile(absPath) {
+  if (!existsSync(SNAPSHOT_DIR)) return false;
+  const id = snapshotIdForPath(absPath);
+  return readdirSync(SNAPSHOT_DIR).some((name) => new RegExp(`^${id}\\.\\d+\\.json$`).test(name));
+}
+
+function preserveLegacySnapshotForHistory(absPath, snapshotPath) {
+  if (!existsSync(snapshotPath) || hasSnapshotHistoryForFile(absPath)) return;
+
+  const legacy = JSON.parse(readFileSync(snapshotPath, 'utf8'));
+  writeFileSync(
+    snapshotHistoryPathForFile(absPath),
+    JSON.stringify({
+      file: legacy.file ?? absPath,
+      state: legacy.state ?? legacy,
+      createdAt: legacy.createdAt ?? statSync(snapshotPath).mtime.toISOString(),
+    }, null, 2),
+    'utf8',
+  );
 }
 
 function readLocalSnapshotHistory() {
@@ -325,6 +352,7 @@ program
           }
           const state = parseFile(filepath);
           const snapshotPath = snapshotPathForFile(filepath);
+          preserveLegacySnapshotForHistory(filepath, snapshotPath);
           const snapshot = { file: filepath, state, createdAt: new Date().toISOString() };
           writeFileSync(snapshotPath, JSON.stringify(snapshot, null, 2), 'utf8');
           writeFileSync(snapshotHistoryPathForFile(filepath), JSON.stringify(snapshot, null, 2), 'utf8');
