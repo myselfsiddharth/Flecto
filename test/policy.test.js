@@ -29,6 +29,33 @@ describe('policy engine', () => {
     assert.equal(findings[0].severity, 'warn');
   });
 
+  test('flags dangerous toggles set to boolean true', async () => {
+    const findings = await evaluatePolicies([
+      { type: 'changed', path: 'debug', before: false, after: true },
+    ]);
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0].id, 'dangerous-toggle-enabled');
+  });
+
+  test('flags dangerous toggles set to truthy strings', async () => {
+    for (const value of ['true', '1', 'yes']) {
+      const findings = await evaluatePolicies([
+        { type: 'changed', path: 'debug', before: 'false', after: value },
+      ]);
+      assert.equal(findings.length, 1, `expected ${value} to match`);
+      assert.equal(findings[0].id, 'dangerous-toggle-enabled');
+    }
+  });
+
+  test('does not flag dangerous toggles set to false values', async () => {
+    for (const value of [false, 'false']) {
+      const findings = await evaluatePolicies([
+        { type: 'changed', path: 'debug', before: true, after: value },
+      ]);
+      assert.equal(findings.length, 0, `expected ${String(value)} not to match`);
+    }
+  });
+
   test('computes highest severity', () => {
     const sev = highestSeverity([
       { id: 'a', severity: 'info', path: 'x', message: 'i' },

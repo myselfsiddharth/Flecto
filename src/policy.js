@@ -19,6 +19,7 @@ import yaml from 'js-yaml';
  *   when?: Array<'added' | 'removed' | 'changed'>,
  *   match?: { path?: string, pathFlags?: string },
  *   afterEquals?: unknown,
+ *   afterTruthy?: boolean,
  *   numericJump?: { minMultiple: number },
  *   message?: string,
  *   messageTemplate?: string
@@ -38,6 +39,16 @@ import yaml from 'js-yaml';
 
 const SEVERITY_RANK = { info: 1, warn: 2, error: 3 };
 const PACKS_DIR = join(dirname(fileURLToPath(import.meta.url)), 'packs');
+
+/**
+ * @param {unknown} value
+ * @returns {boolean}
+ */
+function isTruthyToggle(value) {
+  if (value === true) return true;
+  if (typeof value !== 'string') return false;
+  return ['true', '1', 'yes'].includes(value.trim().toLowerCase());
+}
 
 /**
  * @param {string} cwd
@@ -119,6 +130,10 @@ function ruleMatches(rule, change) {
 
   if (Object.prototype.hasOwnProperty.call(rule, 'afterEquals')) {
     if (change.after !== rule.afterEquals) return false;
+  }
+
+  if (rule.afterTruthy && !isTruthyToggle(change.after)) {
+    return false;
   }
 
   if (rule.numericJump) {
