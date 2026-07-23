@@ -254,7 +254,12 @@ function arraySignature(value) {
   try {
     const canonicalize = (item) => {
       if (Array.isArray(item)) return item.map(canonicalize);
-      if (!isPlainObject(item)) return item;
+      if (
+        !isPlainObject(item) ||
+        (Object.getPrototypeOf(item) !== Object.prototype && Object.getPrototypeOf(item) !== null)
+      ) {
+        return item;
+      }
       return Object.fromEntries(
         Object.keys(item)
           .sort()

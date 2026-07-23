@@ -82,6 +82,15 @@ describe('diffTrees', () => {
     assert.equal(events.length, 0);
   });
 
+  test('arrayIgnoreOrder distinguishes Date values', () => {
+    const before = { items: [new Date('2024-01-01T00:00:00.000Z')] };
+    const after = { items: [new Date('2024-01-02T00:00:00.000Z')] };
+    const events = diffTrees(before, after, { arrayIgnoreOrder: true });
+    assert.equal(events.length, 2);
+    assertEvent(events, { type: 'added', path: 'items[*]', after: after.items[0] });
+    assertEvent(events, { type: 'removed', path: 'items[*]', before: before.items[0] });
+  });
+
   test('arrayIgnoreOrder handles undefined array values', () => {
     const events = diffTrees({ items: [undefined] }, { items: [] }, { arrayIgnoreOrder: true });
     assert.equal(events.length, 1);
