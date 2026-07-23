@@ -24,6 +24,35 @@ test('ci mode returns non-zero when fail-on changed', () => {
   assert.match(run.stdout, /"changes"/);
 });
 
+test('ci profile values override Commander defaults', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-profile-'));
+  const file = join(dir, 'config.json');
+  const snapshot = join(dir, 'snapshot.json');
+  const rc = join(dir, '.flectorc.json');
+  const rootIndex = resolve(process.cwd(), 'index.js');
+
+  try {
+    writeFileSync(file, JSON.stringify({ a: 2 }, null, 2), 'utf8');
+    writeFileSync(snapshot, JSON.stringify({ state: { a: 1 } }, null, 2), 'utf8');
+    writeFileSync(rc, JSON.stringify({
+      profiles: {
+        regression: { format: 'ndjson', failOn: '' },
+      },
+    }), 'utf8');
+
+    const run = spawnSync(
+      process.execPath,
+      [rootIndex, 'ci', file, '--profile', 'regression', '--snapshot-ref', snapshot],
+      { cwd: dir, encoding: 'utf8' }
+    );
+
+    assert.equal(run.status, 0);
+    assert.equal(JSON.parse(run.stdout).envelope.changes.length, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('ci fails closed when all targets are unsupported', () => {
   const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-empty-ci-'));
   const file = join(dir, 'nope.txt');

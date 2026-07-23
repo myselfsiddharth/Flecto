@@ -80,25 +80,10 @@ function validateInterval(interval) {
   }
 }
 
-function stripUnsetCliOverrides(opts) {
-  const out = { ...opts };
-  // Don't let Commander defaults wipe .flectorc values for optional features
-  for (const key of [
-    'policies',
-    'plugins',
-    'arrayIdKey',
-    'maskSecrets',
-    'maskSecretsWebhooks',
-    'arrayIgnoreOrder',
-    'snapshotRef',
-    'ignore',
-    'allowEmpty',
-  ]) {
-    if (out[key] === undefined || out[key] === false || out[key] === null || out[key] === '') {
-      delete out[key];
-    }
-  }
-  return out;
+function stripUnsetCliOverrides(opts, command) {
+  return Object.fromEntries(
+    Object.entries(opts).filter(([key]) => command.getOptionValueSource(key) === 'cli'),
+  );
 }
 
 function diffOptionsFromEffective(effective, ignorePaths) {
@@ -235,11 +220,11 @@ program
   .option('--snapshot', 'Save current state as baseline instead of watching')
   .option('--diff', 'Diff current file against saved baseline and exit')
   .option('--allow-empty', 'Allow --snapshot to succeed when nothing was written', false)
-  .action(async (files, opts) => {
+  .action(async (files, opts, command) => {
     try {
       const { config } = loadRcConfig(process.cwd());
       const profile = resolveProfileName(opts.profile);
-      const effective = resolveEffectiveOptions(config, profile, stripUnsetCliOverrides(opts));
+      const effective = resolveEffectiveOptions(config, profile, stripUnsetCliOverrides(opts, command));
       const { policies, plugins } = resolvePolicyOptions(effective);
       const targets = (await resolveTargetFiles(files, config)).map((f) => resolve(f));
       if (targets.length === 0) {
@@ -409,11 +394,11 @@ program
   .option('--array-ignore-order', 'Treat array order as insignificant', false)
   .option('--mask-secrets', 'Mask secret-like values in CI output', false)
   .option('--allow-empty', 'Allow CI to succeed when no files were diffed', false)
-  .action(async (files, opts) => {
+  .action(async (files, opts, command) => {
     try {
       const { config } = loadRcConfig(process.cwd());
       const profile = resolveProfileName(opts.profile);
-      const effective = resolveEffectiveOptions(config, profile, stripUnsetCliOverrides(opts));
+      const effective = resolveEffectiveOptions(config, profile, stripUnsetCliOverrides(opts, command));
       const { policies: packIds, plugins } = resolvePolicyOptions(effective);
       const targets = (await resolveTargetFiles(files, config)).map((f) => resolve(f));
       if (targets.length === 0) {
