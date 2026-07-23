@@ -222,9 +222,12 @@ flecto watch config/prod.yaml \
 ```bash
 flecto watch config/prod.yaml --snapshot
 flecto watch config/prod.yaml --diff
+flecto history config/prod.yaml --limit 10
 ```
 
 Exit codes: `0` clean · `1` changes detected.
+
+`flecto history` stays local: it lists recent snapshots from `.flecto-snapshots/` with their timestamps and semantic change counts from the previous snapshot. Omit files to view all saved snapshot history.
 
 ---
 

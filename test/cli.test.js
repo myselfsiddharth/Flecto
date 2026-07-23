@@ -78,6 +78,41 @@ test('snapshot fails closed when nothing was written', () => {
   }
 });
 
+test('history summarizes local snapshot drift', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-history-'));
+  const file = join(dir, 'config.json');
+  const rootIndex = resolve(process.cwd(), 'index.js');
+
+  try {
+    writeFileSync(file, JSON.stringify({ pool_size: 5 }, null, 2), 'utf8');
+    const first = spawnSync(
+      process.execPath,
+      [rootIndex, 'watch', file, '--snapshot'],
+      { cwd: dir, encoding: 'utf8' },
+    );
+    writeFileSync(file, JSON.stringify({ pool_size: 20 }, null, 2), 'utf8');
+    const second = spawnSync(
+      process.execPath,
+      [rootIndex, 'watch', file, '--snapshot'],
+      { cwd: dir, encoding: 'utf8' },
+    );
+    const history = spawnSync(
+      process.execPath,
+      [rootIndex, 'history', file, '--limit', '2'],
+      { cwd: dir, encoding: 'utf8' },
+    );
+
+    assert.equal(first.status, 0);
+    assert.equal(second.status, 0);
+    assert.equal(history.status, 0);
+    assert.match(history.stdout, /Local snapshot history \(2 snapshots\)/);
+    assert.match(history.stdout, /config\.json — 1 change/);
+    assert.match(history.stdout, /config\.json — 0 changes/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('ci mode reads git snapshot refs for paths with spaces', () => {
   const gitVersion = spawnSync('git', ['--version'], { encoding: 'utf8' });
   if (gitVersion.status !== 0) {

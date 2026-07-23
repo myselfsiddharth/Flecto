@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { program } from 'commander';
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync } from 'fs';
 import { resolve, relative, dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { createHash } from 'crypto';
@@ -46,6 +46,60 @@ function snapshotIdForPath(absPath) {
 function snapshotPathForFile(absPath) {
   const id = snapshotIdForPath(absPath);
   return resolve(`${SNAPSHOT_DIR}/${id}.json`);
+}
+
+function snapshotHistoryPathForFile(absPath) {
+  const id = snapshotIdForPath(absPath);
+  return resolve(`${SNAPSHOT_DIR}/${id}.${Date.now()}.json`);
+}
+
+function readLocalSnapshotHistory() {
+  if (!existsSync(SNAPSHOT_DIR)) return [];
+
+  const entries = readdirSync(SNAPSHOT_DIR, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.json'));
+  const historyEntries = entries.filter((entry) => /^[a-f0-9]{16}\.\d+\.json$/.test(entry.name));
+  const snapshotEntries = historyEntries.length > 0
+    ? historyEntries
+    : entries.filter((entry) => /^[a-f0-9]{16}\.json$/.test(entry.name));
+
+  return snapshotEntries.map((entry) => {
+    const path = resolve(SNAPSHOT_DIR, entry.name);
+    const snapshot = JSON.parse(readFileSync(path, 'utf8'));
+    const state = snapshot?.state ?? snapshot;
+    if (typeof snapshot?.file !== 'string') {
+      throw new Error(`Invalid snapshot file: ${path}`);
+    }
+    return {
+      file: snapshot.file,
+      state,
+      createdAt: snapshot.createdAt ?? statSync(path).mtime.toISOString(),
+    };
+  });
+}
+
+function summarizeSnapshotHistory(snapshots, limit) {
+  const byFile = new Map();
+  for (const snapshot of snapshots) {
+    const records = byFile.get(snapshot.file) ?? [];
+    records.push(snapshot);
+    byFile.set(snapshot.file, records);
+  }
+
+  const summaries = [];
+  for (const records of byFile.values()) {
+    records.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+    for (let index = 0; index < records.length; index += 1) {
+      summaries.push({
+        ...records[index],
+        changeCount: index === 0 ? 0 : diffTrees(records[index - 1].state, records[index].state).length,
+      });
+    }
+  }
+
+  return summaries
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+    .slice(0, limit);
 }
 
 function parseCsv(value) {
@@ -270,7 +324,9 @@ program
           }
           const state = parseFile(filepath);
           const snapshotPath = snapshotPathForFile(filepath);
-          writeFileSync(snapshotPath, JSON.stringify({ file: filepath, state }, null, 2), 'utf8');
+          const snapshot = { file: filepath, state, createdAt: new Date().toISOString() };
+          writeFileSync(snapshotPath, JSON.stringify(snapshot, null, 2), 'utf8');
+          writeFileSync(snapshotHistoryPathForFile(filepath), JSON.stringify(snapshot, null, 2), 'utf8');
           console.log(chalk.green(`✓ Snapshot saved: ${snapshotPath}`));
           written += 1;
         }
@@ -389,6 +445,41 @@ program
       };
       process.on('SIGINT', () => void closeAll(0));
       process.on('SIGTERM', () => void closeAll(0));
+    } catch (err) {
+      renderError(err.message);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('history [files...]')
+  .description('Summarize drift across local snapshots')
+  .option('-l, --limit <n>', 'Number of recent snapshots to show', '10')
+  .action(async (files, opts) => {
+    try {
+      const limit = Number.parseInt(String(opts.limit), 10);
+      if (!Number.isInteger(limit) || limit < 1) {
+        throw new Error('--limit must be a positive integer');
+      }
+
+      let snapshots = readLocalSnapshotHistory();
+      if (files.length > 0) {
+        const { config } = loadRcConfig(process.cwd());
+        const targets = new Set((await resolveTargetFiles(files, config)).map((file) => resolve(file)));
+        snapshots = snapshots.filter((snapshot) => targets.has(resolve(snapshot.file)));
+      }
+
+      const summaries = summarizeSnapshotHistory(snapshots, limit);
+      if (summaries.length === 0) {
+        throw new Error('No local snapshots found. Run "flecto watch <file> --snapshot" first.');
+      }
+
+      console.log(`Local snapshot history (${summaries.length} snapshots)`);
+      for (const snapshot of summaries) {
+        const file = relative(process.cwd(), snapshot.file) || snapshot.file;
+        const changes = `${snapshot.changeCount} change${snapshot.changeCount === 1 ? '' : 's'}`;
+        console.log(`${snapshot.createdAt}  ${file} — ${changes}`);
+      }
     } catch (err) {
       renderError(err.message);
       process.exit(1);
