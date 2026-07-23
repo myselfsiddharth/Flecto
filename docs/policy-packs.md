@@ -78,3 +78,5 @@ This matches the boolean `true` from JSON or YAML, but does **not** match the st
 Flecto records the rule id, severity, changed path, message, and pack id. When multiple packs or plugins return the same `id` and `path`, Flecto keeps the highest severity (`error` > `warn` > `info`).
 
 Use `--fail-on policy` to fail CI for any finding, or `--fail-on error` / `--fail-on warn` to set a severity threshold.
+
+The [plugin cookbook](plugin-cookbook.md) demonstrates how pack findings merge with async plugins using shared policy fixtures.
