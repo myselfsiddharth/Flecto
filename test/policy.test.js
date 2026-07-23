@@ -100,6 +100,31 @@ describe('policy engine', () => {
     });
   });
 
+  test('rejects invalid match.pathFlags on load', () => {
+    withLocalPack('invalid-flags', {
+      id: 'invalid-flags',
+      rules: [{ id: 'broken-rule', severity: 'warn', match: { path: 'a', pathFlags: 'z' } }],
+    }, (cwd) => {
+      assert.throws(
+        () => loadPack('invalid-flags', cwd),
+        /rule "broken-rule"\.match\.pathFlags must be valid regular expression flags/,
+      );
+    });
+  });
+
+  test('accepts match.path patterns that require pathFlags', () => {
+    withLocalPack('flagged-regexp', {
+      id: 'flagged-regexp',
+      rules: [
+        { id: 'unicode-prop', severity: 'warn', match: { path: String.raw`\p{L}+`, pathFlags: 'u' } },
+        { id: 'unicode-set', severity: 'warn', match: { path: '[a--b]', pathFlags: 'v' } },
+      ],
+    }, (cwd) => {
+      const pack = loadPack('flagged-regexp', cwd);
+      assert.equal(pack.rules.length, 2);
+    });
+  });
+
   test('mergeFindings keeps highest severity for same id+path', () => {
     const merged = mergeFindings([
       { id: 'secret-key-changed', severity: 'warn', path: 'a.token', message: 'w', pack: 'a' },

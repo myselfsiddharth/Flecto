@@ -126,15 +126,21 @@ function validatePack(pack, path) {
         invalidPack(path, `${label}.match.pathFlags must be a string`);
       }
       if (typeof rule.match.path === 'string') {
+        // Compile the same way ruleMatches does: path + pathFlags together.
+        // Path-only RegExp() rejects patterns that are valid only with flags
+        // (e.g. Unicode sets with `v`, or `\p{…}` with `u` on engines that require it).
+        const flags = rule.match.pathFlags ?? '';
         try {
-          new RegExp(rule.match.path);
+          new RegExp(rule.match.path, flags);
         } catch {
+          if (flags) {
+            try {
+              new RegExp('(?:)', flags);
+            } catch {
+              invalidPack(path, `${label}.match.pathFlags must be valid regular expression flags`);
+            }
+          }
           invalidPack(path, `${label}.match.path must be a valid regular expression`);
-        }
-        try {
-          new RegExp(rule.match.path, rule.match.pathFlags ?? '');
-        } catch {
-          invalidPack(path, `${label}.match.pathFlags must be valid regular expression flags`);
         }
       }
     }
