@@ -176,6 +176,7 @@ flecto ci config/prod.yaml --profile prod --snapshot-ref HEAD~1
   "profiles": {
     "prod": {
       "policies": ["default", "strict-prod"],
+      "severityRemap": { "pool-size-jump": "error" },
       "maskSecrets": true
     }
   }
@@ -184,6 +185,23 @@ flecto ci config/prod.yaml --profile prod --snapshot-ref HEAD~1
 
 Profile selection: `--profile` > `FLECTO_PROFILE` > defaults.  
 Custom packs: `policies/<id>.json`. Plugins: local ESM exporting `evaluate(changes, ctx)`.
+
+Use `severityRemap` in defaults or a profile to change pack rule severities without forking a pack:
+
+```json
+{
+  "profiles": {
+    "dev": {
+      "severityRemap": { "pool-size-jump": "off" }
+    },
+    "prod": {
+      "severityRemap": { "pool-size-jump": "error" }
+    }
+  }
+}
+```
+
+Each key is a rule id and each value must be `info`, `warn`, `error`, or `off`. The remap applies after all configured built-in and local packs load, before findings and CI `--fail-on` checks. When multiple packs provide the same rule id, the remap applies to every matching pack rule. Plugin findings are unchanged. Unknown rule ids print a warning instead of being ignored silently.
 
 ### Opt-in array identity matching
 
@@ -296,7 +314,11 @@ Looks for `.flectorc`, `.flectorc.json`, `.flectorc.yaml`, or `.flectorc.yml`.
   "profiles": {
     "dev": { "mode": "verbose" },
     "ci": { "failOn": "policy,error" },
-    "prod": { "policies": ["default", "strict-prod"], "maskSecrets": true }
+    "prod": {
+      "policies": ["default", "strict-prod"],
+      "severityRemap": { "pool-size-jump": "error" },
+      "maskSecrets": true
+    }
   },
   "files": ["config/**/*.{yaml,yml,json,toml,ini}", ".env", ".env.*", "*.env"],
   "exclude": ["**/node_modules/**"]

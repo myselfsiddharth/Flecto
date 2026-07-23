@@ -1,5 +1,8 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { evaluatePolicies, highestSeverity, mergeFindings, loadPack } from '../src/policy.js';
 
 describe('policy engine', () => {
@@ -27,6 +30,45 @@ describe('policy engine', () => {
     ]);
     assert.equal(findings.length, 1);
     assert.equal(findings[0].severity, 'warn');
+  });
+
+  test('remaps a built-in pack rule severity', async () => {
+    const findings = await evaluatePolicies(
+      [{ type: 'changed', path: 'database.pool_size', before: 10, after: 40 }],
+      { severityRemap: { 'pool-size-jump': 'error' } },
+    );
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0].severity, 'error');
+  });
+
+  test('silences a local pack rule with an off remap', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'flecto-remap-local-'));
+    mkdirSync(join(cwd, 'policies'));
+    writeFileSync(join(cwd, 'policies', 'local.json'), JSON.stringify({
+      id: 'local',
+      rules: [{ id: 'noisy-rule', severity: 'warn', match: { path: 'noise' } }],
+    }), 'utf8');
+    try {
+      const findings = await evaluatePolicies(
+        [{ type: 'changed', path: 'noise', before: 1, after: 2 }],
+        { cwd, policies: ['local'], severityRemap: { 'noisy-rule': 'off' } },
+      );
+      assert.deepEqual(findings, []);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  test('warns when severityRemap references an unknown pack rule', async () => {
+    const originalWarn = console.warn;
+    const warnings = [];
+    console.warn = (message) => warnings.push(message);
+    try {
+      await evaluatePolicies([], { severityRemap: { 'not-a-rule': 'off' } });
+    } finally {
+      console.warn = originalWarn;
+    }
+    assert.deepEqual(warnings, ['Unknown policy rule id in severityRemap: "not-a-rule"']);
   });
 
   test('computes highest severity', () => {

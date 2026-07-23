@@ -24,6 +24,45 @@ test('ci mode returns non-zero when fail-on changed', () => {
   assert.match(run.stdout, /"changes"/);
 });
 
+test('ci applies profile severityRemap before fail-on checks', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-remap-'));
+  const file = join(dir, 'config.json');
+  const snapshot = join(dir, 'snapshot.json');
+  writeFileSync(file, JSON.stringify({ database: { pool_size: 20 } }), 'utf8');
+  writeFileSync(snapshot, JSON.stringify({ state: { database: { pool_size: 5 } } }), 'utf8');
+  writeFileSync(join(dir, '.flectorc.json'), JSON.stringify({
+    profiles: {
+      prod: { severityRemap: { 'pool-size-jump': 'error' } },
+    },
+  }), 'utf8');
+
+  try {
+    const rootIndex = resolve(process.cwd(), 'index.js');
+    const run = spawnSync(
+      process.execPath,
+      [
+        rootIndex,
+        'ci',
+        file,
+        '--profile',
+        'prod',
+        '--snapshot-ref',
+        snapshot,
+        '--format',
+        'json',
+        '--fail-on',
+        'error',
+      ],
+      { cwd: dir, encoding: 'utf8' },
+    );
+
+    assert.equal(run.status, 1);
+    assert.match(run.stdout, /"severity": "error"/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('ci fails closed when all targets are unsupported', () => {
   const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-empty-ci-'));
   const file = join(dir, 'nope.txt');
