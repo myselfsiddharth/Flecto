@@ -1,5 +1,8 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { evaluatePolicies, highestSeverity, mergeFindings, loadPack } from '../src/policy.js';
 
 describe('policy engine', () => {
@@ -41,6 +44,51 @@ describe('policy engine', () => {
     assert.throws(() => loadPack('does-not-exist'), /Unknown policy pack/);
   });
 
+  test('rejects local packs missing an id', () => {
+    withLocalPack('missing-id', { rules: [] }, (cwd) => {
+      assert.throws(
+        () => loadPack('missing-id', cwd),
+        /Invalid policy pack .*pack\.id/,
+      );
+    });
+  });
+
+  test('rejects invalid rule severity with rule id and field', () => {
+    withLocalPack('bad-severity', {
+      id: 'bad-severity',
+      rules: [{ id: 'broken-rule', severity: 'critical' }],
+    }, (cwd) => {
+      assert.throws(
+        () => loadPack('bad-severity', cwd),
+        /rule "broken-rule"\.severity must be one of/,
+      );
+    });
+  });
+
+  test('rejects invalid rule when values', () => {
+    withLocalPack('bad-when', {
+      id: 'bad-when',
+      rules: [{ id: 'broken-rule', severity: 'warn', when: ['updated'] }],
+    }, (cwd) => {
+      assert.throws(
+        () => loadPack('bad-when', cwd),
+        /rule "broken-rule"\.when\[0\] must be one of/,
+      );
+    });
+  });
+
+  test('rejects unknown rule predicate fields', () => {
+    withLocalPack('unknown-field', {
+      id: 'unknown-field',
+      rules: [{ id: 'broken-rule', severity: 'warn', matches: { path: 'x' } }],
+    }, (cwd) => {
+      assert.throws(
+        () => loadPack('unknown-field', cwd),
+        /rule "broken-rule"\.matches is not allowed/,
+      );
+    });
+  });
+
   test('mergeFindings keeps highest severity for same id+path', () => {
     const merged = mergeFindings([
       { id: 'secret-key-changed', severity: 'warn', path: 'a.token', message: 'w', pack: 'a' },
@@ -61,3 +109,20 @@ describe('policy engine', () => {
     assert.equal(findings[0].pack, 'strict-prod');
   });
 });
+
+/**
+ * @param {string} id
+ * @param {unknown} pack
+ * @param {(cwd: string) => void} run
+ */
+function withLocalPack(id, pack, run) {
+  const cwd = mkdtempSync(join(tmpdir(), 'flecto-policy-'));
+  try {
+    const policies = join(cwd, 'policies');
+    mkdirSync(policies);
+    writeFileSync(join(policies, `${id}.json`), JSON.stringify(pack));
+    run(cwd);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+}
