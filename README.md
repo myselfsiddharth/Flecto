@@ -41,6 +41,9 @@ Line diffs lie about config. Formatting churn, key reorders, and “small” YAM
 - What looks risky (secrets, dangerous toggles, pool jumps)
 - What to do next (CI gate, webhook, shell command)
 
+See the [changelog and migration notes](CHANGELOG.md) for release history and
+upcoming v2.1 behavior changes.
+
 > Diff tools compare trees. **Flecto watches, scores risk, and alerts.**
 
 | Without Flecto | With Flecto |
