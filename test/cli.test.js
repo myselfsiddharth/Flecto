@@ -185,6 +185,63 @@ test('history preserves a legacy baseline during first snapshot migration', () =
   }
 });
 
+test('history change counts honor the same diff options as watch --diff', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-history-dopts-'));
+  const file = join(dir, 'services.json');
+  const rootIndex = resolve(process.cwd(), 'index.js');
+  const before = {
+    updated_at: '2024-01-01',
+    services: [{ id: 'a', port: 80 }, { id: 'b', port: 443 }],
+  };
+  const after = {
+    updated_at: '2024-12-31',
+    services: [{ id: 'b', port: 443 }, { id: 'a', port: 80 }],
+  };
+  const diffFlags = ['--ignore', 'updated_at', '--array-id-key', 'id', '--array-ignore-order'];
+
+  try {
+    writeFileSync(file, JSON.stringify(before, null, 2), 'utf8');
+    const first = spawnSync(
+      process.execPath,
+      [rootIndex, 'watch', file, '--snapshot'],
+      { cwd: dir, encoding: 'utf8' },
+    );
+    writeFileSync(file, JSON.stringify(after, null, 2), 'utf8');
+
+    const diff = spawnSync(
+      process.execPath,
+      [rootIndex, 'watch', file, '--diff', ...diffFlags],
+      { cwd: dir, encoding: 'utf8' },
+    );
+
+    const second = spawnSync(
+      process.execPath,
+      [rootIndex, 'watch', file, '--snapshot'],
+      { cwd: dir, encoding: 'utf8' },
+    );
+    const historyWithOpts = spawnSync(
+      process.execPath,
+      [rootIndex, 'history', file, '--limit', '2', ...diffFlags],
+      { cwd: dir, encoding: 'utf8' },
+    );
+    const historyBare = spawnSync(
+      process.execPath,
+      [rootIndex, 'history', file, '--limit', '2'],
+      { cwd: dir, encoding: 'utf8' },
+    );
+
+    assert.equal(first.status, 0);
+    assert.equal(second.status, 0);
+    assert.equal(diff.status, 0, `watch --diff should treat noise as unchanged:\n${diff.stdout}\n${diff.stderr}`);
+    assert.equal(historyWithOpts.status, 0);
+    assert.match(historyWithOpts.stdout, /services\.json — 0 changes/);
+    assert.equal(historyBare.status, 0);
+    assert.match(historyBare.stdout, /services\.json — [1-9]\d* changes?/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('ci mode reads git snapshot refs for paths with spaces', () => {
   const gitVersion = spawnSync('git', ['--version'], { encoding: 'utf8' });
   if (gitVersion.status !== 0) {

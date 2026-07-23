@@ -106,7 +106,7 @@ function readLocalSnapshotHistory() {
   });
 }
 
-function summarizeSnapshotHistory(snapshots, limit) {
+function summarizeSnapshotHistory(snapshots, limit, diffOpts = {}) {
   const byFile = new Map();
   for (const snapshot of snapshots) {
     const records = byFile.get(snapshot.file) ?? [];
@@ -120,7 +120,9 @@ function summarizeSnapshotHistory(snapshots, limit) {
     for (let index = 0; index < records.length; index += 1) {
       summaries.push({
         ...records[index],
-        changeCount: index === 0 ? 0 : diffTrees(records[index - 1].state, records[index].state).length,
+        changeCount: index === 0
+          ? 0
+          : diffTrees(records[index - 1].state, records[index].state, diffOpts).length,
       });
     }
   }
@@ -484,6 +486,10 @@ program
   .command('history [files...]')
   .description('Summarize drift across local snapshots')
   .option('-l, --limit <n>', 'Number of recent snapshots to show', '10')
+  .option('-p, --profile <name>', 'Use profile from .flectorc (else FLECTO_PROFILE)')
+  .option('--ignore <keys>', 'Comma-separated key paths to ignore (e.g. "updated_at,meta.ts")')
+  .option('--array-id-key <key>', 'Diff arrays by this object identity key (opt-in)')
+  .option('--array-ignore-order', 'Treat array order as insignificant', false)
   .action(async (files, opts) => {
     try {
       const limit = Number.parseInt(String(opts.limit), 10);
@@ -491,14 +497,19 @@ program
         throw new Error('--limit must be a positive integer');
       }
 
+      const { config } = loadRcConfig(process.cwd());
+      const profile = resolveProfileName(opts.profile);
+      const effective = resolveEffectiveOptions(config, profile, stripUnsetCliOverrides(opts));
+      const ignorePaths = parseCsv(effective.ignore);
+      const dOpts = diffOptionsFromEffective(effective, ignorePaths);
+
       let snapshots = readLocalSnapshotHistory();
       if (files.length > 0) {
-        const { config } = loadRcConfig(process.cwd());
         const targets = new Set((await resolveTargetFiles(files, config)).map((file) => resolve(file)));
         snapshots = snapshots.filter((snapshot) => targets.has(resolve(snapshot.file)));
       }
 
-      const summaries = summarizeSnapshotHistory(snapshots, limit);
+      const summaries = summarizeSnapshotHistory(snapshots, limit, dOpts);
       if (summaries.length === 0) {
         throw new Error('No local snapshots found. Run "flecto watch <file> --snapshot" first.');
       }
