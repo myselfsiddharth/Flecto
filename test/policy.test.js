@@ -113,15 +113,25 @@ describe('policy engine', () => {
   });
 
   test('accepts match.path patterns that require pathFlags', () => {
+    /** @type {{ id: string, severity: 'warn', match: { path: string, pathFlags: string } }[]} */
+    const rules = [
+      { id: 'unicode-prop', severity: 'warn', match: { path: String.raw`\p{L}+`, pathFlags: 'u' } },
+    ];
+    // Unicode sets need the `v` flag and fail path-only RegExp() construction.
+    // Skip on engines that do not support `v` yet (Node 18).
+    try {
+      new RegExp('[a--b]', 'v');
+      rules.push({ id: 'unicode-set', severity: 'warn', match: { path: '[a--b]', pathFlags: 'v' } });
+    } catch {
+      // ignore
+    }
+
     withLocalPack('flagged-regexp', {
       id: 'flagged-regexp',
-      rules: [
-        { id: 'unicode-prop', severity: 'warn', match: { path: String.raw`\p{L}+`, pathFlags: 'u' } },
-        { id: 'unicode-set', severity: 'warn', match: { path: '[a--b]', pathFlags: 'v' } },
-      ],
+      rules,
     }, (cwd) => {
       const pack = loadPack('flagged-regexp', cwd);
-      assert.equal(pack.rules.length, 2);
+      assert.equal(pack.rules.length, rules.length);
     });
   });
 
