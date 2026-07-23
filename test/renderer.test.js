@@ -33,3 +33,18 @@ test('maskChangeEvent recursively masks secrets in parent object changes', () =>
     },
   });
 });
+
+test('maskChangeEvent preserves Date values while masking sibling secrets', () => {
+  const timestamp = new Date('2026-07-23T00:00:00.000Z');
+  const masked = maskChangeEvent({
+    type: 'added',
+    path: 'metadata',
+    after: {
+      updated_at: timestamp,
+      api_key: 'secret',
+    },
+  });
+
+  assert.strictEqual(masked.after.updated_at, timestamp);
+  assert.equal(masked.after.api_key, '***');
+});
