@@ -242,4 +242,65 @@ describe('diffTrees', () => {
     assertEvent(events, { type: 'changed', path: 'b[0].y', before: 1, after: 2 });
   });
 
+  test('arrays auto-detect id before name', () => {
+    const before = {
+      services: [
+        { id: 'api', name: 'API v1', port: 3000 },
+        { id: 'web', name: 'Website', port: 8080 },
+      ],
+    };
+    const after = {
+      services: [
+        { id: 'web', name: 'Public website', port: 8080 },
+        { id: 'api', name: 'API v1', port: 3000 },
+      ],
+    };
+
+    const events = diffTrees(before, after);
+    assert.equal(events.length, 1);
+    assertEvent(events, {
+      type: 'changed',
+      path: 'services["web"].name',
+      before: 'Website',
+      after: 'Public website',
+    });
+  });
+
+  test('arrays auto-detect name when id is unavailable', () => {
+    const before = { services: [{ name: 'api', port: 3000 }, { name: 'web', port: 8080 }] };
+    const after = { services: [{ name: 'web', port: 8080 }, { name: 'api', port: 4000 }] };
+
+    const events = diffTrees(before, after);
+    assert.equal(events.length, 1);
+    assertEvent(events, {
+      type: 'changed',
+      path: 'services["api"].port',
+      before: 3000,
+      after: 4000,
+    });
+  });
+
+  test('custom array identity key overrides auto-detection', () => {
+    const before = { services: [{ id: 1, key: 'api', port: 3000 }, { id: 2, key: 'web', port: 8080 }] };
+    const after = { services: [{ id: 2, key: 'web', port: 8080 }, { id: 1, key: 'api', port: 4000 }] };
+
+    const events = diffTrees(before, after, { arrayIdKey: 'key' });
+    assert.equal(events.length, 1);
+    assertEvent(events, {
+      type: 'changed',
+      path: 'services["api"].port',
+      before: 3000,
+      after: 4000,
+    });
+  });
+
+  test('arrayIdentity false restores index-based diffs', () => {
+    const before = { services: [{ id: 'api', port: 3000 }, { id: 'web', port: 8080 }] };
+    const after = { services: [{ id: 'web', port: 8080 }, { id: 'api', port: 3000 }] };
+
+    const events = diffTrees(before, after, { arrayIdentity: false });
+    assert.ok(events.length > 0);
+    assertEvent(events, { type: 'changed', path: 'services[0].id', before: 'api', after: 'web' });
+  });
+
 });

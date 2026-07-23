@@ -127,6 +127,7 @@ export function initRcFile(cwd = process.cwd()) {
       policies: ['default'],
       plugins: [],
       arrayIdKey: null,
+      arrayId: true,
       arrayIgnoreOrder: false,
       maskSecrets: false,
     },

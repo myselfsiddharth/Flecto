@@ -98,6 +98,9 @@ function stripUnsetCliOverrides(opts) {
       delete out[key];
     }
   }
+  // Commander negated options default to true. Preserve only an explicit disable
+  // so that the CLI default does not override .flectorc values.
+  if (out.arrayId !== false) delete out.arrayId;
   return out;
 }
 
@@ -105,6 +108,7 @@ function diffOptionsFromEffective(effective, ignorePaths) {
   return {
     ignorePaths,
     arrayIdKey: effective.arrayIdKey || null,
+    arrayIdentity: effective.arrayId !== false,
     arrayIgnoreOrder: Boolean(effective.arrayIgnoreOrder),
   };
 }
@@ -228,7 +232,8 @@ program
   .option('--ignore <keys>', 'Comma-separated key paths to ignore (e.g. "updated_at,meta.ts")')
   .option('--policies <ids>', 'Comma-separated policy pack ids (default: default)')
   .option('--plugins <paths>', 'Comma-separated local ESM plugin paths')
-  .option('--array-id-key <key>', 'Diff arrays by this object identity key (opt-in)')
+  .option('--array-id-key <key>', 'Diff arrays by this object identity key')
+  .option('--no-array-id', 'Diff arrays by index instead of object identity')
   .option('--array-ignore-order', 'Treat array order as insignificant', false)
   .option('--mask-secrets', 'Mask secret-like values in human output', false)
   .option('--mask-secrets-webhooks', 'Also mask secrets in webhook payloads', false)
@@ -405,7 +410,8 @@ program
   .option('--ignore <keys>', 'Comma-separated key paths to ignore')
   .option('--policies <ids>', 'Comma-separated policy pack ids')
   .option('--plugins <paths>', 'Comma-separated local ESM plugin paths')
-  .option('--array-id-key <key>', 'Diff arrays by this object identity key (opt-in)')
+  .option('--array-id-key <key>', 'Diff arrays by this object identity key')
+  .option('--no-array-id', 'Diff arrays by index instead of object identity')
   .option('--array-ignore-order', 'Treat array order as insignificant', false)
   .option('--mask-secrets', 'Mask secret-like values in CI output', false)
   .option('--allow-empty', 'Allow CI to succeed when no files were diffed', false)

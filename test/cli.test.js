@@ -121,3 +121,53 @@ test('ci mode reads git snapshot refs for paths with spaces', () => {
   }
 });
 
+test('ci array identity supports auto-detection, custom keys, and index escape hatch', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-array-id-'));
+  const file = join(dir, 'config.json');
+  const snapshot = join(dir, 'snapshot.json');
+  const rootIndex = resolve(process.cwd(), 'index.js');
+
+  const runCi = (args = []) => spawnSync(
+    process.execPath,
+    [rootIndex, 'ci', file, '--snapshot-ref', snapshot, '--format', 'json', '--fail-on', 'changed', ...args],
+    { encoding: 'utf8' },
+  );
+
+  try {
+    writeFileSync(snapshot, JSON.stringify({
+      state: { services: [{ id: 'api', port: 3000 }, { id: 'web', port: 8080 }] },
+    }), 'utf8');
+    writeFileSync(file, JSON.stringify({
+      services: [{ id: 'web', port: 8080 }, { id: 'api', port: 3000 }],
+    }), 'utf8');
+
+    const auto = runCi();
+    assert.equal(auto.status, 0);
+    assert.deepEqual(JSON.parse(auto.stdout)[0].envelope.changes, []);
+
+    writeFileSync(snapshot, JSON.stringify({
+      state: { services: [{ id: 1, key: 'api', port: 3000 }, { id: 2, key: 'web', port: 8080 }] },
+    }), 'utf8');
+    writeFileSync(file, JSON.stringify({
+      services: [{ id: 2, key: 'web', port: 8080 }, { id: 1, key: 'api', port: 4000 }],
+    }), 'utf8');
+
+    const custom = runCi(['--array-id-key', 'key']);
+    assert.equal(custom.status, 1);
+    assert.equal(JSON.parse(custom.stdout)[0].envelope.changes[0].path, 'services["api"].port');
+
+    writeFileSync(snapshot, JSON.stringify({
+      state: { services: [{ id: 'api', port: 3000 }, { id: 'web', port: 8080 }] },
+    }), 'utf8');
+    writeFileSync(file, JSON.stringify({
+      services: [{ id: 'web', port: 8080 }, { id: 'api', port: 3000 }],
+    }), 'utf8');
+
+    const indexed = runCi(['--no-array-id']);
+    assert.equal(indexed.status, 1);
+    assert.equal(JSON.parse(indexed.stdout)[0].envelope.changes[0].path, 'services[0].id');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
