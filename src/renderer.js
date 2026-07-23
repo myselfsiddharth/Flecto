@@ -171,10 +171,9 @@ export function maskSensitiveValue(value, path = '') {
  * @returns {import('./differ.js').ChangeEvent}
  */
 export function maskChangeEvent(event) {
-  if (!SECRET_PATH_RE.test(event.path ?? '')) return event;
   return {
     ...event,
-    before: event.before === undefined ? undefined : '***',
-    after: event.after === undefined ? undefined : '***',
+    before: event.before === undefined ? undefined : maskSensitiveValue(event.before, event.path),
+    after: event.after === undefined ? undefined : maskSensitiveValue(event.after, event.path),
   };
 }
