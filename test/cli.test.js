@@ -113,6 +113,40 @@ test('history summarizes local snapshot drift', () => {
   }
 });
 
+test('history retains legacy snapshots without timestamped history', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-history-legacy-'));
+  const legacyFile = join(dir, 'legacy.json');
+  const currentFile = join(dir, 'current.json');
+  const snapshotDir = join(dir, '.flecto-snapshots');
+  const rootIndex = resolve(process.cwd(), 'index.js');
+
+  try {
+    mkdirSync(snapshotDir, { recursive: true });
+    writeFileSync(
+      join(snapshotDir, 'aaaaaaaaaaaaaaaa.json'),
+      JSON.stringify({ file: legacyFile, state: { version: 1 } }),
+      'utf8',
+    );
+    writeFileSync(
+      join(snapshotDir, 'bbbbbbbbbbbbbbbb.1000.json'),
+      JSON.stringify({ file: currentFile, state: { version: 2 }, createdAt: '2026-01-01T00:00:00.000Z' }),
+      'utf8',
+    );
+
+    const history = spawnSync(
+      process.execPath,
+      [rootIndex, 'history', '--limit', '10'],
+      { cwd: dir, encoding: 'utf8' },
+    );
+
+    assert.equal(history.status, 0);
+    assert.match(history.stdout, /legacy\.json — 0 changes/);
+    assert.match(history.stdout, /current\.json — 0 changes/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('ci mode reads git snapshot refs for paths with spaces', () => {
   const gitVersion = spawnSync('git', ['--version'], { encoding: 'utf8' });
   if (gitVersion.status !== 0) {

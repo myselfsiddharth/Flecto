@@ -59,9 +59,10 @@ function readLocalSnapshotHistory() {
   const entries = readdirSync(SNAPSHOT_DIR, { withFileTypes: true })
     .filter((entry) => entry.isFile() && entry.name.endsWith('.json'));
   const historyEntries = entries.filter((entry) => /^[a-f0-9]{16}\.\d+\.json$/.test(entry.name));
-  const snapshotEntries = historyEntries.length > 0
-    ? historyEntries
-    : entries.filter((entry) => /^[a-f0-9]{16}\.json$/.test(entry.name));
+  const historyIds = new Set(historyEntries.map((entry) => entry.name.slice(0, 16)));
+  const legacyEntries = entries.filter((entry) =>
+    /^[a-f0-9]{16}\.json$/.test(entry.name) && !historyIds.has(entry.name.slice(0, 16)));
+  const snapshotEntries = [...historyEntries, ...legacyEntries];
 
   return snapshotEntries.map((entry) => {
     const path = resolve(SNAPSHOT_DIR, entry.name);
