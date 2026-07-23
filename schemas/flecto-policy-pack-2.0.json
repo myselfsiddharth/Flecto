@@ -4,7 +4,7 @@
   "title": "FlectoPolicyPack",
   "type": "object",
   "additionalProperties": false,
-  "required": ["id", "rules"],
+  "required": ["rules"],
   "properties": {
     "id": { "type": "string", "minLength": 1 },
     "rules": {

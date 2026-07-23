@@ -44,12 +44,11 @@ describe('policy engine', () => {
     assert.throws(() => loadPack('does-not-exist'), /Unknown policy pack/);
   });
 
-  test('rejects local packs missing an id', () => {
-    withLocalPack('missing-id', { rules: [] }, (cwd) => {
-      assert.throws(
-        () => loadPack('missing-id', cwd),
-        /Invalid policy pack .*pack\.id/,
-      );
+  test('derives an id for local packs that omit one', () => {
+    withLocalPack('missing-id', {
+      rules: [{ id: 'valid-rule', severity: 'warn' }],
+    }, (cwd) => {
+      assert.equal(loadPack('missing-id', cwd).id, 'missing-id');
     });
   });
 

@@ -82,7 +82,7 @@ function validatePack(pack, path) {
   for (const field of Object.keys(pack)) {
     if (!packFields.has(field)) invalidPack(path, `pack.${field} is not allowed`);
   }
-  if (typeof pack.id !== 'string' || !pack.id.trim()) {
+  if (Object.hasOwn(pack, 'id') && (typeof pack.id !== 'string' || !pack.id.trim())) {
     invalidPack(path, 'pack.id must be a non-empty string');
   }
   if (!Array.isArray(pack.rules)) invalidPack(path, 'pack.rules must be an array');
@@ -177,9 +177,10 @@ function resolvePackPath(cwd, packId) {
 
 /**
  * @param {string} path
+ * @param {string} fallbackId
  * @returns {PolicyPack}
  */
-function readPackFile(path) {
+function readPackFile(path, fallbackId) {
   const raw = readFileSync(path, 'utf8');
   let parsed;
   try {
@@ -188,7 +189,7 @@ function readPackFile(path) {
     invalidPack(path, `could not parse file (${error.message})`);
   }
   validatePack(parsed, path);
-  return parsed;
+  return { ...parsed, id: parsed.id ?? fallbackId };
 }
 
 /**
@@ -204,7 +205,7 @@ export function loadPack(packId, cwd = process.cwd()) {
   if (!path) {
     throw new Error(`Unknown policy pack "${id}". Add policies/${id}.json or use a built-in pack.`);
   }
-  return readPackFile(path);
+  return readPackFile(path, id);
 }
 
 /**
