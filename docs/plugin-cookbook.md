@@ -21,7 +21,17 @@ cd examples/fixtures/policies
 
 `baseline.json` is a snapshot envelope and `current.json` is the config being evaluated.
 
-## 1. Merge a pack with an async plugin
+## 1. Test the complete fixture
+
+Run the fixture harness from the repository root:
+
+```bash
+flecto policies test examples/fixtures/policies
+```
+
+It exits `0` only when the findings exactly match `flecto-policy-test.json`. The fixture config selects the before/after files, packs, plugins, optional profile, and expected `{ id, severity, path }` values. Flecto reports missing and unexpected findings when they differ, making fixture failures useful in a pack or plugin's test suite.
+
+## 2. Merge a pack with an async plugin
 
 Use a pack for a stable declarative rule and a plugin for the context-sensitive production approval. The plugin awaits before returning findings, which is supported by `evaluate`.
 
@@ -39,7 +49,7 @@ This command intentionally exits `1` because `--fail-on policy` treats findings 
 
 Pack and plugin findings are merged before output. If two sources emit the same `id` and `path`, Flecto keeps only the highest severity.
 
-## 2. Gate a plugin with `ctx`
+## 3. Gate a plugin with `ctx`
 
 [`async-rollout-guard.js`](../examples/fixtures/policies/plugins/async-rollout-guard.js) uses all context fields to ensure it runs only for the intended evaluation:
 
@@ -64,7 +74,7 @@ node ../../../index.js ci current.json --snapshot-ref baseline.json --policies d
 
 This also exits `1`, but it produces the four pack findings only; `async-rollout-approval` is absent because `ctx.profile` is `null`.
 
-## 3. Fail closed when a plugin cannot load
+## 4. Fail closed when a plugin cannot load
 
 Plugin load errors are command errors, never an empty finding set. This protects CI from silently skipping policy logic:
 
