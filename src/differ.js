@@ -244,6 +244,31 @@ function identityKey(item, idKey) {
 }
 
 /**
+ * Produce a stable JSON signature for order-insensitive array comparison.
+ * Object keys are sorted so their insertion order does not affect equality.
+ * Non-JSON values fall back to their identity, avoiding serialization errors.
+ * @param {unknown} value
+ * @returns {unknown}
+ */
+function arraySignature(value) {
+  try {
+    const canonicalize = (item) => {
+      if (Array.isArray(item)) return item.map(canonicalize);
+      if (!isPlainObject(item)) return item;
+      return Object.fromEntries(
+        Object.keys(item)
+          .sort()
+          .map((key) => [key, canonicalize(item[key])])
+      );
+    };
+    const signature = JSON.stringify(canonicalize(value));
+    return signature === undefined ? value : signature;
+  } catch {
+    return value;
+  }
+}
+
+/**
  * Diff arrays by identity key when configured; otherwise by index.
  * @param {unknown[]} before
  * @param {unknown[]} after
@@ -301,19 +326,22 @@ function diffArrays(before, after, basePath, events, options = {}) {
 
   if (options.arrayIgnoreOrder) {
     // Order-insensitive without id key: multiset compare via JSON signatures
-    const beforeSigs = before.map((v) => JSON.stringify(v));
-    const afterSigs = after.map((v) => JSON.stringify(v));
-    /** @type {Map<string, number>} */
+    /** @type {Map<unknown, { count: number, value: unknown }>} */
     const counts = new Map();
-    for (const s of beforeSigs) counts.set(s, (counts.get(s) ?? 0) + 1);
-    for (const s of afterSigs) {
-      const n = counts.get(s) ?? 0;
-      if (n > 0) counts.set(s, n - 1);
-      else events.push({ type: 'added', path: `${basePath}[*]`, after: JSON.parse(s) });
+    for (const value of before) {
+      const signature = arraySignature(value);
+      const entry = counts.get(signature);
+      if (entry) entry.count++;
+      else counts.set(signature, { count: 1, value });
     }
-    for (const [s, n] of counts) {
-      for (let i = 0; i < n; i++) {
-        events.push({ type: 'removed', path: `${basePath}[*]`, before: JSON.parse(s) });
+    for (const value of after) {
+      const entry = counts.get(arraySignature(value));
+      if (entry?.count > 0) entry.count--;
+      else events.push({ type: 'added', path: `${basePath}[*]`, after: value });
+    }
+    for (const entry of counts.values()) {
+      for (let i = 0; i < entry.count; i++) {
+        events.push({ type: 'removed', path: `${basePath}[*]`, before: entry.value });
       }
     }
     return;
