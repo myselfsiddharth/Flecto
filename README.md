@@ -192,6 +192,7 @@ Rules combine their top-level predicates with AND. In addition to `when`, regex
 
 - `beforeEquals`, `afterIn`, and `beforeIn` for exact values or allowed value lists.
 - `beforeTruthy: true` and `afterTruthy: true` to require a truthy before/after value.
+- `afterMatches` to require a string after value that matches a regular expression.
 - `numericDelta: { "min": 10 }` to match an absolute numeric change of at least 10.
 - `match.pathEquals` and `match.pathPrefix` for exact or prefix path matching without regex.
 - `allOf` and `anyOf` arrays of simple match clauses. Every `allOf` clause and at least

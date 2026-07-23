@@ -83,12 +83,12 @@ describe('policy engine', () => {
     assert.equal(loadPack('compose').id, 'compose');
   });
 
-  test('flags Compose privilege, host network, and sensitive binds', async () => {
+  test('flags Compose privilege, host network, and sensitive binds with custom destinations', async () => {
     const findings = await evaluatePolicies([
       { type: 'added', path: 'services.worker.privileged', after: true },
       { type: 'added', path: 'services.worker.network_mode', after: 'host' },
-      { type: 'added', path: 'services.worker.volumes[0]', after: '/var/run/docker.sock:/var/run/docker.sock' },
-      { type: 'added', path: 'services.worker.volumes[1].source', after: '/etc' },
+      { type: 'added', path: 'services.worker.volumes[0]', after: '/var/run/docker.sock:/docker.sock:ro' },
+      { type: 'added', path: 'services.worker.volumes[1]', after: '/etc:/host-etc:ro' },
     ], { policies: ['compose'] });
     assert.deepEqual(findings.map((finding) => finding.id), [
       'compose-privileged-service',
@@ -104,7 +104,7 @@ describe('policy engine', () => {
       { type: 'removed', path: 'engines.node', before: '>=18' },
       { type: 'added', path: 'environment.NODE_TLS_REJECT_UNAUTHORIZED', after: '0' },
       { type: 'added', path: 'environment.NODE_DEBUG', after: 'http' },
-      { type: 'added', path: 'environment.NODE_OPTIONS', after: '--inspect' },
+      { type: 'added', path: 'environment.NODE_OPTIONS', after: '--inspect=0.0.0.0:9229 --trace-warnings' },
     ], { policies: ['node-runtime'] });
     assert.deepEqual(findings.map((finding) => finding.id), [
       'node-runtime-engine-removed',

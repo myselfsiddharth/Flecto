@@ -37,7 +37,7 @@
       "match": {
         "path": "(^|\\.)NODE_OPTIONS$"
       },
-      "afterIn": ["--inspect", "--inspect-brk", "--inspect=0.0.0.0:9229", "--inspect-brk=0.0.0.0:9229"],
+      "afterMatches": "(^|\\s)--inspect(?:-brk)?(?:=|\\s|$)",
       "message": "Node.js inspector is enabled through NODE_OPTIONS. Avoid exposing debug ports outside trusted development environments."
     }
   ]

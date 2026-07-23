@@ -28,11 +28,7 @@
       "match": {
         "path": "(^|\\.)volumes\\[\\d+\\](\\.source)?$"
       },
-      "afterIn": [
-        "/var/run/docker.sock",
-        "/var/run/docker.sock:/var/run/docker.sock",
-        "/var/run/docker.sock:/var/run/docker.sock:ro"
-      ],
+      "afterMatches": "^/var/run/docker\\.sock(?::|$)",
       "message": "Docker Compose service mounts the Docker socket. This grants control over the host Docker daemon."
     },
     {
@@ -42,7 +38,7 @@
       "match": {
         "path": "(^|\\.)volumes\\[\\d+\\](\\.source)?$"
       },
-      "afterIn": ["/etc", "/root", "/home", "/var/lib"],
+      "afterMatches": "^/(?:etc|root|home|var/lib)(?::|$)",
       "message": "Docker Compose service bind-mounts a sensitive host directory. Confirm the container needs this host access."
     }
   ]

@@ -24,6 +24,7 @@ import yaml from 'js-yaml';
  *   afterIn?: unknown[],
  *   beforeTruthy?: true,
  *   afterTruthy?: true,
+ *   afterMatches?: string,
  *   numericJump?: { minMultiple: number },
  *   numericDelta?: { min: number },
  *   allOf?: PolicyMatchClause[],
@@ -40,6 +41,7 @@ import yaml from 'js-yaml';
  *   afterIn?: unknown[],
  *   beforeTruthy?: true,
  *   afterTruthy?: true,
+ *   afterMatches?: string,
  *   numericJump?: { minMultiple: number },
  *   numericDelta?: { min: number }
  * }} PolicyMatchClause
@@ -61,11 +63,11 @@ const PACKS_DIR = join(dirname(fileURLToPath(import.meta.url)), 'packs');
 const RULE_FIELDS = new Set([
   'id', 'severity', 'when', 'match', 'beforeEquals', 'afterEquals',
   'beforeIn', 'afterIn', 'beforeTruthy', 'afterTruthy', 'numericJump',
-  'numericDelta', 'allOf', 'anyOf', 'message', 'messageTemplate',
+  'afterMatches', 'numericDelta', 'allOf', 'anyOf', 'message', 'messageTemplate',
 ]);
 const CLAUSE_FIELDS = new Set([
   'match', 'beforeEquals', 'afterEquals', 'beforeIn', 'afterIn',
-  'beforeTruthy', 'afterTruthy', 'numericJump', 'numericDelta',
+  'beforeTruthy', 'afterTruthy', 'afterMatches', 'numericJump', 'numericDelta',
 ]);
 const MATCH_FIELDS = new Set(['path', 'pathFlags', 'pathEquals', 'pathPrefix']);
 
@@ -135,6 +137,7 @@ function validateRule(candidate, location, isClause = false) {
   validateArrayPredicate(rule.afterIn, 'afterIn', location);
   validateTruthyPredicate(rule.beforeTruthy, 'beforeTruthy', location);
   validateTruthyPredicate(rule.afterTruthy, 'afterTruthy', location);
+  validateRegexPredicate(rule.afterMatches, 'afterMatches', location);
   validateNumericPredicate(rule.numericJump, 'numericJump', 'minMultiple', location, true);
   validateNumericPredicate(rule.numericDelta, 'numericDelta', 'min', location, false);
 
@@ -181,6 +184,19 @@ function validateArrayPredicate(value, name, location) {
 function validateTruthyPredicate(value, name, location) {
   if (value !== undefined && value !== true) {
     throw new Error(`Invalid policy rule at ${location}: ${name} must be true`);
+  }
+}
+
+/** @param {unknown} value @param {string} name @param {string} location */
+function validateRegexPredicate(value, name, location) {
+  if (value === undefined) return;
+  if (typeof value !== 'string') {
+    throw new Error(`Invalid policy rule at ${location}: ${name} must be a string`);
+  }
+  try {
+    new RegExp(value);
+  } catch {
+    throw new Error(`Invalid policy rule at ${location}: ${name} is not a valid regular expression`);
   }
 }
 
@@ -264,6 +280,7 @@ function matchClause(clause, change) {
   if (clause.afterIn && !clause.afterIn.includes(change.after)) return false;
   if (clause.beforeTruthy && !change.before) return false;
   if (clause.afterTruthy && !change.after) return false;
+  if (clause.afterMatches && (typeof change.after !== 'string' || !new RegExp(clause.afterMatches).test(change.after))) return false;
 
   if (clause.numericJump) {
     const before = change.before;
