@@ -519,8 +519,13 @@ program
         exclude: config?.exclude ?? [],
       });
       renderInfo(`resolved files: ${files.length}`);
+      const [major, minor] = process.versions.node.split('.').map(Number);
+      if (major < 20 || (major === 20 && minor < 19)) {
+        throw new Error(`Node.js ${process.versions.node} is unsupported. Use Node.js >= 20.19.0.`);
+      }
+      renderInfo(`node: ${process.versions.node}`);
       if (typeof fetch !== 'function') {
-        throw new Error('Global fetch unavailable. Use Node.js >= 18.');
+        throw new Error('Global fetch unavailable. Use Node.js >= 20.19.0.');
       }
       renderInfo('fetch: available');
       renderInfo(`version: ${PKG.version}`);

@@ -57,7 +57,7 @@ Line diffs lie about config. Formatting churn, key reorders, and “small” YAM
 npm install -g flecto
 ```
 
-Requires Node.js 18+.
+Requires Node.js 20.19.0 or later.
 
 ```bash
 flecto --version
