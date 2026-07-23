@@ -503,7 +503,8 @@ program
       const ignorePaths = parseCsv(effective.ignore);
       const dOpts = diffOptionsFromEffective(effective, ignorePaths);
 
-      let snapshots = readLocalSnapshotHistory();
+      const allSnapshots = readLocalSnapshotHistory();
+      let snapshots = allSnapshots;
       if (files.length > 0) {
         const targets = new Set((await resolveTargetFiles(files, config)).map((file) => resolve(file)));
         snapshots = snapshots.filter((snapshot) => targets.has(resolve(snapshot.file)));
@@ -511,6 +512,11 @@ program
 
       const summaries = summarizeSnapshotHistory(snapshots, limit, dOpts);
       if (summaries.length === 0) {
+        if (files.length > 0 && allSnapshots.length > 0) {
+          throw new Error(
+            'No local snapshots matched the given files. Omit files to view all saved snapshot history.',
+          );
+        }
         throw new Error('No local snapshots found. Run "flecto watch <file> --snapshot" first.');
       }
 

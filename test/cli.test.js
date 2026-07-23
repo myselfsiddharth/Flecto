@@ -114,6 +114,47 @@ test('history summarizes local snapshot drift', () => {
   }
 });
 
+test('history distinguishes unmatched file filters from missing snapshots', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-history-filter-'));
+  const emptyDir = mkdtempSync(join(tmpdir(), 'flecto-cli-history-empty-'));
+  const tracked = join(dir, 'tracked.json');
+  const other = join(dir, 'other.json');
+  const rootIndex = resolve(process.cwd(), 'index.js');
+
+  try {
+    writeFileSync(tracked, JSON.stringify({ pool_size: 5 }, null, 2), 'utf8');
+    writeFileSync(other, JSON.stringify({ pool_size: 1 }, null, 2), 'utf8');
+    const snapshot = spawnSync(
+      process.execPath,
+      [rootIndex, 'watch', tracked, '--snapshot'],
+      { cwd: dir, encoding: 'utf8' },
+    );
+    const filtered = spawnSync(
+      process.execPath,
+      [rootIndex, 'history', other],
+      { cwd: dir, encoding: 'utf8' },
+    );
+    const empty = spawnSync(
+      process.execPath,
+      [rootIndex, 'history'],
+      { cwd: emptyDir, encoding: 'utf8' },
+    );
+
+    assert.equal(snapshot.status, 0);
+    assert.equal(filtered.status, 1);
+    assert.match(
+      filtered.stderr,
+      /No local snapshots matched the given files\. Omit files to view all saved snapshot history\./,
+    );
+    assert.doesNotMatch(filtered.stderr, /No local snapshots found/);
+    assert.equal(empty.status, 1);
+    assert.match(empty.stderr, /No local snapshots found\. Run "flecto watch <file> --snapshot" first\./);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(emptyDir, { recursive: true, force: true });
+  }
+});
+
 test('history retains legacy snapshots without timestamped history', () => {
   const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-history-legacy-'));
   const legacyFile = join(dir, 'legacy.json');
