@@ -103,6 +103,47 @@ export function listBuiltinPackIds() {
 }
 
 /**
+ * List every policy pack resolvable from a working directory. Local packs take
+ * precedence over built-ins using the same order as loadPack().
+ * @param {string} [cwd]
+ * @returns {Array<{
+ *   id: string,
+ *   sourcePath: string,
+ *   source: 'builtin' | 'local',
+ *   ruleCount: number,
+ *   overridesBuiltin: boolean
+ * }>}
+ */
+export function listPolicyPacks(cwd = process.cwd()) {
+  const localDir = resolve(cwd, 'policies');
+  const localIds = existsSync(localDir)
+    ? readdirSync(localDir)
+      .filter((file) => /\.(json|yaml|yml)$/.test(file))
+      .map((file) => file.replace(/\.(json|yaml|yml)$/, ''))
+    : [];
+  const builtinIds = listBuiltinPackIds();
+  const builtinIdSet = new Set(builtinIds);
+
+  return [...new Set([...builtinIds, ...localIds])]
+    .sort()
+    .map((id) => {
+      const sourcePath = resolvePackPath(cwd, id);
+      if (!sourcePath) {
+        throw new Error(`Unable to resolve policy pack "${id}"`);
+      }
+      const pack = readPackFile(sourcePath);
+      const isLocal = localIds.includes(id);
+      return {
+        id,
+        sourcePath,
+        source: isLocal ? 'local' : 'builtin',
+        ruleCount: pack.rules.length,
+        overridesBuiltin: isLocal && builtinIdSet.has(id),
+      };
+    });
+}
+
+/**
  * @param {PolicyRule} rule
  * @param {import('./differ.js').ChangeEvent} change
  * @returns {boolean}

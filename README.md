@@ -185,6 +185,19 @@ flecto ci config/prod.yaml --profile prod --snapshot-ref HEAD~1
 Profile selection: `--profile` > `FLECTO_PROFILE` > defaults.  
 Custom packs: `policies/<id>.json`. Plugins: local ESM exporting `evaluate(changes, ctx)`.
 
+### Discover policy packs
+
+```bash
+flecto policies list
+flecto policies list --json
+```
+
+The command lists every bundled and local pack that resolves from the current
+working directory, including its source path and rule count. For a given pack
+id, Flecto resolves local files before bundled packs in this order:
+`policies/<id>.json`, `policies/<id>.yaml`, `policies/<id>.yml`, then the
+built-in pack. A local pack with the same id overrides its built-in counterpart.
+
 ### Opt-in array identity matching
 
 ```bash

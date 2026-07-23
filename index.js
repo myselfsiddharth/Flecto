@@ -22,7 +22,7 @@ import {
 } from './src/renderer.js';
 import { fireAlerts } from './src/alerter.js';
 import { createEnvelope } from './src/envelope.js';
-import { evaluatePolicies, highestSeverity } from './src/policy.js';
+import { evaluatePolicies, highestSeverity, listPolicyPacks } from './src/policy.js';
 import {
   loadRcConfig,
   resolveEffectiveOptions,
@@ -498,6 +498,33 @@ program
   .action(() => {
     const path = initRcFile(process.cwd());
     renderInfo(`Initialized config: ${path}`);
+  });
+
+program
+  .command('policies')
+  .description('Inspect policy packs available from the current directory')
+  .command('list')
+  .description('List built-in and local policy packs')
+  .option('--json', 'Output machine-readable JSON')
+  .action((opts) => {
+    try {
+      const packs = listPolicyPacks(process.cwd());
+      if (opts.json) {
+        console.log(JSON.stringify(packs, null, 2));
+        return;
+      }
+
+      console.log('Resolution order: policies/<id>.json, .yaml, .yml, then built-in packs.');
+      console.log('id\tsource path\trules\toverrides builtin');
+      for (const pack of packs) {
+        console.log(
+          `${pack.id}\t${pack.sourcePath}\t${pack.ruleCount}\t${pack.overridesBuiltin ? 'yes' : 'no'}`,
+        );
+      }
+    } catch (err) {
+      renderError(err.message);
+      process.exit(1);
+    }
   });
 
 program
