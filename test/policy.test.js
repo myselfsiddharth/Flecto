@@ -89,6 +89,18 @@ describe('policy engine', () => {
     });
   });
 
+  test('rejects invalid match regular expressions on load', () => {
+    withLocalPack('invalid-regexp', {
+      id: 'invalid-regexp',
+      rules: [{ id: 'broken-rule', severity: 'warn', match: { path: '[' } }],
+    }, (cwd) => {
+      assert.throws(
+        () => loadPack('invalid-regexp', cwd),
+        /rule "broken-rule"\.match\.path must be a valid regular expression/,
+      );
+    });
+  });
+
   test('mergeFindings keeps highest severity for same id+path', () => {
     const merged = mergeFindings([
       { id: 'secret-key-changed', severity: 'warn', path: 'a.token', message: 'w', pack: 'a' },

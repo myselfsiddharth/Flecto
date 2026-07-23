@@ -125,6 +125,18 @@ function validatePack(pack, path) {
       if (Object.hasOwn(rule.match, 'pathFlags') && typeof rule.match.pathFlags !== 'string') {
         invalidPack(path, `${label}.match.pathFlags must be a string`);
       }
+      if (typeof rule.match.path === 'string') {
+        try {
+          new RegExp(rule.match.path);
+        } catch {
+          invalidPack(path, `${label}.match.path must be a valid regular expression`);
+        }
+        try {
+          new RegExp(rule.match.path, rule.match.pathFlags ?? '');
+        } catch {
+          invalidPack(path, `${label}.match.pathFlags must be valid regular expression flags`);
+        }
+      }
     }
     if (Object.hasOwn(rule, 'numericJump')) {
       if (!isObject(rule.numericJump)) invalidPack(path, `${label}.numericJump must be an object`);
