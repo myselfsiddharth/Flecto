@@ -24,6 +24,60 @@ test('ci mode returns non-zero when fail-on changed', () => {
   assert.match(run.stdout, /"changes"/);
 });
 
+test('ci fails closed when all targets are unsupported', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-empty-ci-'));
+  const file = join(dir, 'nope.txt');
+  writeFileSync(file, 'x\n', 'utf8');
+  const rootIndex = resolve(process.cwd(), 'index.js');
+
+  const run = spawnSync(
+    process.execPath,
+    [rootIndex, 'ci', file, '--format', 'json', '--fail-on', 'changed'],
+    { encoding: 'utf8' }
+  );
+  const allowed = spawnSync(
+    process.execPath,
+    [rootIndex, 'ci', file, '--format', 'json', '--fail-on', 'changed', '--allow-empty'],
+    { encoding: 'utf8' }
+  );
+
+  rmSync(dir, { recursive: true, force: true });
+  assert.equal(run.status, 1);
+  assert.match(run.stderr, /No files were diffed/);
+  assert.match(run.stderr, /Skipping unsupported file/);
+  assert.equal(allowed.status, 0);
+  assert.equal(allowed.stdout.trim(), '[]');
+});
+
+test('snapshot fails closed when nothing was written', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-empty-snap-'));
+  const unsupported = join(dir, 'nope.txt');
+  const missing = join(dir, 'missing.json');
+  writeFileSync(unsupported, 'x\n', 'utf8');
+  const rootIndex = resolve(process.cwd(), 'index.js');
+
+  try {
+    const run = spawnSync(
+      process.execPath,
+      [rootIndex, 'watch', unsupported, missing, '--snapshot'],
+      { encoding: 'utf8', cwd: dir }
+    );
+    const allowed = spawnSync(
+      process.execPath,
+      [rootIndex, 'watch', unsupported, '--snapshot', '--allow-empty'],
+      { encoding: 'utf8', cwd: dir }
+    );
+
+    assert.equal(run.status, 1);
+    assert.match(run.stderr, /No snapshots written/);
+    assert.match(run.stderr, /Skipping unsupported file/);
+    assert.match(run.stderr, /Skipping missing file/);
+    assert.equal(allowed.status, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('ci mode reads git snapshot refs for paths with spaces', () => {
   const gitVersion = spawnSync('git', ['--version'], { encoding: 'utf8' });
   if (gitVersion.status !== 0) {
