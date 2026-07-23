@@ -84,7 +84,7 @@ That’s it — Flecto prints a clear summary on every meaningful change.
 
 - **Semantic diffs** for JSON, YAML, TOML, INI, and dotenv (`.env`, `.env.*`, `*.env`)
 - **Live watch** with optional command + webhook delivery
-- **Policy packs** (`default`, `strict-prod`) + custom `policies/*.json` + local ESM plugins
+- **Policy packs** (`default`, `strict-prod`, `compose`, `node-runtime`) + custom `policies/*.json` + local ESM plugins
 - **CI mode** with JSON / NDJSON / GitHub annotations and fail rules
 - **Snapshots & diffs** for deploy scripts and pre-commit hooks
 - **Profiles** via `--profile` or `FLECTO_PROFILE`
@@ -192,6 +192,7 @@ Rules combine their top-level predicates with AND. In addition to `when`, regex
 
 - `beforeEquals`, `afterIn`, and `beforeIn` for exact values or allowed value lists.
 - `beforeTruthy: true` and `afterTruthy: true` to require a truthy before/after value.
+- `afterMatches` to require a string after value that matches a regular expression.
 - `numericDelta: { "min": 10 }` to match an absolute numeric change of at least 10.
 - `match.pathEquals` and `match.pathPrefix` for exact or prefix path matching without regex.
 - `allOf` and `anyOf` arrays of simple match clauses. Every `allOf` clause and at least
@@ -277,11 +278,12 @@ If every target is missing or unsupported, `flecto ci` and `flecto watch --snaps
 
 ## Built-in policy checks
 
-Pack `default` (and stricter `strict-prod`) flag:
+Built-in pack ids:
 
-- **Secrets** — keys matching `secret`, `token`, `password`, `api_key`, etc. (added or changed)
-- **Dangerous toggles** — `debug: true`, `disable_tls`, `skip_tls_verify`, `allow_insecure`
-- **Pool size jumps** — `pool_size` increased ≥2×
+- `default` — secrets, dangerous toggles, and pool-size jumps.
+- `strict-prod` — stricter severities and matching for production use.
+- `compose` — privileged services, host networking, Docker socket mounts, and sensitive host-directory bind mounts.
+- `node-runtime` — removed Node.js engine requirements, TLS verification bypasses, and enabled Node debugging or inspector options.
 
 Fail CI with `--fail-on policy`.
 
