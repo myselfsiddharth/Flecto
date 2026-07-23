@@ -175,6 +175,19 @@ function shouldFailFromChanges(events, failOn) {
   return false;
 }
 
+function escapeWorkflowCommandData(value) {
+  return String(value)
+    .replaceAll('%', '%25')
+    .replaceAll('\r', '%0D')
+    .replaceAll('\n', '%0A');
+}
+
+function escapeWorkflowCommandProperty(value) {
+  return escapeWorkflowCommandData(value)
+    .replaceAll(':', '%3A')
+    .replaceAll(',', '%2C');
+}
+
 function printCiOutput(results, format) {
   if (format === 'json') {
     console.log(JSON.stringify(results, null, 2));
@@ -191,13 +204,14 @@ function printCiOutput(results, format) {
       for (const event of result.envelope.changes) {
         const title = `flecto ${event.type}`;
         const detail = event.note ? `${event.path} (${event.note})` : event.path;
-        console.log(`::warning file=${result.file},title=${title}::${detail}`);
+        console.log(`::warning file=${escapeWorkflowCommandProperty(result.file)},title=${escapeWorkflowCommandProperty(title)}::${escapeWorkflowCommandData(detail)}`);
       }
       for (const finding of result.policies) {
         const level = finding.severity === 'error' ? 'error' : 'warning';
         const pack = finding.pack ? ` [${finding.pack}]` : '';
         const title = `flecto policy ${finding.id}${pack}`;
-        console.log(`::${level} file=${result.file},title=${title}::${finding.path}: ${finding.message}`);
+        const detail = `${finding.path}: ${finding.message}`;
+        console.log(`::${level} file=${escapeWorkflowCommandProperty(result.file)},title=${escapeWorkflowCommandProperty(title)}::${escapeWorkflowCommandData(detail)}`);
       }
     }
   }
