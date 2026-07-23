@@ -185,6 +185,37 @@ flecto ci config/prod.yaml --profile prod --snapshot-ref HEAD~1
 Profile selection: `--profile` > `FLECTO_PROFILE` > defaults.  
 Custom packs: `policies/<id>.json`. Plugins: local ESM exporting `evaluate(changes, ctx)`.
 
+#### Declarative rule predicates
+
+Rules combine their top-level predicates with AND. In addition to `when`, regex
+`match.path`, `afterEquals`, and `numericJump`, packs can use:
+
+- `beforeEquals`, `afterIn`, and `beforeIn` for exact values or allowed value lists.
+- `beforeTruthy: true` and `afterTruthy: true` to require a truthy before/after value.
+- `numericDelta: { "min": 10 }` to match an absolute numeric change of at least 10.
+- `match.pathEquals` and `match.pathPrefix` for exact or prefix path matching without regex.
+- `allOf` and `anyOf` arrays of simple match clauses. Every `allOf` clause and at least
+  one `anyOf` clause must match. Clauses support the same value, truthiness, numeric, and
+  `match` predicates, but cannot nest composition.
+
+```json
+{
+  "id": "risky-feature-enable",
+  "severity": "error",
+  "allOf": [
+    { "match": { "pathPrefix": "features." } },
+    { "afterTruthy": true }
+  ],
+  "anyOf": [
+    { "afterEquals": true },
+    { "afterIn": ["unsafe", "disabled"] }
+  ]
+}
+```
+
+Pack loading fails closed for unknown rule or `match` fields, invalid regexes, and invalid
+predicate shapes, so misspelled predicates cannot silently disable a rule.
+
 ### Opt-in array identity matching
 
 ```bash

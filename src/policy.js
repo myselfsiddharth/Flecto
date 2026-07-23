@@ -17,12 +17,32 @@ import yaml from 'js-yaml';
  *   id: string,
  *   severity: PolicySeverity,
  *   when?: Array<'added' | 'removed' | 'changed'>,
- *   match?: { path?: string, pathFlags?: string },
+ *   match?: { path?: string, pathFlags?: string, pathEquals?: string, pathPrefix?: string },
+ *   beforeEquals?: unknown,
  *   afterEquals?: unknown,
+ *   beforeIn?: unknown[],
+ *   afterIn?: unknown[],
+ *   beforeTruthy?: true,
+ *   afterTruthy?: true,
  *   numericJump?: { minMultiple: number },
+ *   numericDelta?: { min: number },
+ *   allOf?: PolicyMatchClause[],
+ *   anyOf?: PolicyMatchClause[],
  *   message?: string,
  *   messageTemplate?: string
  * }} PolicyRule
+ *
+ * @typedef {{
+ *   match?: { path?: string, pathFlags?: string, pathEquals?: string, pathPrefix?: string },
+ *   beforeEquals?: unknown,
+ *   afterEquals?: unknown,
+ *   beforeIn?: unknown[],
+ *   afterIn?: unknown[],
+ *   beforeTruthy?: true,
+ *   afterTruthy?: true,
+ *   numericJump?: { minMultiple: number },
+ *   numericDelta?: { min: number }
+ * }} PolicyMatchClause
  *
  * @typedef {{ id: string, rules: PolicyRule[] }} PolicyPack
  *
@@ -38,6 +58,16 @@ import yaml from 'js-yaml';
 
 const SEVERITY_RANK = { info: 1, warn: 2, error: 3 };
 const PACKS_DIR = join(dirname(fileURLToPath(import.meta.url)), 'packs');
+const RULE_FIELDS = new Set([
+  'id', 'severity', 'when', 'match', 'beforeEquals', 'afterEquals',
+  'beforeIn', 'afterIn', 'beforeTruthy', 'afterTruthy', 'numericJump',
+  'numericDelta', 'allOf', 'anyOf', 'message', 'messageTemplate',
+]);
+const CLAUSE_FIELDS = new Set([
+  'match', 'beforeEquals', 'afterEquals', 'beforeIn', 'afterIn',
+  'beforeTruthy', 'afterTruthy', 'numericJump', 'numericDelta',
+]);
+const MATCH_FIELDS = new Set(['path', 'pathFlags', 'pathEquals', 'pathPrefix']);
 
 /**
  * @param {string} cwd
@@ -67,10 +97,110 @@ function readPackFile(path) {
   if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.rules)) {
     throw new Error(`Invalid policy pack at ${path}: expected { id, rules[] }`);
   }
+  parsed.rules.forEach((rule, index) => validateRule(rule, `rules[${index}]`));
   return {
     id: String(parsed.id ?? ''),
     rules: parsed.rules,
   };
+}
+
+/**
+ * Validate a rule or composition clause so pack typos fail closed at load time.
+ * @param {unknown} candidate
+ * @param {string} location
+ * @param {boolean} [isClause]
+ */
+function validateRule(candidate, location, isClause = false) {
+  if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
+    throw new Error(`Invalid policy rule at ${location}: expected an object`);
+  }
+
+  const allowedFields = isClause ? CLAUSE_FIELDS : RULE_FIELDS;
+  for (const key of Object.keys(candidate)) {
+    if (!allowedFields.has(key)) {
+      throw new Error(`Invalid policy rule at ${location}: unknown field "${key}"`);
+    }
+  }
+
+  const rule = /** @type {Record<string, unknown>} */ (candidate);
+  if (!isClause && (typeof rule.id !== 'string' || !rule.id)) {
+    throw new Error(`Invalid policy rule at ${location}: id is required`);
+  }
+  if (rule.when !== undefined
+    && (!Array.isArray(rule.when) || rule.when.some((type) => !['added', 'removed', 'changed'].includes(type)))) {
+    throw new Error(`Invalid policy rule at ${location}: when must contain added, removed, or changed`);
+  }
+  validateMatch(rule.match, location);
+  validateArrayPredicate(rule.beforeIn, 'beforeIn', location);
+  validateArrayPredicate(rule.afterIn, 'afterIn', location);
+  validateTruthyPredicate(rule.beforeTruthy, 'beforeTruthy', location);
+  validateTruthyPredicate(rule.afterTruthy, 'afterTruthy', location);
+  validateNumericPredicate(rule.numericJump, 'numericJump', 'minMultiple', location, true);
+  validateNumericPredicate(rule.numericDelta, 'numericDelta', 'min', location, false);
+
+  if (!isClause) {
+    validateComposition(rule.allOf, 'allOf', location);
+    validateComposition(rule.anyOf, 'anyOf', location);
+  }
+}
+
+/** @param {unknown} match @param {string} location */
+function validateMatch(match, location) {
+  if (match === undefined) return;
+  if (!match || typeof match !== 'object' || Array.isArray(match)) {
+    throw new Error(`Invalid policy rule at ${location}: match must be an object`);
+  }
+  for (const key of Object.keys(match)) {
+    if (!MATCH_FIELDS.has(key)) {
+      throw new Error(`Invalid policy rule at ${location}: unknown match field "${key}"`);
+    }
+  }
+  const typedMatch = /** @type {Record<string, unknown>} */ (match);
+  for (const key of MATCH_FIELDS) {
+    if (typedMatch[key] !== undefined && typeof typedMatch[key] !== 'string') {
+      throw new Error(`Invalid policy rule at ${location}: match.${key} must be a string`);
+    }
+  }
+  if (typedMatch.path !== undefined) {
+    try {
+      new RegExp(typedMatch.path, typedMatch.pathFlags ?? '');
+    } catch {
+      throw new Error(`Invalid policy rule at ${location}: match.path is not a valid regular expression`);
+    }
+  }
+}
+
+/** @param {unknown} value @param {string} name @param {string} location */
+function validateArrayPredicate(value, name, location) {
+  if (value !== undefined && !Array.isArray(value)) {
+    throw new Error(`Invalid policy rule at ${location}: ${name} must be an array`);
+  }
+}
+
+/** @param {unknown} value @param {string} name @param {string} location */
+function validateTruthyPredicate(value, name, location) {
+  if (value !== undefined && value !== true) {
+    throw new Error(`Invalid policy rule at ${location}: ${name} must be true`);
+  }
+}
+
+/** @param {unknown} value @param {string} name @param {string} property @param {string} location @param {boolean} positive */
+function validateNumericPredicate(value, name, property, location, positive) {
+  if (value === undefined) return;
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || typeof value[property] !== 'number' || !Number.isFinite(value[property])
+    || (positive ? value[property] <= 0 : value[property] < 0)) {
+    throw new Error(`Invalid policy rule at ${location}: ${name}.${property} must be a ${positive ? 'positive' : 'non-negative'} finite number`);
+  }
+}
+
+/** @param {unknown} clauses @param {string} name @param {string} location */
+function validateComposition(clauses, name, location) {
+  if (clauses === undefined) return;
+  if (!Array.isArray(clauses) || clauses.length === 0) {
+    throw new Error(`Invalid policy rule at ${location}: ${name} must be a non-empty array of match clauses`);
+  }
+  clauses.forEach((clause, index) => validateRule(clause, `${location}.${name}[${index}]`, true));
 }
 
 /**
@@ -110,22 +240,43 @@ export function listBuiltinPackIds() {
 function ruleMatches(rule, change) {
   const when = rule.when ?? ['added', 'removed', 'changed'];
   if (!when.includes(change.type)) return false;
+  if (!matchClause(rule, change)) return false;
+  if (rule.allOf?.some((clause) => !matchClause(clause, change))) return false;
+  if (rule.anyOf && !rule.anyOf.some((clause) => matchClause(clause, change))) return false;
+  return true;
+}
 
-  if (rule.match?.path) {
-    const flags = rule.match.pathFlags ?? '';
-    const re = new RegExp(rule.match.path, flags);
-    if (!re.test(change.path ?? '')) return false;
-  }
+/**
+ * @param {PolicyMatchClause} clause
+ * @param {import('./differ.js').ChangeEvent} change
+ * @returns {boolean}
+ */
+function matchClause(clause, change) {
+  const path = change.path ?? '';
+  const match = clause.match;
+  if (match?.path && !new RegExp(match.path, match.pathFlags ?? '').test(path)) return false;
+  if (match?.pathEquals !== undefined && path !== match.pathEquals) return false;
+  if (match?.pathPrefix !== undefined && !path.startsWith(match.pathPrefix)) return false;
 
-  if (Object.prototype.hasOwnProperty.call(rule, 'afterEquals')) {
-    if (change.after !== rule.afterEquals) return false;
-  }
+  if (Object.prototype.hasOwnProperty.call(clause, 'beforeEquals') && change.before !== clause.beforeEquals) return false;
+  if (Object.prototype.hasOwnProperty.call(clause, 'afterEquals') && change.after !== clause.afterEquals) return false;
+  if (clause.beforeIn && !clause.beforeIn.includes(change.before)) return false;
+  if (clause.afterIn && !clause.afterIn.includes(change.after)) return false;
+  if (clause.beforeTruthy && !change.before) return false;
+  if (clause.afterTruthy && !change.after) return false;
 
-  if (rule.numericJump) {
+  if (clause.numericJump) {
     const before = change.before;
     const after = change.after;
     if (typeof before !== 'number' || typeof after !== 'number') return false;
-    if (!(before > 0 && after >= before * rule.numericJump.minMultiple)) return false;
+    if (!(before > 0 && after >= before * clause.numericJump.minMultiple)) return false;
+  }
+
+  if (clause.numericDelta) {
+    const before = change.before;
+    const after = change.after;
+    if (typeof before !== 'number' || typeof after !== 'number') return false;
+    if (Math.abs(after - before) < clause.numericDelta.min) return false;
   }
 
   return true;
