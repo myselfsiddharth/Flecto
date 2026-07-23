@@ -59,7 +59,7 @@ Each item in `changes` has this shape:
   cwd,       // Flecto's current working directory
   file,      // absolute path to the file being evaluated
   profile,   // selected profile name, or null
-  source,    // 'watch' | 'ci' | 'diff'
+  source,    // 'watch' | 'ci'
   packIds    // active policy-pack ids
 }
 ```
