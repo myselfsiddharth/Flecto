@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { evaluatePolicies, highestSeverity, mergeFindings, loadPack } from '../src/policy.js';
+import {
+  evaluatePolicies, highestSeverity, mergeFindings, loadPack, listBuiltinPackIds,
+} from '../src/policy.js';
 
 async function evaluateCustomPack(rules, changes) {
   const cwd = mkdtempSync(join(tmpdir(), 'flecto-policy-'));
@@ -74,6 +76,43 @@ describe('policy engine', () => {
     assert.equal(findings.length, 1);
     assert.equal(findings[0].severity, 'error');
     assert.equal(findings[0].pack, 'strict-prod');
+  });
+
+  test('lists and loads the compose builtin pack', () => {
+    assert.ok(listBuiltinPackIds().includes('compose'));
+    assert.equal(loadPack('compose').id, 'compose');
+  });
+
+  test('flags Compose privilege, host network, and sensitive binds', async () => {
+    const findings = await evaluatePolicies([
+      { type: 'added', path: 'services.worker.privileged', after: true },
+      { type: 'added', path: 'services.worker.network_mode', after: 'host' },
+      { type: 'added', path: 'services.worker.volumes[0]', after: '/var/run/docker.sock:/var/run/docker.sock' },
+      { type: 'added', path: 'services.worker.volumes[1].source', after: '/etc' },
+    ], { policies: ['compose'] });
+    assert.deepEqual(findings.map((finding) => finding.id), [
+      'compose-privileged-service',
+      'compose-host-network',
+      'compose-docker-socket-bind',
+      'compose-sensitive-host-bind',
+    ]);
+    assert.ok(findings.every((finding) => finding.pack === 'compose'));
+  });
+
+  test('flags Node runtime engine removal, TLS bypass, and debug flags', async () => {
+    const findings = await evaluatePolicies([
+      { type: 'removed', path: 'engines.node', before: '>=18' },
+      { type: 'added', path: 'environment.NODE_TLS_REJECT_UNAUTHORIZED', after: '0' },
+      { type: 'added', path: 'environment.NODE_DEBUG', after: 'http' },
+      { type: 'added', path: 'environment.NODE_OPTIONS', after: '--inspect' },
+    ], { policies: ['node-runtime'] });
+    assert.deepEqual(findings.map((finding) => finding.id), [
+      'node-runtime-engine-removed',
+      'node-runtime-tls-verification-disabled',
+      'node-runtime-debug-enabled',
+      'node-runtime-inspector-enabled',
+    ]);
+    assert.ok(findings.every((finding) => finding.pack === 'node-runtime'));
   });
 
   test('matches beforeEquals and afterIn value predicates', async () => {
