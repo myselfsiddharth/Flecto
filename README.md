@@ -239,7 +239,8 @@ flecto ci "config/**/*.yaml" \
 
 **Formats:** `json`, `ndjson`, `github-annotations`  
 **Fail triggers:** `changed`, `added`, `removed`, `policy`, `error`, `warn`  
-Unresolved `--snapshot-ref` fails closed (no silent empty baseline).
+Unresolved `--snapshot-ref` fails closed (no silent empty baseline).  
+If every target is missing or unsupported, `flecto ci` and `flecto watch --snapshot` exit non-zero (pass `--allow-empty` to opt out).
 
 ---
 

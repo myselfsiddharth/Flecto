@@ -92,6 +92,7 @@ function stripUnsetCliOverrides(opts) {
     'arrayIgnoreOrder',
     'snapshotRef',
     'ignore',
+    'allowEmpty',
   ]) {
     if (out[key] === undefined || out[key] === false || out[key] === null || out[key] === '') {
       delete out[key];
@@ -233,6 +234,7 @@ program
   .option('--mask-secrets-webhooks', 'Also mask secrets in webhook payloads', false)
   .option('--snapshot', 'Save current state as baseline instead of watching')
   .option('--diff', 'Diff current file against saved baseline and exit')
+  .option('--allow-empty', 'Allow --snapshot to succeed when nothing was written', false)
   .action(async (files, opts) => {
     try {
       const { config } = loadRcConfig(process.cwd());
@@ -256,12 +258,27 @@ program
 
       if (effective.snapshot) {
         mkdirSync(SNAPSHOT_DIR, { recursive: true });
+        let written = 0;
         for (const filepath of targets) {
-          if (!existsSync(filepath) || !isSupported(filepath)) continue;
+          if (!existsSync(filepath)) {
+            renderWarn(`Skipping missing file: ${filepath}`);
+            continue;
+          }
+          if (!isSupported(filepath)) {
+            renderWarn(`Skipping unsupported file: ${filepath}`);
+            continue;
+          }
           const state = parseFile(filepath);
           const snapshotPath = snapshotPathForFile(filepath);
           writeFileSync(snapshotPath, JSON.stringify({ file: filepath, state }, null, 2), 'utf8');
           console.log(chalk.green(`✓ Snapshot saved: ${snapshotPath}`));
+          written += 1;
+        }
+        if (written === 0 && !effective.allowEmpty) {
+          throw new Error(
+            'No snapshots written — all targets were missing or unsupported.' +
+              ' Pass --allow-empty to allow an empty snapshot run.',
+          );
         }
         return;
       }
@@ -391,6 +408,7 @@ program
   .option('--array-id-key <key>', 'Diff arrays by this object identity key (opt-in)')
   .option('--array-ignore-order', 'Treat array order as insignificant', false)
   .option('--mask-secrets', 'Mask secret-like values in CI output', false)
+  .option('--allow-empty', 'Allow CI to succeed when no files were diffed', false)
   .action(async (files, opts) => {
     try {
       const { config } = loadRcConfig(process.cwd());
@@ -414,9 +432,17 @@ program
       /** @type {any[]} */
       const results = [];
       let shouldFail = false;
+      let diffed = 0;
 
       for (const filepath of targets) {
-        if (!existsSync(filepath) || !isSupported(filepath)) continue;
+        if (!existsSync(filepath)) {
+          renderWarn(`Skipping missing file: ${filepath}`);
+          continue;
+        }
+        if (!isSupported(filepath)) {
+          renderWarn(`Skipping unsupported file: ${filepath}`);
+          continue;
+        }
         const after = parseFile(filepath);
         let before;
         try {
@@ -444,10 +470,18 @@ program
           policies: policyFindings,
         });
         results.push({ file: filepath, envelope, policies: policyFindings });
+        diffed += 1;
 
         if (shouldFailFromChanges(events, failOn) || shouldFailFromPolicy(policyFindings, failOn)) {
           shouldFail = true;
         }
+      }
+
+      if (diffed === 0 && !effective.allowEmpty) {
+        throw new Error(
+          'No files were diffed — all targets were missing or unsupported.' +
+            ' Pass --allow-empty to allow an empty CI run.',
+        );
       }
 
       printCiOutput(results, format);
