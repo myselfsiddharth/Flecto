@@ -26,3 +26,34 @@ test('watcher emits semantic change events', async () => {
   assert.equal(changeEvent.events[0].path, 'a');
 });
 
+test('watcher reports rejected async event handlers', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-watcher-'));
+  const file = join(dir, 'config.json');
+  const warnings = [];
+  const originalWarn = console.warn;
+  writeFileSync(file, JSON.stringify({ a: 1 }, null, 2), 'utf8');
+  console.warn = (message) => warnings.push(String(message));
+
+  try {
+    const watcher = startWatcher(
+      file,
+      { polling: true, interval: 25, ignorePaths: [] },
+      async (event) => {
+        if (event.kind === 'changes') {
+          throw new Error('alert delivery failed');
+        }
+      },
+    );
+
+    await new Promise((r) => setTimeout(r, 250));
+    writeFileSync(file, JSON.stringify({ a: 2 }, null, 2), 'utf8');
+    await new Promise((r) => setTimeout(r, 500));
+    await watcher.close();
+
+    assert.ok(warnings.some((message) => message.includes('alert delivery failed')));
+  } finally {
+    console.warn = originalWarn;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
