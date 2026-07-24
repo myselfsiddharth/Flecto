@@ -8,4 +8,3 @@ demo/
 npm-debug.log*
 
 .claude/
-.sentinel-snapshots/

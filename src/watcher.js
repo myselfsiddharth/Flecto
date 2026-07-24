@@ -20,7 +20,7 @@ import { renderWarn, renderInfo } from './renderer.js';
  *
  * @param {string} filepath
  * @param {WatcherOptions} options
- * @param {(event: { kind: 'changes', filepath: string, events: ChangeEvent[] } | { kind: 'lifecycle', filepath: string, lifecycle: { type: string, message: string } }) => void} onEvent
+ * @param {(event: { kind: 'changes', filepath: string, events: ChangeEvent[] } | { kind: 'lifecycle', filepath: string, lifecycle: { type: string, message: string } }) => void | Promise<void>} onEvent
  * @returns {import('chokidar').FSWatcher}
  */
 export function startWatcher(filepath, options = {}, onEvent) {
@@ -42,7 +42,7 @@ export function startWatcher(filepath, options = {}, onEvent) {
   } catch (err) {
     renderWarn(`Could not parse initial state of "${filepath}": ${err.message}`);
     renderWarn('Watching anyway — will use first successful parse as baseline.');
-    onEvent({
+    safelyEmit(onEvent, {
       kind: 'lifecycle',
       filepath,
       lifecycle: { type: 'initial-parse-failed', message: err.message },
@@ -72,12 +72,12 @@ export function startWatcher(filepath, options = {}, onEvent) {
           lastGoodState = newState;
         }
         if (lifecycle) {
-          onEvent({ kind: 'lifecycle', filepath, lifecycle });
+          safelyEmit(onEvent, { kind: 'lifecycle', filepath, lifecycle });
         }
         if (events.length > 0) {
-          onEvent({ kind: 'changes', filepath, events });
+          safelyEmit(onEvent, { kind: 'changes', filepath, events });
         } else if (reason === 'add') {
-          onEvent({
+          safelyEmit(onEvent, {
             kind: 'lifecycle',
             filepath,
             lifecycle: { type: 'file-restored', message: 'File content reloaded after add event.' },
@@ -96,7 +96,7 @@ export function startWatcher(filepath, options = {}, onEvent) {
   watcher.on('unlink', () => {
     // File temporarily missing; keep last good state and wait for add.
     renderWarn(`File disappeared: "${filepath}" (waiting for it to reappear)`);
-    onEvent({
+    safelyEmit(onEvent, {
       kind: 'lifecycle',
       filepath,
       lifecycle: { type: 'file-missing', message: 'File disappeared; waiting for restore.' },
@@ -105,7 +105,7 @@ export function startWatcher(filepath, options = {}, onEvent) {
 
   watcher.on('error', (err) => {
     renderWarn(`Watcher error: ${err.message}`);
-    onEvent({
+    safelyEmit(onEvent, {
       kind: 'lifecycle',
       filepath,
       lifecycle: { type: 'watcher-error', message: err.message },
@@ -113,6 +113,14 @@ export function startWatcher(filepath, options = {}, onEvent) {
   });
 
   return watcher;
+}
+
+function safelyEmit(onEvent, event) {
+  Promise.resolve()
+    .then(() => onEvent(event))
+    .catch((err) => {
+      renderWarn(`Watcher event handler error: ${err?.message ?? String(err)}`);
+    });
 }
 
 /**

@@ -27,7 +27,7 @@
       "match": {
         "path": "(^|\\.)NODE_DEBUG$"
       },
-      "afterTruthy": true,
+      "afterMatches": ".+",
       "message": "NODE_DEBUG is enabled. Confirm verbose runtime debugging is appropriate for this environment."
     },
     {

@@ -54,12 +54,14 @@ import yaml from 'js-yaml';
  *   profile?: string | null,
  *   source?: 'watch' | 'ci' | 'diff',
  *   policies?: string[],
- *   plugins?: string[]
+ *   plugins?: string[],
+ *   severityRemap?: Record<string, PolicySeverity | 'off'>
  * }} PolicyEvalOptions
  */
 
 const SEVERITY_RANK = { info: 1, warn: 2, error: 3 };
 const PACKS_DIR = join(dirname(fileURLToPath(import.meta.url)), 'packs');
+const CHANGE_TYPES = new Set(['added', 'removed', 'changed']);
 const RULE_FIELDS = new Set([
   'id', 'severity', 'when', 'match', 'beforeEquals', 'afterEquals',
   'beforeIn', 'afterIn', 'beforeTruthy', 'afterTruthy', 'numericJump',
@@ -70,6 +72,67 @@ const CLAUSE_FIELDS = new Set([
   'beforeTruthy', 'afterTruthy', 'afterMatches', 'numericJump', 'numericDelta',
 ]);
 const MATCH_FIELDS = new Set(['path', 'pathFlags', 'pathEquals', 'pathPrefix']);
+
+/**
+ * @param {string} path
+ * @param {string} message
+ * @returns {never}
+ */
+function invalidPack(path, message) {
+  throw new Error(`Invalid policy pack at ${path}: ${message}`);
+}
+
+/**
+ * @param {unknown} value
+ * @returns {value is Record<string, unknown>}
+ */
+function isObject(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * @param {unknown} value
+ * @returns {boolean}
+ */
+function isTruthyToggle(value) {
+  if (value === true) return true;
+  if (typeof value !== 'string') return false;
+  return ['true', '1', 'yes'].includes(value.trim().toLowerCase());
+}
+
+/**
+ * Validate a parsed policy pack and reject typos before evaluation.
+ * @param {unknown} pack
+ * @param {string} path
+ * @returns {asserts pack is PolicyPack}
+ */
+function validatePack(pack, path) {
+  if (!isObject(pack)) invalidPack(path, 'pack must be an object');
+
+  const packFields = new Set(['id', 'rules']);
+  for (const field of Object.keys(pack)) {
+    if (!packFields.has(field)) invalidPack(path, `pack.${field} is not allowed`);
+  }
+  if (Object.hasOwn(pack, 'id') && (typeof pack.id !== 'string' || !pack.id.trim())) {
+    invalidPack(path, 'pack.id must be a non-empty string');
+  }
+  if (!Array.isArray(pack.rules)) invalidPack(path, 'pack.rules must be an array');
+
+  for (const [index, rule] of pack.rules.entries()) {
+    try {
+      validateRule(rule, `rules[${index}]`);
+    } catch (error) {
+      const label = isObject(rule) && typeof rule.id === 'string' && rule.id
+        ? `rule "${rule.id}"`
+        : `rules[${index}]`;
+      const message = error.message.replace(/^Invalid policy rule at [^:]+: /, '')
+        .replace(/^unknown field "([^"]+)"$/, '$1 is not allowed (unknown field "$1")')
+        .replace(/^unknown match field "([^"]+)"$/, 'match.$1 is not allowed (unknown match field "$1")')
+        .replace(/^match\.path is not a valid regular expression$/, 'match.path must be a valid regular expression');
+      invalidPack(path, `${label}.${message}`);
+    }
+  }
+}
 
 /**
  * @param {string} cwd
@@ -91,19 +154,19 @@ function resolvePackPath(cwd, packId) {
 
 /**
  * @param {string} path
+ * @param {string} fallbackId
  * @returns {PolicyPack}
  */
-function readPackFile(path) {
+function readPackFile(path, fallbackId) {
   const raw = readFileSync(path, 'utf8');
-  const parsed = path.endsWith('.json') ? JSON.parse(raw) : yaml.load(raw);
-  if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.rules)) {
-    throw new Error(`Invalid policy pack at ${path}: expected { id, rules[] }`);
+  let parsed;
+  try {
+    parsed = path.endsWith('.json') ? JSON.parse(raw) : yaml.load(raw);
+  } catch (error) {
+    invalidPack(path, `could not parse file (${error.message})`);
   }
-  parsed.rules.forEach((rule, index) => validateRule(rule, `rules[${index}]`));
-  return {
-    id: String(parsed.id ?? ''),
-    rules: parsed.rules,
-  };
+  validatePack(parsed, path);
+  return { ...parsed, id: parsed.id ?? fallbackId };
 }
 
 /**
@@ -128,9 +191,15 @@ function validateRule(candidate, location, isClause = false) {
   if (!isClause && (typeof rule.id !== 'string' || !rule.id)) {
     throw new Error(`Invalid policy rule at ${location}: id is required`);
   }
+  if (!isClause && (!Object.hasOwn(rule, 'severity') || !Object.hasOwn(SEVERITY_RANK, rule.severity))) {
+    throw new Error(`Invalid policy rule at ${location}: severity must be one of: info, warn, error`);
+  }
   if (rule.when !== undefined
-    && (!Array.isArray(rule.when) || rule.when.some((type) => !['added', 'removed', 'changed'].includes(type)))) {
-    throw new Error(`Invalid policy rule at ${location}: when must contain added, removed, or changed`);
+    && (!Array.isArray(rule.when) || rule.when.length === 0 || rule.when.some((type) => !CHANGE_TYPES.has(type)))) {
+    const invalidIndex = Array.isArray(rule.when)
+      ? rule.when.findIndex((type) => !CHANGE_TYPES.has(type))
+      : -1;
+    throw new Error(`Invalid policy rule at ${location}: when${invalidIndex >= 0 ? `[${invalidIndex}]` : ''} must be one of: added, removed, changed`);
   }
   validateMatch(rule.match, location);
   validateArrayPredicate(rule.beforeIn, 'beforeIn', location);
@@ -140,6 +209,11 @@ function validateRule(candidate, location, isClause = false) {
   validateRegexPredicate(rule.afterMatches, 'afterMatches', location);
   validateNumericPredicate(rule.numericJump, 'numericJump', 'minMultiple', location, true);
   validateNumericPredicate(rule.numericDelta, 'numericDelta', 'min', location, false);
+  for (const name of ['message', 'messageTemplate']) {
+    if (rule[name] !== undefined && typeof rule[name] !== 'string') {
+      throw new Error(`Invalid policy rule at ${location}: ${name} must be a string`);
+    }
+  }
 
   if (!isClause) {
     validateComposition(rule.allOf, 'allOf', location);
@@ -168,6 +242,13 @@ function validateMatch(match, location) {
     try {
       new RegExp(typedMatch.path, typedMatch.pathFlags ?? '');
     } catch {
+      if (typedMatch.pathFlags !== undefined) {
+        try {
+          new RegExp('(?:)', typedMatch.pathFlags);
+        } catch {
+          throw new Error(`Invalid policy rule at ${location}: match.pathFlags must be valid regular expression flags`);
+        }
+      }
       throw new Error(`Invalid policy rule at ${location}: match.path is not a valid regular expression`);
     }
   }
@@ -232,9 +313,7 @@ export function loadPack(packId, cwd = process.cwd()) {
   if (!path) {
     throw new Error(`Unknown policy pack "${id}". Add policies/${id}.json or use a built-in pack.`);
   }
-  const pack = readPackFile(path);
-  if (!pack.id) pack.id = id;
-  return pack;
+  return readPackFile(path, id);
 }
 
 /**
@@ -246,6 +325,47 @@ export function listBuiltinPackIds() {
   return readdirSync(PACKS_DIR)
     .filter((f) => f.endsWith('.json'))
     .map((f) => f.replace(/\.json$/, ''));
+}
+
+/**
+ * List every policy pack resolvable from a working directory. Local packs take
+ * precedence over built-ins using the same order as loadPack().
+ * @param {string} [cwd]
+ * @returns {Array<{
+ *   id: string,
+ *   sourcePath: string,
+ *   source: 'builtin' | 'local',
+ *   ruleCount: number,
+ *   overridesBuiltin: boolean
+ * }>}
+ */
+export function listPolicyPacks(cwd = process.cwd()) {
+  const localDir = resolve(cwd, 'policies');
+  const localIds = existsSync(localDir)
+    ? readdirSync(localDir)
+      .filter((file) => /\.(json|yaml|yml)$/.test(file))
+      .map((file) => file.replace(/\.(json|yaml|yml)$/, ''))
+    : [];
+  const builtinIds = listBuiltinPackIds();
+  const builtinIdSet = new Set(builtinIds);
+
+  return [...new Set([...builtinIds, ...localIds])]
+    .sort()
+    .map((id) => {
+      const sourcePath = resolvePackPath(cwd, id);
+      if (!sourcePath) {
+        throw new Error(`Unable to resolve policy pack "${id}"`);
+      }
+      const pack = readPackFile(sourcePath, id);
+      const isLocal = localIds.includes(id);
+      return {
+        id,
+        sourcePath,
+        source: isLocal ? 'local' : 'builtin',
+        ruleCount: pack.rules.length,
+        overridesBuiltin: isLocal && builtinIdSet.has(id),
+      };
+    });
 }
 
 /**
@@ -278,8 +398,8 @@ function matchClause(clause, change) {
   if (Object.prototype.hasOwnProperty.call(clause, 'afterEquals') && change.after !== clause.afterEquals) return false;
   if (clause.beforeIn && !clause.beforeIn.includes(change.before)) return false;
   if (clause.afterIn && !clause.afterIn.includes(change.after)) return false;
-  if (clause.beforeTruthy && !change.before) return false;
-  if (clause.afterTruthy && !change.after) return false;
+  if (clause.beforeTruthy && !isTruthyToggle(change.before)) return false;
+  if (clause.afterTruthy && !isTruthyToggle(change.after)) return false;
   if (clause.afterMatches && (typeof change.after !== 'string' || !new RegExp(clause.afterMatches).test(change.after))) return false;
 
   if (clause.numericJump) {
@@ -317,17 +437,20 @@ function formatMessage(rule, change) {
 /**
  * @param {PolicyPack} pack
  * @param {import('./differ.js').ChangeEvent[]} changes
+ * @param {Record<string, PolicySeverity | 'off'>} [severityRemap]
  * @returns {PolicyFinding[]}
  */
-export function evaluatePack(pack, changes) {
+export function evaluatePack(pack, changes, severityRemap = {}) {
   /** @type {PolicyFinding[]} */
   const findings = [];
   for (const change of changes) {
     for (const rule of pack.rules ?? []) {
       if (!ruleMatches(rule, change)) continue;
+      const severity = severityRemap[String(rule.id)] ?? rule.severity ?? 'warn';
+      if (severity === 'off') continue;
       findings.push({
         id: String(rule.id),
-        severity: rule.severity ?? 'warn',
+        severity,
         path: change.path ?? '',
         message: formatMessage(rule, change),
         pack: pack.id,
@@ -409,12 +532,19 @@ export async function evaluatePolicies(changes, options = {}) {
   const cwd = options.cwd ?? process.cwd();
   const packIds = options.policies?.length ? options.policies : ['default'];
   const plugins = options.plugins ?? [];
+  const severityRemap = options.severityRemap ?? {};
 
   /** @type {PolicyFinding[]} */
   const findings = [];
-  for (const packId of packIds) {
-    const pack = loadPack(packId, cwd);
-    findings.push(...evaluatePack(pack, changes));
+  const packs = packIds.map((packId) => loadPack(packId, cwd));
+  const knownRuleIds = new Set(packs.flatMap((pack) => pack.rules.map((rule) => String(rule.id))));
+  for (const ruleId of Object.keys(severityRemap)) {
+    if (!knownRuleIds.has(ruleId)) {
+      console.warn(`Unknown policy rule id in severityRemap: "${ruleId}"`);
+    }
+  }
+  for (const pack of packs) {
+    findings.push(...evaluatePack(pack, changes, severityRemap));
   }
 
   const ctx = {
