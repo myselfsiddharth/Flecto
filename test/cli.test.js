@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'fs';
 import { join, resolve } from 'path';
 import { tmpdir } from 'os';
 import { spawnSync } from 'child_process';
+import { createHash } from 'crypto';
 
 test('ci mode returns non-zero when fail-on changed', () => {
   const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-'));
@@ -114,6 +115,210 @@ test('snapshot fails closed when nothing was written', () => {
     assert.match(run.stderr, /Skipping unsupported file/);
     assert.match(run.stderr, /Skipping missing file/);
     assert.equal(allowed.status, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('history summarizes local snapshot drift', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-history-'));
+  const file = join(dir, 'config.json');
+  const rootIndex = resolve(process.cwd(), 'index.js');
+
+  try {
+    writeFileSync(file, JSON.stringify({ pool_size: 5 }, null, 2), 'utf8');
+    const first = spawnSync(
+      process.execPath,
+      [rootIndex, 'watch', file, '--snapshot'],
+      { cwd: dir, encoding: 'utf8' },
+    );
+    writeFileSync(file, JSON.stringify({ pool_size: 20 }, null, 2), 'utf8');
+    const second = spawnSync(
+      process.execPath,
+      [rootIndex, 'watch', file, '--snapshot'],
+      { cwd: dir, encoding: 'utf8' },
+    );
+    const history = spawnSync(
+      process.execPath,
+      [rootIndex, 'history', file, '--limit', '2'],
+      { cwd: dir, encoding: 'utf8' },
+    );
+
+    assert.equal(first.status, 0);
+    assert.equal(second.status, 0);
+    assert.equal(history.status, 0);
+    assert.match(history.stdout, /Local snapshot history \(2 snapshots\)/);
+    assert.match(history.stdout, /config\.json — 1 change/);
+    assert.match(history.stdout, /config\.json — 0 changes/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('history distinguishes unmatched file filters from missing snapshots', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-history-filter-'));
+  const emptyDir = mkdtempSync(join(tmpdir(), 'flecto-cli-history-empty-'));
+  const tracked = join(dir, 'tracked.json');
+  const other = join(dir, 'other.json');
+  const rootIndex = resolve(process.cwd(), 'index.js');
+
+  try {
+    writeFileSync(tracked, JSON.stringify({ pool_size: 5 }, null, 2), 'utf8');
+    writeFileSync(other, JSON.stringify({ pool_size: 1 }, null, 2), 'utf8');
+    const snapshot = spawnSync(
+      process.execPath,
+      [rootIndex, 'watch', tracked, '--snapshot'],
+      { cwd: dir, encoding: 'utf8' },
+    );
+    const filtered = spawnSync(
+      process.execPath,
+      [rootIndex, 'history', other],
+      { cwd: dir, encoding: 'utf8' },
+    );
+    const empty = spawnSync(
+      process.execPath,
+      [rootIndex, 'history'],
+      { cwd: emptyDir, encoding: 'utf8' },
+    );
+
+    assert.equal(snapshot.status, 0);
+    assert.equal(filtered.status, 1);
+    assert.match(
+      filtered.stderr,
+      /No local snapshots matched the given files\. Omit files to view all saved snapshot history\./,
+    );
+    assert.doesNotMatch(filtered.stderr, /No local snapshots found/);
+    assert.equal(empty.status, 1);
+    assert.match(empty.stderr, /No local snapshots found\. Run "flecto watch <file> --snapshot" first\./);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(emptyDir, { recursive: true, force: true });
+  }
+});
+
+test('history retains legacy snapshots without timestamped history', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-history-legacy-'));
+  const legacyFile = join(dir, 'legacy.json');
+  const currentFile = join(dir, 'current.json');
+  const snapshotDir = join(dir, '.flecto-snapshots');
+  const rootIndex = resolve(process.cwd(), 'index.js');
+
+  try {
+    mkdirSync(snapshotDir, { recursive: true });
+    writeFileSync(
+      join(snapshotDir, 'aaaaaaaaaaaaaaaa.json'),
+      JSON.stringify({ file: legacyFile, state: { version: 1 } }),
+      'utf8',
+    );
+    writeFileSync(
+      join(snapshotDir, 'bbbbbbbbbbbbbbbb.1000.json'),
+      JSON.stringify({ file: currentFile, state: { version: 2 }, createdAt: '2026-01-01T00:00:00.000Z' }),
+      'utf8',
+    );
+
+    const history = spawnSync(
+      process.execPath,
+      [rootIndex, 'history', '--limit', '10'],
+      { cwd: dir, encoding: 'utf8' },
+    );
+
+    assert.equal(history.status, 0);
+    assert.match(history.stdout, /legacy\.json — 0 changes/);
+    assert.match(history.stdout, /current\.json — 0 changes/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('history preserves a legacy baseline during first snapshot migration', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-history-migration-'));
+  const file = join(dir, 'config.json');
+  const snapshotDir = join(dir, '.flecto-snapshots');
+  const id = createHash('sha256').update(file.replaceAll('\\', '/')).digest('hex').slice(0, 16);
+  const rootIndex = resolve(process.cwd(), 'index.js');
+
+  try {
+    mkdirSync(snapshotDir, { recursive: true });
+    writeFileSync(
+      join(snapshotDir, `${id}.json`),
+      JSON.stringify({ file, state: { pool_size: 5 } }),
+      'utf8',
+    );
+    writeFileSync(file, JSON.stringify({ pool_size: 20 }, null, 2), 'utf8');
+
+    const snapshot = spawnSync(
+      process.execPath,
+      [rootIndex, 'watch', file, '--snapshot'],
+      { cwd: dir, encoding: 'utf8' },
+    );
+    const history = spawnSync(
+      process.execPath,
+      [rootIndex, 'history', file, '--limit', '2'],
+      { cwd: dir, encoding: 'utf8' },
+    );
+
+    assert.equal(snapshot.status, 0);
+    assert.equal(history.status, 0);
+    assert.match(history.stdout, /Local snapshot history \(2 snapshots\)/);
+    assert.match(history.stdout, /config\.json — 1 change/);
+    assert.match(history.stdout, /config\.json — 0 changes/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('history change counts honor the same diff options as watch --diff', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-history-dopts-'));
+  const file = join(dir, 'services.json');
+  const rootIndex = resolve(process.cwd(), 'index.js');
+  const before = {
+    updated_at: '2024-01-01',
+    services: [{ id: 'a', port: 80 }, { id: 'b', port: 443 }],
+  };
+  const after = {
+    updated_at: '2024-12-31',
+    services: [{ id: 'b', port: 443 }, { id: 'a', port: 80 }],
+  };
+  const diffFlags = ['--ignore', 'updated_at', '--array-id-key', 'id', '--array-ignore-order'];
+
+  try {
+    writeFileSync(file, JSON.stringify(before, null, 2), 'utf8');
+    const first = spawnSync(
+      process.execPath,
+      [rootIndex, 'watch', file, '--snapshot'],
+      { cwd: dir, encoding: 'utf8' },
+    );
+    writeFileSync(file, JSON.stringify(after, null, 2), 'utf8');
+
+    const diff = spawnSync(
+      process.execPath,
+      [rootIndex, 'watch', file, '--diff', ...diffFlags],
+      { cwd: dir, encoding: 'utf8' },
+    );
+
+    const second = spawnSync(
+      process.execPath,
+      [rootIndex, 'watch', file, '--snapshot'],
+      { cwd: dir, encoding: 'utf8' },
+    );
+    const historyWithOpts = spawnSync(
+      process.execPath,
+      [rootIndex, 'history', file, '--limit', '2', ...diffFlags],
+      { cwd: dir, encoding: 'utf8' },
+    );
+    const historyBare = spawnSync(
+      process.execPath,
+      [rootIndex, 'history', file, '--limit', '2'],
+      { cwd: dir, encoding: 'utf8' },
+    );
+
+    assert.equal(first.status, 0);
+    assert.equal(second.status, 0);
+    assert.equal(diff.status, 0, `watch --diff should treat noise as unchanged:\n${diff.stdout}\n${diff.stderr}`);
+    assert.equal(historyWithOpts.status, 0);
+    assert.match(historyWithOpts.stdout, /services\.json — 0 changes/);
+    assert.equal(historyBare.status, 0);
+    assert.match(historyBare.stdout, /services\.json — [1-9]\d* changes?/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
