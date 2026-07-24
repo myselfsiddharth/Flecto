@@ -11,9 +11,11 @@ inputs:
     required: false
     default: policy,error
   policies:
-    description: Comma-separated policy pack IDs.
+    description: >-
+      Comma-separated policy pack IDs. Omit to keep packs from .flectorc
+      (or Flecto's built-in default). Setting this overrides .flectorc packs.
     required: false
-    default: default
+    default: ""
   profile:
     description: Optional .flectorc profile name.
     required: false

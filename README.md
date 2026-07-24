@@ -266,7 +266,7 @@ steps:
 |---|---|---|
 | `targets` | `config/**/*.{yaml,yml,json,toml,ini}` | Whitespace-separated paths or glob patterns to check |
 | `fail-on` | `policy,error` | Comma-separated events that fail the job |
-| `policies` | `default` | Comma-separated policy pack IDs |
+| `policies` | _(empty)_ | Comma-separated policy pack IDs; omit to use `.flectorc` / Flecto defaults |
 | `profile` | _(empty)_ | Optional `.flectorc` profile |
 | `format` | `github-annotations` | Flecto output format |
 | `snapshot-ref` | `HEAD~1` | Git ref or snapshot file used as the baseline |
