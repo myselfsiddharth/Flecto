@@ -11,7 +11,7 @@ updates:
       prefix: "chore(deps)"
       include: "scope"
     ignore:
-      # Majors that break our Node 18/20 floor or fail CI today
+      # Majors that break our supported Node 20+ floor or fail CI today
       - dependency-name: "commander"
         update-types: ["version-update:semver-major"]
       - dependency-name: "js-yaml"

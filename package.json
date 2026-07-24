@@ -25,7 +25,7 @@
     "url": "git+https://github.com/myselfsiddharth/Flecto.git"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20.19.0"
   },
   "type": "module",
   "main": "index.js",
