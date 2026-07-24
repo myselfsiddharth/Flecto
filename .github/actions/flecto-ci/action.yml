@@ -51,7 +51,9 @@ runs:
       run: |
         set -euo pipefail
 
-        read -r -a targets <<< "$INPUT_TARGETS"
+        # `read` consumes a single line; flatten newlines so multiline workflow
+        # inputs (common YAML `|` / `>` blocks) still expand every pattern.
+        read -r -a targets <<< "${INPUT_TARGETS//$'\n'/ }"
         args=(ci "${targets[@]}" --format "$INPUT_FORMAT" --fail-on "$INPUT_FAIL_ON")
 
         if [[ -n "$INPUT_POLICIES" ]]; then
