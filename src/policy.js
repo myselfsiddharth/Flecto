@@ -19,6 +19,7 @@ import yaml from 'js-yaml';
  *   when?: Array<'added' | 'removed' | 'changed'>,
  *   match?: { path?: string, pathFlags?: string },
  *   afterEquals?: unknown,
+ *   afterTruthy?: boolean,
  *   numericJump?: { minMultiple: number },
  *   message?: string,
  *   messageTemplate?: string
@@ -46,6 +47,7 @@ const RULE_FIELDS = new Set([
   'when',
   'match',
   'afterEquals',
+  'afterTruthy',
   'numericJump',
   'message',
   'messageTemplate',
@@ -145,6 +147,9 @@ function validatePack(pack, path) {
         }
       }
     }
+    if (Object.hasOwn(rule, 'afterTruthy') && typeof rule.afterTruthy !== 'boolean') {
+      invalidPack(path, `${label}.afterTruthy must be a boolean`);
+    }
     if (Object.hasOwn(rule, 'numericJump')) {
       if (!isObject(rule.numericJump)) invalidPack(path, `${label}.numericJump must be an object`);
       for (const field of Object.keys(rule.numericJump)) {
@@ -162,6 +167,16 @@ function validatePack(pack, path) {
       }
     }
   }
+}
+
+/**
+ * @param {unknown} value
+ * @returns {boolean}
+ */
+function isTruthyToggle(value) {
+  if (value === true) return true;
+  if (typeof value !== 'string') return false;
+  return ['true', '1', 'yes'].includes(value.trim().toLowerCase());
 }
 
 /**
@@ -284,6 +299,10 @@ function ruleMatches(rule, change) {
 
   if (Object.prototype.hasOwnProperty.call(rule, 'afterEquals')) {
     if (change.after !== rule.afterEquals) return false;
+  }
+
+  if (rule.afterTruthy && !isTruthyToggle(change.after)) {
+    return false;
   }
 
   if (rule.numericJump) {
