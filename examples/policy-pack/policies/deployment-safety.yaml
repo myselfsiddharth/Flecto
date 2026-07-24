@@ -1,0 +1,17 @@
+id: deployment-safety
+rules:
+  - id: public-service-enabled
+    severity: error
+    when: [added, changed]
+    match:
+      path: service\.public$
+    afterEquals: true
+    message: A service was made public.
+  - id: replica-count-jump
+    severity: warn
+    when: [changed]
+    match:
+      path: service\.replicas$
+    numericJump:
+      minMultiple: 2
+    messageTemplate: Replica count increased from {before} to {after}.

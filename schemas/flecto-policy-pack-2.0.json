@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/myselfsiddharth/Flecto/schemas/flecto-policy-pack-2.0.json",
+  "title": "FlectoPolicyPack",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["rules"],
+  "properties": {
+    "id": { "type": "string", "minLength": 1 },
+    "rules": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/rule" }
+    }
+  },
+  "$defs": {
+    "rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "severity"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "severity": { "enum": ["info", "warn", "error"] },
+        "when": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "enum": ["added", "removed", "changed"] }
+        },
+        "match": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "path": { "type": "string" },
+            "pathFlags": { "type": "string" }
+          }
+        },
+        "afterEquals": true,
+        "numericJump": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["minMultiple"],
+          "properties": {
+            "minMultiple": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            }
+          }
+        },
+        "message": { "type": "string" },
+        "messageTemplate": { "type": "string" }
+      }
+    }
+  }
+}
