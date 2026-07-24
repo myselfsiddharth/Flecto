@@ -1,0 +1,29 @@
+name: Flecto CI
+
+on:
+  pull_request:
+    paths:
+      - "config/**"
+  push:
+    branches: [main]
+    paths:
+      - "config/**"
+
+# Required for actions/checkout. GitHub annotations do not need write access.
+permissions:
+  contents: read
+
+jobs:
+  flecto:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The default Action baseline is HEAD~1.
+          fetch-depth: 2
+
+      - uses: ./.github/actions/flecto-ci
+        with:
+          targets: config/**/*.{yaml,yml,json,toml,ini}
+          snapshot-ref: HEAD~1
+          fail-on: policy,error
