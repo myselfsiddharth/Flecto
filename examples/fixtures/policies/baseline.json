@@ -1,0 +1,19 @@
+{
+  "state": {
+    "auth": {
+      "api_key": "old-key"
+    },
+    "features": {
+      "debug": false
+    },
+    "database": {
+      "pool_size": 5
+    },
+    "deployment": {
+      "rollout": {
+        "maxUnavailable": 1,
+        "strategy": "blue-green"
+      }
+    }
+  }
+}

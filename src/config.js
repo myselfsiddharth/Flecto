@@ -73,6 +73,7 @@ export function resolveEffectiveOptions(config, profile, cliOverrides = {}) {
 export function resolvePolicyOptions(effective) {
   const policiesRaw = effective.policies;
   const pluginsRaw = effective.plugins;
+  const severityRemapRaw = effective.severityRemap;
   const policies = Array.isArray(policiesRaw)
     ? policiesRaw.map(String)
     : typeof policiesRaw === 'string'
@@ -83,7 +84,22 @@ export function resolvePolicyOptions(effective) {
     : typeof pluginsRaw === 'string'
       ? String(pluginsRaw).split(',').map((s) => s.trim()).filter(Boolean)
       : [];
-  return { policies, plugins };
+  if (
+    severityRemapRaw !== undefined
+    && (severityRemapRaw === null || Array.isArray(severityRemapRaw) || typeof severityRemapRaw !== 'object')
+  ) {
+    throw new Error('severityRemap must be an object mapping rule ids to info, warn, error, or off');
+  }
+  const severityRemap = {};
+  for (const [ruleId, severity] of Object.entries(severityRemapRaw ?? {})) {
+    if (!['info', 'warn', 'error', 'off'].includes(severity)) {
+      throw new Error(
+        `severityRemap for "${ruleId}" must be one of: info, warn, error, off`,
+      );
+    }
+    severityRemap[ruleId] = severity;
+  }
+  return { policies, plugins, severityRemap };
 }
 
 /**
@@ -134,7 +150,11 @@ export function initRcFile(cwd = process.cwd()) {
     profiles: {
       dev: { mode: 'verbose' },
       ci: { failOn: 'policy,error' },
-      prod: { policies: ['default', 'strict-prod'], maskSecrets: true },
+      prod: {
+        policies: ['default', 'strict-prod'],
+        severityRemap: { 'pool-size-jump': 'error' },
+        maskSecrets: true,
+      },
     },
     files: ['config/**/*.{yaml,yml,json,toml,ini}', '.env', '.env.*', '*.env'],
     exclude: ['**/node_modules/**'],

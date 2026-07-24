@@ -41,6 +41,9 @@ Line diffs lie about config. Formatting churn, key reorders, and “small” YAM
 - What looks risky (secrets, dangerous toggles, pool jumps)
 - What to do next (CI gate, webhook, shell command)
 
+See the [changelog and migration notes](CHANGELOG.md) for release history and
+upcoming v2.1 behavior changes.
+
 > Diff tools compare trees. **Flecto watches, scores risk, and alerts.**
 
 | Without Flecto | With Flecto |
@@ -176,6 +179,7 @@ flecto ci config/prod.yaml --profile prod --snapshot-ref HEAD~1
   "profiles": {
     "prod": {
       "policies": ["default", "strict-prod"],
+      "severityRemap": { "pool-size-jump": "error" },
       "maskSecrets": true
     }
   }
@@ -184,6 +188,25 @@ flecto ci config/prod.yaml --profile prod --snapshot-ref HEAD~1
 
 Profile selection: `--profile` > `FLECTO_PROFILE` > defaults.  
 Custom packs: `policies/<id>.json`. Plugins: local ESM exporting `evaluate(changes, ctx)`.
+
+Use `severityRemap` in defaults or a profile to change pack rule severities without forking a pack:
+
+```json
+{
+  "profiles": {
+    "dev": {
+      "severityRemap": { "pool-size-jump": "off" }
+    },
+    "prod": {
+      "severityRemap": { "pool-size-jump": "error" }
+    }
+  }
+}
+```
+
+Each key is a rule id and each value must be `info`, `warn`, `error`, or `off`. The remap applies after all configured built-in and local packs load, before findings and CI `--fail-on` checks. When multiple packs provide the same rule id, the remap applies to every matching pack rule. Plugin findings are unchanged. Unknown rule ids print a warning instead of being ignored silently.
+
+Authoring guides: [policy packs](docs/policy-packs.md) · [plugins](docs/plugins.md) · [plugin cookbook](docs/plugin-cookbook.md).
 
 ### Array identity matching
 
@@ -237,9 +260,12 @@ flecto watch config/prod.yaml \
 ```bash
 flecto watch config/prod.yaml --snapshot
 flecto watch config/prod.yaml --diff
+flecto history config/prod.yaml --limit 10
 ```
 
 Exit codes: `0` clean · `1` changes detected.
+
+`flecto history` stays local: it lists recent snapshots from `.flecto-snapshots/` with their timestamps and semantic change counts from the previous snapshot. Counts use the same ignore paths, array identity, and order settings as `flecto watch --diff` (CLI flags or `.flectorc`). Omit files to view all saved snapshot history.
 
 ---
 
@@ -256,6 +282,38 @@ flecto ci "config/**/*.yaml" \
 **Fail triggers:** `changed`, `added`, `removed`, `policy`, `error`, `warn`  
 Unresolved `--snapshot-ref` fails closed (no silent empty baseline).  
 If every target is missing or unsupported, `flecto ci` and `flecto watch --snapshot` exit non-zero (pass `--allow-empty` to opt out).
+
+### GitHub Action
+
+Use the [Flecto CI Action](.github/actions/flecto-ci/action.yml) to run `flecto ci` in a workflow with GitHub annotations enabled by default. A complete local-action workflow is available at [`examples/github-action/flecto-ci.yml`](examples/github-action/flecto-ci.yml).
+
+```yaml
+permissions:
+  contents: read
+
+steps:
+  - uses: actions/checkout@v7
+    with:
+      fetch-depth: 2
+  - uses: myselfsiddharth/Flecto/.github/actions/flecto-ci@main
+    with:
+      targets: config/**/*.{yaml,yml,json,toml,ini}
+      snapshot-ref: HEAD~1
+```
+
+`contents: read` is required by `actions/checkout`. The Action emits workflow-command annotations and needs no write permissions. Keep `fetch-depth: 2` (or use `fetch-depth: 0`) when using the default `HEAD~1` baseline.
+
+| Input | Default | Description |
+|---|---|---|
+| `targets` | `config/**/*.{yaml,yml,json,toml,ini}` | Whitespace-separated paths or glob patterns to check |
+| `fail-on` | `policy,error` | Comma-separated events that fail the job |
+| `policies` | _(empty)_ | Comma-separated policy pack IDs; omit to use `.flectorc` / Flecto defaults |
+| `profile` | _(empty)_ | Optional `.flectorc` profile |
+| `format` | `github-annotations` | Flecto output format |
+| `snapshot-ref` | `HEAD~1` | Git ref or snapshot file used as the baseline |
+| `node-version` | `20` | Node.js version used to run Flecto |
+
+The Action runs `npx --yes flecto@2 ci`: the major version is pinned so compatible Flecto updates are received. For fully reproducible builds, pin the Action reference to a commit SHA and replace `@2` in a forked Action with an exact published Flecto version.
 
 ---
 
@@ -312,7 +370,11 @@ Looks for `.flectorc`, `.flectorc.json`, `.flectorc.yaml`, or `.flectorc.yml`.
   "profiles": {
     "dev": { "mode": "verbose" },
     "ci": { "failOn": "policy,error" },
-    "prod": { "policies": ["default", "strict-prod"], "maskSecrets": true }
+    "prod": {
+      "policies": ["default", "strict-prod"],
+      "severityRemap": { "pool-size-jump": "error" },
+      "maskSecrets": true
+    }
   },
   "files": ["config/**/*.{yaml,yml,json,toml,ini}", ".env", ".env.*", "*.env"],
   "exclude": ["**/node_modules/**"]
