@@ -12,6 +12,7 @@ import { renderWarn, renderInfo } from './renderer.js';
  * @property {string}   [mode]         Output mode: 'compact' | 'verbose'
  * @property {string[]} [ignorePaths]  Key paths to suppress in diffs
  * @property {string | null} [arrayIdKey]
+ * @property {boolean} [arrayIdentity]
  * @property {boolean} [arrayIgnoreOrder]
  */
 
@@ -30,6 +31,7 @@ export function startWatcher(filepath, options = {}, onEvent) {
   const diffOpts = {
     ignorePaths,
     arrayIdKey: options.arrayIdKey ?? null,
+    arrayIdentity: options.arrayIdentity !== false,
     arrayIgnoreOrder: Boolean(options.arrayIgnoreOrder),
   };
 
@@ -126,7 +128,7 @@ function safelyEmit(onEvent, event) {
 /**
  * Internal: re-parse the file and diff against the previous state.
  * @param {string} filepath
- * @param {{ ignorePaths?: string[], arrayIdKey?: string | null, arrayIgnoreOrder?: boolean }} diffOpts
+ * @param {{ ignorePaths?: string[], arrayIdKey?: string | null, arrayIdentity?: boolean, arrayIgnoreOrder?: boolean }} diffOpts
  * @param {unknown | null} lastGoodState
  * @param {(newState: unknown | null, events: ChangeEvent[], lifecycle: { type: string, message: string } | null) => void} callback
  */

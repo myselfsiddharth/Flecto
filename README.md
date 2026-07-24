@@ -91,7 +91,7 @@ That’s it — Flecto prints a clear summary on every meaningful change.
 - **CI mode** with JSON / NDJSON / GitHub annotations and fail rules
 - **Snapshots & diffs** for deploy scripts and pre-commit hooks
 - **Profiles** via `--profile` or `FLECTO_PROFILE`
-- **Opt-in array identity** (`--array-id-key`) and secret masking
+- **Default array identity** (`id` / `name`, or `--array-id-key`) and secret masking
 
 ---
 
@@ -253,13 +253,28 @@ id, Flecto resolves local files before bundled packs in this order:
 `policies/<id>.json`, `policies/<id>.yaml`, `policies/<id>.yml`, then the
 built-in pack. A local pack with the same id overrides its built-in counterpart.
 
-### Opt-in array identity matching
+### Array identity matching
 
 ```bash
-flecto watch config/services.yaml --array-id-key id
+flecto watch config/services.yaml
 ```
 
-Without the flag, arrays still diff by index (1.x behavior).
+Arrays of objects automatically match by a shared, unique `id` key, falling back
+to `name` when `id` is unavailable. This avoids false changes when named items
+are reordered. Use a custom identity field when needed:
+
+```bash
+flecto watch config/services.yaml --array-id-key serviceKey
+```
+
+To restore index-based diffs for every array, pass `--no-array-id`:
+
+```bash
+flecto watch config/services.yaml --no-array-id
+```
+
+In `.flectorc`, set `"arrayId": false` in `defaults` or a profile for the same
+escape hatch.
 
 ### Command + webhook together
 
@@ -395,7 +410,8 @@ Looks for `.flectorc`, `.flectorc.json`, `.flectorc.yaml`, or `.flectorc.yml`.
     "ignore": ["**.updated_at"],
     "deliveryMode": "best-effort",
     "onAlertFailure": "warn",
-    "policies": ["default"]
+    "policies": ["default"],
+    "arrayId": true
   },
   "profiles": {
     "dev": { "mode": "verbose" },
@@ -459,7 +475,7 @@ CLI flags override profile/default values.
 
 1. **Parser** — format by extension / dotenv naming → structured values  
 2. **Watcher** — [chokidar](https://github.com/paulmillr/chokidar) + debounce  
-3. **Differ** — semantic tree diff (objects, arrays, ignore rules, optional array ids)  
+3. **Differ** — semantic tree diff (objects, arrays, ignore rules, automatic array ids)
 4. **Policy engine** — packs + plugins → severity findings  
 5. **Envelope** — versioned automation payload (`2.0`)  
 6. **Alerter** — command and/or webhook with retry modes  
