@@ -32,12 +32,137 @@ import yaml from 'js-yaml';
  *   profile?: string | null,
  *   source?: 'watch' | 'ci' | 'diff',
  *   policies?: string[],
- *   plugins?: string[]
+ *   plugins?: string[],
+ *   severityRemap?: Record<string, PolicySeverity | 'off'>
  * }} PolicyEvalOptions
  */
 
 const SEVERITY_RANK = { info: 1, warn: 2, error: 3 };
 const PACKS_DIR = join(dirname(fileURLToPath(import.meta.url)), 'packs');
+const CHANGE_TYPES = new Set(['added', 'removed', 'changed']);
+const RULE_FIELDS = new Set([
+  'id',
+  'severity',
+  'when',
+  'match',
+  'afterEquals',
+  'numericJump',
+  'message',
+  'messageTemplate',
+]);
+
+/**
+ * @param {string} path
+ * @param {string} message
+ * @returns {never}
+ */
+function invalidPack(path, message) {
+  throw new Error(`Invalid policy pack at ${path}: ${message}`);
+}
+
+/**
+ * @param {unknown} value
+ * @returns {value is Record<string, unknown>}
+ */
+function isObject(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * Validate a parsed policy pack against schemas/flecto-policy-pack-2.0.json.
+ * Keeping this focused validator dependency-free makes pack loading work in every CLI mode.
+ *
+ * @param {unknown} pack
+ * @param {string} path
+ * @returns {asserts pack is PolicyPack}
+ */
+function validatePack(pack, path) {
+  if (!isObject(pack)) invalidPack(path, 'pack must be an object');
+
+  const packFields = new Set(['id', 'rules']);
+  for (const field of Object.keys(pack)) {
+    if (!packFields.has(field)) invalidPack(path, `pack.${field} is not allowed`);
+  }
+  if (Object.hasOwn(pack, 'id') && (typeof pack.id !== 'string' || !pack.id.trim())) {
+    invalidPack(path, 'pack.id must be a non-empty string');
+  }
+  if (!Array.isArray(pack.rules)) invalidPack(path, 'pack.rules must be an array');
+
+  for (const [index, rule] of pack.rules.entries()) {
+    const label = isObject(rule) && typeof rule.id === 'string' && rule.id
+      ? `rule "${rule.id}"`
+      : `rules[${index}]`;
+    if (!isObject(rule)) invalidPack(path, `${label} must be an object`);
+
+    for (const field of Object.keys(rule)) {
+      if (!RULE_FIELDS.has(field)) invalidPack(path, `${label}.${field} is not allowed`);
+    }
+    if (typeof rule.id !== 'string' || !rule.id.trim()) {
+      invalidPack(path, `${label}.id must be a non-empty string`);
+    }
+    if (!Object.hasOwn(rule, 'severity') || !Object.hasOwn(SEVERITY_RANK, rule.severity)) {
+      invalidPack(path, `${label}.severity must be one of: info, warn, error`);
+    }
+    if (Object.hasOwn(rule, 'when')) {
+      if (!Array.isArray(rule.when) || rule.when.length === 0) {
+        invalidPack(path, `${label}.when must be a non-empty array`);
+      }
+      for (const [whenIndex, changeType] of rule.when.entries()) {
+        if (!CHANGE_TYPES.has(changeType)) {
+          invalidPack(path, `${label}.when[${whenIndex}] must be one of: added, removed, changed`);
+        }
+      }
+    }
+    if (Object.hasOwn(rule, 'match')) {
+      if (!isObject(rule.match)) invalidPack(path, `${label}.match must be an object`);
+      for (const field of Object.keys(rule.match)) {
+        if (field !== 'path' && field !== 'pathFlags') {
+          invalidPack(path, `${label}.match.${field} is not allowed`);
+        }
+      }
+      if (Object.hasOwn(rule.match, 'path') && typeof rule.match.path !== 'string') {
+        invalidPack(path, `${label}.match.path must be a string`);
+      }
+      if (Object.hasOwn(rule.match, 'pathFlags') && typeof rule.match.pathFlags !== 'string') {
+        invalidPack(path, `${label}.match.pathFlags must be a string`);
+      }
+      if (typeof rule.match.path === 'string') {
+        // Compile the same way ruleMatches does: path + pathFlags together.
+        // Path-only RegExp() rejects patterns that are valid only with flags
+        // (e.g. Unicode sets with `v`, or `\p{…}` with `u` on engines that require it).
+        const flags = rule.match.pathFlags ?? '';
+        try {
+          new RegExp(rule.match.path, flags);
+        } catch {
+          if (flags) {
+            try {
+              new RegExp('(?:)', flags);
+            } catch {
+              invalidPack(path, `${label}.match.pathFlags must be valid regular expression flags`);
+            }
+          }
+          invalidPack(path, `${label}.match.path must be a valid regular expression`);
+        }
+      }
+    }
+    if (Object.hasOwn(rule, 'numericJump')) {
+      if (!isObject(rule.numericJump)) invalidPack(path, `${label}.numericJump must be an object`);
+      for (const field of Object.keys(rule.numericJump)) {
+        if (field !== 'minMultiple') {
+          invalidPack(path, `${label}.numericJump.${field} is not allowed`);
+        }
+      }
+      if (typeof rule.numericJump.minMultiple !== 'number' || !Number.isFinite(rule.numericJump.minMultiple) || rule.numericJump.minMultiple <= 0) {
+        invalidPack(path, `${label}.numericJump.minMultiple must be a positive number`);
+      }
+    }
+    for (const field of ['message', 'messageTemplate']) {
+      if (Object.hasOwn(rule, field) && typeof rule[field] !== 'string') {
+        invalidPack(path, `${label}.${field} must be a string`);
+      }
+    }
+  }
+}
 
 /**
  * @param {string} cwd
@@ -59,18 +184,19 @@ function resolvePackPath(cwd, packId) {
 
 /**
  * @param {string} path
+ * @param {string} fallbackId
  * @returns {PolicyPack}
  */
-function readPackFile(path) {
+function readPackFile(path, fallbackId) {
   const raw = readFileSync(path, 'utf8');
-  const parsed = path.endsWith('.json') ? JSON.parse(raw) : yaml.load(raw);
-  if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.rules)) {
-    throw new Error(`Invalid policy pack at ${path}: expected { id, rules[] }`);
+  let parsed;
+  try {
+    parsed = path.endsWith('.json') ? JSON.parse(raw) : yaml.load(raw);
+  } catch (error) {
+    invalidPack(path, `could not parse file (${error.message})`);
   }
-  return {
-    id: String(parsed.id ?? ''),
-    rules: parsed.rules,
-  };
+  validatePack(parsed, path);
+  return { ...parsed, id: parsed.id ?? fallbackId };
 }
 
 /**
@@ -86,9 +212,7 @@ export function loadPack(packId, cwd = process.cwd()) {
   if (!path) {
     throw new Error(`Unknown policy pack "${id}". Add policies/${id}.json or use a built-in pack.`);
   }
-  const pack = readPackFile(path);
-  if (!pack.id) pack.id = id;
-  return pack;
+  return readPackFile(path, id);
 }
 
 /**
@@ -100,6 +224,47 @@ export function listBuiltinPackIds() {
   return readdirSync(PACKS_DIR)
     .filter((f) => f.endsWith('.json'))
     .map((f) => f.replace(/\.json$/, ''));
+}
+
+/**
+ * List every policy pack resolvable from a working directory. Local packs take
+ * precedence over built-ins using the same order as loadPack().
+ * @param {string} [cwd]
+ * @returns {Array<{
+ *   id: string,
+ *   sourcePath: string,
+ *   source: 'builtin' | 'local',
+ *   ruleCount: number,
+ *   overridesBuiltin: boolean
+ * }>}
+ */
+export function listPolicyPacks(cwd = process.cwd()) {
+  const localDir = resolve(cwd, 'policies');
+  const localIds = existsSync(localDir)
+    ? readdirSync(localDir)
+      .filter((file) => /\.(json|yaml|yml)$/.test(file))
+      .map((file) => file.replace(/\.(json|yaml|yml)$/, ''))
+    : [];
+  const builtinIds = listBuiltinPackIds();
+  const builtinIdSet = new Set(builtinIds);
+
+  return [...new Set([...builtinIds, ...localIds])]
+    .sort()
+    .map((id) => {
+      const sourcePath = resolvePackPath(cwd, id);
+      if (!sourcePath) {
+        throw new Error(`Unable to resolve policy pack "${id}"`);
+      }
+      const pack = readPackFile(sourcePath);
+      const isLocal = localIds.includes(id);
+      return {
+        id,
+        sourcePath,
+        source: isLocal ? 'local' : 'builtin',
+        ruleCount: pack.rules.length,
+        overridesBuiltin: isLocal && builtinIdSet.has(id),
+      };
+    });
 }
 
 /**
@@ -149,17 +314,20 @@ function formatMessage(rule, change) {
 /**
  * @param {PolicyPack} pack
  * @param {import('./differ.js').ChangeEvent[]} changes
+ * @param {Record<string, PolicySeverity | 'off'>} [severityRemap]
  * @returns {PolicyFinding[]}
  */
-export function evaluatePack(pack, changes) {
+export function evaluatePack(pack, changes, severityRemap = {}) {
   /** @type {PolicyFinding[]} */
   const findings = [];
   for (const change of changes) {
     for (const rule of pack.rules ?? []) {
       if (!ruleMatches(rule, change)) continue;
+      const severity = severityRemap[String(rule.id)] ?? rule.severity ?? 'warn';
+      if (severity === 'off') continue;
       findings.push({
         id: String(rule.id),
-        severity: rule.severity ?? 'warn',
+        severity,
         path: change.path ?? '',
         message: formatMessage(rule, change),
         pack: pack.id,
@@ -241,12 +409,19 @@ export async function evaluatePolicies(changes, options = {}) {
   const cwd = options.cwd ?? process.cwd();
   const packIds = options.policies?.length ? options.policies : ['default'];
   const plugins = options.plugins ?? [];
+  const severityRemap = options.severityRemap ?? {};
 
   /** @type {PolicyFinding[]} */
   const findings = [];
-  for (const packId of packIds) {
-    const pack = loadPack(packId, cwd);
-    findings.push(...evaluatePack(pack, changes));
+  const packs = packIds.map((packId) => loadPack(packId, cwd));
+  const knownRuleIds = new Set(packs.flatMap((pack) => pack.rules.map((rule) => String(rule.id))));
+  for (const ruleId of Object.keys(severityRemap)) {
+    if (!knownRuleIds.has(ruleId)) {
+      console.warn(`Unknown policy rule id in severityRemap: "${ruleId}"`);
+    }
+  }
+  for (const pack of packs) {
+    findings.push(...evaluatePack(pack, changes, severityRemap));
   }
 
   const ctx = {
