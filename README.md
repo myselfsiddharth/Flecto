@@ -250,6 +250,38 @@ flecto ci "config/**/*.yaml" \
 Unresolved `--snapshot-ref` fails closed (no silent empty baseline).  
 If every target is missing or unsupported, `flecto ci` and `flecto watch --snapshot` exit non-zero (pass `--allow-empty` to opt out).
 
+### GitHub Action
+
+Use the [Flecto CI Action](.github/actions/flecto-ci/action.yml) to run `flecto ci` in a workflow with GitHub annotations enabled by default. A complete local-action workflow is available at [`examples/github-action/flecto-ci.yml`](examples/github-action/flecto-ci.yml).
+
+```yaml
+permissions:
+  contents: read
+
+steps:
+  - uses: actions/checkout@v7
+    with:
+      fetch-depth: 2
+  - uses: myselfsiddharth/Flecto/.github/actions/flecto-ci@main
+    with:
+      targets: config/**/*.{yaml,yml,json,toml,ini}
+      snapshot-ref: HEAD~1
+```
+
+`contents: read` is required by `actions/checkout`. The Action emits workflow-command annotations and needs no write permissions. Keep `fetch-depth: 2` (or use `fetch-depth: 0`) when using the default `HEAD~1` baseline.
+
+| Input | Default | Description |
+|---|---|---|
+| `targets` | `config/**/*.{yaml,yml,json,toml,ini}` | Whitespace-separated paths or glob patterns to check |
+| `fail-on` | `policy,error` | Comma-separated events that fail the job |
+| `policies` | _(empty)_ | Comma-separated policy pack IDs; omit to use `.flectorc` / Flecto defaults |
+| `profile` | _(empty)_ | Optional `.flectorc` profile |
+| `format` | `github-annotations` | Flecto output format |
+| `snapshot-ref` | `HEAD~1` | Git ref or snapshot file used as the baseline |
+| `node-version` | `20` | Node.js version used to run Flecto |
+
+The Action runs `npx --yes flecto@2 ci`: the major version is pinned so compatible Flecto updates are received. For fully reproducible builds, pin the Action reference to a commit SHA and replace `@2` in a forked Action with an exact published Flecto version.
+
 ---
 
 ## Built-in policy checks
