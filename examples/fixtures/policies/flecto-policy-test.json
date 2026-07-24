@@ -1,0 +1,34 @@
+{
+  "baseline": "baseline.json",
+  "current": "current.json",
+  "profile": "prod",
+  "policies": ["default", "deployment-review"],
+  "plugins": ["./plugins/async-rollout-guard.js"],
+  "expected": [
+    {
+      "id": "secret-key-changed",
+      "severity": "error",
+      "path": "auth.api_key"
+    },
+    {
+      "id": "dangerous-toggle-enabled",
+      "severity": "error",
+      "path": "features.debug"
+    },
+    {
+      "id": "pool-size-jump",
+      "severity": "warn",
+      "path": "database.pool_size"
+    },
+    {
+      "id": "rollout-unavailability-increased",
+      "severity": "warn",
+      "path": "deployment.rollout.maxUnavailable"
+    },
+    {
+      "id": "async-rollout-approval",
+      "severity": "error",
+      "path": "deployment.rollout.maxUnavailable"
+    }
+  ]
+}
