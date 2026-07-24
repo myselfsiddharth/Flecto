@@ -171,3 +171,38 @@ test('ci array identity supports auto-detection, custom keys, and index escape h
   }
 });
 
+test('ci --array-id-key overrides .flectorc arrayId false', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-array-id-rc-'));
+  const file = join(dir, 'config.json');
+  const snapshot = join(dir, 'snapshot.json');
+  const rootIndex = resolve(process.cwd(), 'index.js');
+
+  writeFileSync(join(dir, '.flectorc'), JSON.stringify({ defaults: { arrayId: false } }), 'utf8');
+  writeFileSync(snapshot, JSON.stringify({
+    state: { services: [{ id: 1, key: 'api', port: 3000 }, { id: 2, key: 'web', port: 8080 }] },
+  }), 'utf8');
+  writeFileSync(file, JSON.stringify({
+    services: [{ id: 2, key: 'web', port: 8080 }, { id: 1, key: 'api', port: 4000 }],
+  }), 'utf8');
+
+  try {
+    const withoutKey = spawnSync(
+      process.execPath,
+      [rootIndex, 'ci', file, '--snapshot-ref', snapshot, '--format', 'json', '--fail-on', 'changed'],
+      { encoding: 'utf8', cwd: dir }
+    );
+    assert.equal(withoutKey.status, 1);
+    assert.equal(JSON.parse(withoutKey.stdout)[0].envelope.changes[0].path, 'services[0].id');
+
+    const withKey = spawnSync(
+      process.execPath,
+      [rootIndex, 'ci', file, '--snapshot-ref', snapshot, '--format', 'json', '--fail-on', 'changed', '--array-id-key', 'key'],
+      { encoding: 'utf8', cwd: dir }
+    );
+    assert.equal(withKey.status, 1);
+    assert.equal(JSON.parse(withKey.stdout)[0].envelope.changes[0].path, 'services["api"].port');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+

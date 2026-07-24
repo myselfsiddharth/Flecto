@@ -267,10 +267,12 @@ function identityMap(items, idKey) {
  * @returns {string | null}
  */
 function resolveArrayIdKey(before, after, options) {
-  if (options.arrayIdentity === false) return null;
-
+  // An explicit key always enables identity matching, even when arrayIdentity
+  // is off (e.g. .flectorc arrayId:false plus CLI --array-id-key).
   const configured = options.arrayIdKey ? String(options.arrayIdKey) : null;
   if (configured) return configured;
+
+  if (options.arrayIdentity === false) return null;
 
   for (const candidate of ['id', 'name']) {
     if (identityMap(before, candidate) && identityMap(after, candidate)) {

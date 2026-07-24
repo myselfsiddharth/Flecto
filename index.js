@@ -105,10 +105,13 @@ function stripUnsetCliOverrides(opts) {
 }
 
 function diffOptionsFromEffective(effective, ignorePaths) {
+  const arrayIdKey = effective.arrayIdKey || null;
   return {
     ignorePaths,
-    arrayIdKey: effective.arrayIdKey || null,
-    arrayIdentity: effective.arrayId !== false,
+    arrayIdKey,
+    // Explicit --array-id-key / arrayIdKey enables identity matching even when
+    // .flectorc sets arrayId:false (index escape hatch for auto-detect only).
+    arrayIdentity: arrayIdKey ? true : effective.arrayId !== false,
     arrayIgnoreOrder: Boolean(effective.arrayIgnoreOrder),
   };
 }
