@@ -11,12 +11,13 @@ const MAX_ENV_CHANGES_CHARS = 16_000;
 let alertQueue = Promise.resolve();
 
 function enqueue(fn) {
-  alertQueue = alertQueue
-    .then(async () => { await fn(); })
+  const result = alertQueue
+    .then(() => fn());
+  alertQueue = result
     .catch((err) => {
       renderWarn(`Alert pipeline error: ${err?.message ?? String(err)}`);
     });
-  return alertQueue;
+  return result;
 }
 
 /**
