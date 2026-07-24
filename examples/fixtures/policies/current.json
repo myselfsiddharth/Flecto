@@ -1,0 +1,17 @@
+{
+  "auth": {
+    "api_key": "rotated-key"
+  },
+  "features": {
+    "debug": true
+  },
+  "database": {
+    "pool_size": 20
+  },
+  "deployment": {
+    "rollout": {
+      "maxUnavailable": 3,
+      "strategy": "blue-green"
+    }
+  }
+}
