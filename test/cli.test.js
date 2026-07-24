@@ -454,3 +454,62 @@ test('ci mode reads git snapshot refs for paths with spaces', () => {
   }
 });
 
+test('policies list discovers built-ins and local overrides from cwd', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-policies-'));
+  const rootIndex = resolve(process.cwd(), 'index.js');
+
+  try {
+    const builtins = spawnSync(
+      process.execPath,
+      [rootIndex, 'policies', 'list', '--json'],
+      { cwd: dir, encoding: 'utf8' },
+    );
+    assert.equal(builtins.status, 0);
+    const builtinPacks = JSON.parse(builtins.stdout);
+    assert.deepEqual(
+      builtinPacks.map((pack) => pack.id),
+      ['default', 'strict-prod'],
+    );
+    assert.ok(builtinPacks.every((pack) => pack.source === 'builtin'));
+    assert.ok(builtinPacks.every((pack) => !pack.overridesBuiltin));
+
+    const policiesDir = join(dir, 'policies');
+    mkdirSync(policiesDir);
+    writeFileSync(
+      join(policiesDir, 'default.yaml'),
+      'id: default\nrules:\n  - id: local-default\n    severity: warn\n',
+      'utf8',
+    );
+    writeFileSync(
+      join(policiesDir, 'custom.json'),
+      JSON.stringify({ id: 'custom', rules: [{ id: 'custom-rule', severity: 'info' }] }),
+      'utf8',
+    );
+
+    const listed = spawnSync(
+      process.execPath,
+      [rootIndex, 'policies', 'list', '--json'],
+      { cwd: dir, encoding: 'utf8' },
+    );
+    assert.equal(listed.status, 0);
+    const packs = JSON.parse(listed.stdout);
+    const defaultPack = packs.find((pack) => pack.id === 'default');
+    const customPack = packs.find((pack) => pack.id === 'custom');
+    const strictProdPack = packs.find((pack) => pack.id === 'strict-prod');
+
+    assert.deepEqual(defaultPack, {
+      id: 'default',
+      sourcePath: join(policiesDir, 'default.yaml'),
+      source: 'local',
+      ruleCount: 1,
+      overridesBuiltin: true,
+    });
+    assert.equal(customPack.source, 'local');
+    assert.equal(customPack.ruleCount, 1);
+    assert.equal(customPack.overridesBuiltin, false);
+    assert.equal(strictProdPack.source, 'builtin');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
