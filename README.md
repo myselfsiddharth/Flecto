@@ -41,6 +41,9 @@ Line diffs lie about config. Formatting churn, key reorders, and “small” YAM
 - What looks risky (secrets, dangerous toggles, pool jumps)
 - What to do next (CI gate, webhook, shell command)
 
+See the [changelog and migration notes](CHANGELOG.md) for release history and
+upcoming v2.1 behavior changes.
+
 > Diff tools compare trees. **Flecto watches, scores risk, and alerts.**
 
 | Without Flecto | With Flecto |
@@ -185,6 +188,8 @@ flecto ci config/prod.yaml --profile prod --snapshot-ref HEAD~1
 Profile selection: `--profile` > `FLECTO_PROFILE` > defaults.  
 Custom packs: `policies/<id>.json`. Plugins: local ESM exporting `evaluate(changes, ctx)`.
 
+Authoring guides: [policy packs](docs/policy-packs.md) · [plugins](docs/plugins.md) · [plugin cookbook](docs/plugin-cookbook.md).
+
 ### Opt-in array identity matching
 
 ```bash
@@ -222,9 +227,12 @@ flecto watch config/prod.yaml \
 ```bash
 flecto watch config/prod.yaml --snapshot
 flecto watch config/prod.yaml --diff
+flecto history config/prod.yaml --limit 10
 ```
 
 Exit codes: `0` clean · `1` changes detected.
+
+`flecto history` stays local: it lists recent snapshots from `.flecto-snapshots/` with their timestamps and semantic change counts from the previous snapshot. Counts use the same ignore paths, array identity, and order settings as `flecto watch --diff` (CLI flags or `.flectorc`). Omit files to view all saved snapshot history.
 
 ---
 
