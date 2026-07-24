@@ -1,0 +1,73 @@
+name: Flecto CI
+description: Run Flecto semantic config checks with GitHub workflow annotations.
+
+inputs:
+  targets:
+    description: Whitespace-separated file paths or glob patterns to check.
+    required: false
+    default: config/**/*.{yaml,yml,json,toml,ini}
+  fail-on:
+    description: Comma-separated events that fail the check.
+    required: false
+    default: policy,error
+  policies:
+    description: >-
+      Comma-separated policy pack IDs. Omit to keep packs from .flectorc
+      (or Flecto's built-in default). Setting this overrides .flectorc packs.
+    required: false
+    default: ""
+  profile:
+    description: Optional .flectorc profile name.
+    required: false
+    default: ""
+  format:
+    description: Flecto output format.
+    required: false
+    default: github-annotations
+  snapshot-ref:
+    description: Git ref or snapshot file used as the baseline.
+    required: false
+    default: HEAD~1
+  node-version:
+    description: Node.js version used to run Flecto.
+    required: false
+    default: "20"
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Node.js
+      uses: actions/setup-node@v7
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - name: Run Flecto CI
+      shell: bash
+      env:
+        INPUT_TARGETS: ${{ inputs.targets }}
+        INPUT_FAIL_ON: ${{ inputs.fail-on }}
+        INPUT_POLICIES: ${{ inputs.policies }}
+        INPUT_PROFILE: ${{ inputs.profile }}
+        INPUT_FORMAT: ${{ inputs.format }}
+        INPUT_SNAPSHOT_REF: ${{ inputs.snapshot-ref }}
+      run: |
+        set -euo pipefail
+
+        # `read` consumes a single line; flatten newlines so multiline workflow
+        # inputs (common YAML `|` / `>` blocks) still expand every pattern.
+        read -r -a targets <<< "${INPUT_TARGETS//$'\n'/ }"
+        args=(ci "${targets[@]}" --format "$INPUT_FORMAT" --fail-on "$INPUT_FAIL_ON")
+
+        if [[ -n "$INPUT_POLICIES" ]]; then
+          args+=(--policies "$INPUT_POLICIES")
+        fi
+        if [[ -n "$INPUT_PROFILE" ]]; then
+          args+=(--profile "$INPUT_PROFILE")
+        fi
+        if [[ -n "$INPUT_SNAPSHOT_REF" ]]; then
+          args+=(--snapshot-ref "$INPUT_SNAPSHOT_REF")
+        fi
+
+        # Pin to the compatible major line. Pin to a full version for
+        # reproducible builds when consuming this action from another repo.
+        npx --yes flecto@2 "${args[@]}"
