@@ -1,5 +1,8 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { evaluatePolicies, highestSeverity, mergeFindings, loadPack } from '../src/policy.js';
 
 describe('policy engine', () => {
@@ -41,6 +44,97 @@ describe('policy engine', () => {
     assert.throws(() => loadPack('does-not-exist'), /Unknown policy pack/);
   });
 
+  test('derives an id for local packs that omit one', () => {
+    withLocalPack('missing-id', {
+      rules: [{ id: 'valid-rule', severity: 'warn' }],
+    }, (cwd) => {
+      assert.equal(loadPack('missing-id', cwd).id, 'missing-id');
+    });
+  });
+
+  test('rejects invalid rule severity with rule id and field', () => {
+    withLocalPack('bad-severity', {
+      id: 'bad-severity',
+      rules: [{ id: 'broken-rule', severity: 'critical' }],
+    }, (cwd) => {
+      assert.throws(
+        () => loadPack('bad-severity', cwd),
+        /rule "broken-rule"\.severity must be one of/,
+      );
+    });
+  });
+
+  test('rejects invalid rule when values', () => {
+    withLocalPack('bad-when', {
+      id: 'bad-when',
+      rules: [{ id: 'broken-rule', severity: 'warn', when: ['updated'] }],
+    }, (cwd) => {
+      assert.throws(
+        () => loadPack('bad-when', cwd),
+        /rule "broken-rule"\.when\[0\] must be one of/,
+      );
+    });
+  });
+
+  test('rejects unknown rule predicate fields', () => {
+    withLocalPack('unknown-field', {
+      id: 'unknown-field',
+      rules: [{ id: 'broken-rule', severity: 'warn', matches: { path: 'x' } }],
+    }, (cwd) => {
+      assert.throws(
+        () => loadPack('unknown-field', cwd),
+        /rule "broken-rule"\.matches is not allowed/,
+      );
+    });
+  });
+
+  test('rejects invalid match regular expressions on load', () => {
+    withLocalPack('invalid-regexp', {
+      id: 'invalid-regexp',
+      rules: [{ id: 'broken-rule', severity: 'warn', match: { path: '[' } }],
+    }, (cwd) => {
+      assert.throws(
+        () => loadPack('invalid-regexp', cwd),
+        /rule "broken-rule"\.match\.path must be a valid regular expression/,
+      );
+    });
+  });
+
+  test('rejects invalid match.pathFlags on load', () => {
+    withLocalPack('invalid-flags', {
+      id: 'invalid-flags',
+      rules: [{ id: 'broken-rule', severity: 'warn', match: { path: 'a', pathFlags: 'z' } }],
+    }, (cwd) => {
+      assert.throws(
+        () => loadPack('invalid-flags', cwd),
+        /rule "broken-rule"\.match\.pathFlags must be valid regular expression flags/,
+      );
+    });
+  });
+
+  test('accepts match.path patterns that require pathFlags', () => {
+    /** @type {{ id: string, severity: 'warn', match: { path: string, pathFlags: string } }[]} */
+    const rules = [
+      { id: 'unicode-prop', severity: 'warn', match: { path: String.raw`\p{L}+`, pathFlags: 'u' } },
+    ];
+    // Unicode sets need the `v` flag and fail path-only RegExp() construction.
+    // Skip on engines that do not support `v` yet (Node 18).
+    try {
+      new RegExp('[a--b]', 'v');
+      rules.push({ id: 'unicode-set', severity: 'warn', match: { path: '[a--b]', pathFlags: 'v' } });
+    } catch {
+      // ignore
+    }
+
+    withLocalPack('flagged-regexp', {
+      id: 'flagged-regexp',
+      rules,
+    }, (cwd) => {
+      const pack = loadPack('flagged-regexp', cwd);
+      assert.equal(pack.rules.length, rules.length);
+    });
+  });
+
   test('mergeFindings keeps highest severity for same id+path', () => {
     const merged = mergeFindings([
       { id: 'secret-key-changed', severity: 'warn', path: 'a.token', message: 'w', pack: 'a' },
@@ -61,3 +155,20 @@ describe('policy engine', () => {
     assert.equal(findings[0].pack, 'strict-prod');
   });
 });
+
+/**
+ * @param {string} id
+ * @param {unknown} pack
+ * @param {(cwd: string) => void} run
+ */
+function withLocalPack(id, pack, run) {
+  const cwd = mkdtempSync(join(tmpdir(), 'flecto-policy-'));
+  try {
+    const policies = join(cwd, 'policies');
+    mkdirSync(policies);
+    writeFileSync(join(policies, `${id}.json`), JSON.stringify(pack));
+    run(cwd);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+}
