@@ -39,6 +39,27 @@ flecto ci config/prod.yaml --policies default,deployment-safety
 
 The same `policies` array can be set in `.flectorc` defaults or profiles.
 
+## Fixture tests
+
+Use a fixture directory to test pack findings without writing test harness code:
+
+```bash
+flecto policies test examples/fixtures/policies
+```
+
+The directory must contain `flecto-policy-test.json`, plus a baseline and current config (by default, `baseline.json` and `current.json`). The config names active `policies` and optional `plugins`, then lists the expected finding triples:
+
+```json
+{
+  "policies": ["default", "deployment-review"],
+  "expected": [
+    { "id": "pool-size-jump", "severity": "warn", "path": "database.pool_size" }
+  ]
+}
+```
+
+The command succeeds only when every expected `{ id, severity, path }` matches and no unexpected finding is emitted. Mismatch output separates missing findings from unexpected findings. See the [plugin cookbook](plugin-cookbook.md) for a complete pack and plugin fixture.
+
 ## Rules and matchers
 
 Each rule produces one finding for every change that satisfies all specified conditions.
@@ -78,3 +99,5 @@ This matches the boolean `true` from JSON or YAML, but does **not** match the st
 Flecto records the rule id, severity, changed path, message, and pack id. When multiple packs or plugins return the same `id` and `path`, Flecto keeps the highest severity (`error` > `warn` > `info`).
 
 Use `--fail-on policy` to fail CI for any finding, or `--fail-on error` / `--fail-on warn` to set a severity threshold.
+
+The [plugin cookbook](plugin-cookbook.md) demonstrates how pack findings merge with async plugins using shared policy fixtures.

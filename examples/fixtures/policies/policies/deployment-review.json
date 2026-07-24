@@ -1,0 +1,17 @@
+{
+  "id": "deployment-review",
+  "rules": [
+    {
+      "id": "rollout-unavailability-increased",
+      "severity": "warn",
+      "when": ["changed"],
+      "match": {
+        "path": "^deployment\\.rollout\\.maxUnavailable$"
+      },
+      "numericJump": {
+        "minMultiple": 2
+      },
+      "messageTemplate": "Rollout maxUnavailable increased from {before} to {after}."
+    }
+  ]
+}

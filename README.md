@@ -185,7 +185,7 @@ flecto ci config/prod.yaml --profile prod --snapshot-ref HEAD~1
 Profile selection: `--profile` > `FLECTO_PROFILE` > defaults.  
 Custom packs: `policies/<id>.json`. Plugins: local ESM exporting `evaluate(changes, ctx)`.
 
-Authoring guides: [policy packs](docs/policy-packs.md) · [plugins](docs/plugins.md).
+Authoring guides: [policy packs](docs/policy-packs.md) · [plugins](docs/plugins.md) · [plugin cookbook](docs/plugin-cookbook.md).
 
 ### Opt-in array identity matching
 

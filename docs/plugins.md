@@ -81,3 +81,5 @@ Each returned item should have `id`, `severity`, `path`, and `message`:
 If `pack` is omitted, Flecto labels it `plugin:<configured path>`. Findings with the same `id` and `path` are deduplicated, keeping the highest severity.
 
 Plugin paths are resolved relative to Flecto's current working directory (unless absolute). Remote `http:` and `https:` plugin URLs are rejected. Let errors surface rather than swallowing them: a thrown plugin error fails the Flecto command.
+
+For async plugins, pack/plugin finding merging, fail-closed loading, and reusable fixtures, see the [plugin cookbook](plugin-cookbook.md).

@@ -23,6 +23,7 @@ import {
 import { fireAlerts } from './src/alerter.js';
 import { createEnvelope } from './src/envelope.js';
 import { evaluatePolicies, highestSeverity } from './src/policy.js';
+import { testPolicyFixture } from './src/policy-test.js';
 import {
   loadRcConfig,
   resolveEffectiveOptions,
@@ -493,6 +494,24 @@ program
   });
 
 program
+  .command('policies')
+  .description('Work with policy packs and plugins')
+  .command('test <fixtureDir>')
+  .description('Assert policy findings from a fixture directory')
+  .option('--config <name>', 'Fixture config file name', 'flecto-policy-test.json')
+  .action(async (fixtureDir, opts) => {
+    try {
+      const result = await testPolicyFixture(fixtureDir, { configName: opts.config });
+      console.log(chalk.green(
+        `✓ Policy fixture passed: ${result.fixtureDir} (${result.findings.length} findings)`,
+      ));
+    } catch (err) {
+      renderError(err.message);
+      process.exitCode = 1;
+    }
+  });
+
+program
   .command('init')
   .description('Create starter .flectorc configuration')
   .action(() => {
@@ -531,7 +550,7 @@ program
     }
   });
 
-program.parse(process.argv);
+await program.parseAsync(process.argv);
 
 if (!process.argv.slice(2).length) {
   program.help();
