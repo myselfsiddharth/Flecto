@@ -25,6 +25,47 @@ test('ci mode returns non-zero when fail-on changed', () => {
   assert.match(run.stdout, /"changes"/);
 });
 
+test('ci GitHub annotations escape workflow command properties and data', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-annotations-'));
+  const file = join(dir, 'config,100%.json');
+  const snapshot = join(dir, 'snapshot.json');
+  const plugin = join(dir, 'special-policy.mjs');
+  const rootIndex = resolve(process.cwd(), 'index.js');
+
+  try {
+    writeFileSync(file, JSON.stringify({ 'unsafe,path%\r\nmessage': 2 }), 'utf8');
+    writeFileSync(snapshot, JSON.stringify({ state: { 'unsafe,path%\r\nmessage': 1 } }), 'utf8');
+    writeFileSync(plugin, `export function evaluate() {
+  return [{
+    id: 'custom,title%',
+    severity: 'error',
+    path: 'policy,path%\\r\\nmessage',
+    message: 'message,body%\\r\\ntext',
+    pack: 'pack,name%',
+  }];
+}`, 'utf8');
+
+    const run = spawnSync(
+      process.execPath,
+      [rootIndex, 'ci', file, '--snapshot-ref', snapshot, '--format', 'github-annotations', '--plugins', plugin],
+      { encoding: 'utf8' },
+    );
+
+    assert.equal(run.status, 1);
+    assert.match(
+      run.stdout,
+      /::warning file=.*config%2C100%25\.json,title=flecto changed::unsafe,path%25%0D%0Amessage/,
+    );
+    assert.match(
+      run.stdout,
+      /::error file=.*config%2C100%25\.json,title=flecto policy custom%2Ctitle%25 \[pack%2Cname%25\]::policy,path%25%0D%0Amessage: message,body%25%0D%0Atext/,
+    );
+    assert.equal(run.stdout.match(/::(?:warning|error) /g)?.length, 2);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('ci fails closed when all targets are unsupported', () => {
   const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-empty-ci-'));
   const file = join(dir, 'nope.txt');
