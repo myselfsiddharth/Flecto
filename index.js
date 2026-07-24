@@ -418,7 +418,7 @@ program
                 });
               } catch (err) {
                 renderError(`policy evaluation failed: ${err.message}`);
-                if (String(effective.onAlertFailure) === 'exit') process.exitCode = 1;
+                process.exit(1);
               }
               renderPolicyFindings(policyFindings);
               if (effective.command || effective.webhook) {
