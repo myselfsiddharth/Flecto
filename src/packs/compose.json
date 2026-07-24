@@ -1,0 +1,45 @@
+{
+  "id": "compose",
+  "rules": [
+    {
+      "id": "compose-privileged-service",
+      "severity": "error",
+      "when": ["added", "changed"],
+      "match": {
+        "path": "(^|\\.)privileged$"
+      },
+      "afterEquals": true,
+      "message": "Docker Compose service is privileged. Remove privileged mode or document the required host access."
+    },
+    {
+      "id": "compose-host-network",
+      "severity": "error",
+      "when": ["added", "changed"],
+      "match": {
+        "path": "(^|\\.)network_mode$"
+      },
+      "afterIn": ["host", "host:"],
+      "message": "Docker Compose service uses the host network. Confirm the service needs to bypass network isolation."
+    },
+    {
+      "id": "compose-docker-socket-bind",
+      "severity": "error",
+      "when": ["added", "changed"],
+      "match": {
+        "path": "(^|\\.)volumes\\[\\d+\\](\\.source)?$"
+      },
+      "afterMatches": "^/var/run/docker\\.sock(?::|$)",
+      "message": "Docker Compose service mounts the Docker socket. This grants control over the host Docker daemon."
+    },
+    {
+      "id": "compose-sensitive-host-bind",
+      "severity": "warn",
+      "when": ["added", "changed"],
+      "match": {
+        "path": "(^|\\.)volumes\\[\\d+\\](\\.source)?$"
+      },
+      "afterMatches": "^/(?:etc|root|home|var/lib)(?::|$)",
+      "message": "Docker Compose service bind-mounts a sensitive host directory. Confirm the container needs this host access."
+    }
+  ]
+}

@@ -497,7 +497,7 @@ test('policies list discovers built-ins and local overrides from cwd', () => {
     const builtinPacks = JSON.parse(builtins.stdout);
     assert.deepEqual(
       builtinPacks.map((pack) => pack.id),
-      ['default', 'strict-prod'],
+      ['compose', 'default', 'node-runtime', 'strict-prod'],
     );
     assert.ok(builtinPacks.every((pack) => pack.source === 'builtin'));
     assert.ok(builtinPacks.every((pack) => !pack.overridesBuiltin));
