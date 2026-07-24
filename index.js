@@ -22,7 +22,7 @@ import {
 } from './src/renderer.js';
 import { fireAlerts } from './src/alerter.js';
 import { createEnvelope } from './src/envelope.js';
-import { evaluatePolicies, highestSeverity } from './src/policy.js';
+import { evaluatePolicies, highestSeverity, listPolicyPacks } from './src/policy.js';
 import { testPolicyFixture } from './src/policy-test.js';
 import {
   loadRcConfig,
@@ -646,23 +646,52 @@ program
     }
   });
 
-program
-  .command('policies')
-  .description('Work with policy packs and plugins')
-  .command('test <fixtureDir>')
-  .description('Assert policy findings from a fixture directory')
-  .option('--config <name>', 'Fixture config file name', 'flecto-policy-test.json')
-  .action(async (fixtureDir, opts) => {
-    try {
-      const result = await testPolicyFixture(fixtureDir, { configName: opts.config });
-      console.log(chalk.green(
-        `✓ Policy fixture passed: ${result.fixtureDir} (${result.findings.length} findings)`,
-      ));
-    } catch (err) {
-      renderError(err.message);
-      process.exitCode = 1;
-    }
-  });
+{
+  const policies = program
+    .command('policies')
+    .description('Work with policy packs and plugins');
+
+  policies
+    .command('test <fixtureDir>')
+    .description('Assert policy findings from a fixture directory')
+    .option('--config <name>', 'Fixture config file name', 'flecto-policy-test.json')
+    .action(async (fixtureDir, opts) => {
+      try {
+        const result = await testPolicyFixture(fixtureDir, { configName: opts.config });
+        console.log(chalk.green(
+          `✓ Policy fixture passed: ${result.fixtureDir} (${result.findings.length} findings)`,
+        ));
+      } catch (err) {
+        renderError(err.message);
+        process.exitCode = 1;
+      }
+    });
+
+  policies
+    .command('list')
+    .description('List built-in and local policy packs')
+    .option('--json', 'Output machine-readable JSON')
+    .action((opts) => {
+      try {
+        const packs = listPolicyPacks(process.cwd());
+        if (opts.json) {
+          console.log(JSON.stringify(packs, null, 2));
+          return;
+        }
+
+        console.log('Resolution order: policies/<id>.json, .yaml, .yml, then built-in packs.');
+        console.log('id\tsource path\trules\toverrides builtin');
+        for (const pack of packs) {
+          console.log(
+            `${pack.id}\t${pack.sourcePath}\t${pack.ruleCount}\t${pack.overridesBuiltin ? 'yes' : 'no'}`,
+          );
+        }
+      } catch (err) {
+        renderError(err.message);
+        process.exit(1);
+      }
+    });
+}
 
 program
   .command('init')
