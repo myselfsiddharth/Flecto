@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { program } from 'commander';
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync } from 'fs';
 import { resolve, relative, dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { createHash } from 'crypto';
@@ -22,7 +22,8 @@ import {
 } from './src/renderer.js';
 import { fireAlerts } from './src/alerter.js';
 import { createEnvelope } from './src/envelope.js';
-import { evaluatePolicies, highestSeverity } from './src/policy.js';
+import { evaluatePolicies, highestSeverity, listPolicyPacks } from './src/policy.js';
+import { testPolicyFixture } from './src/policy-test.js';
 import {
   loadRcConfig,
   resolveEffectiveOptions,
@@ -46,6 +47,90 @@ function snapshotIdForPath(absPath) {
 function snapshotPathForFile(absPath) {
   const id = snapshotIdForPath(absPath);
   return resolve(`${SNAPSHOT_DIR}/${id}.json`);
+}
+
+function snapshotHistoryPathForFile(absPath) {
+  const id = snapshotIdForPath(absPath);
+  let timestamp = Date.now();
+  let path = resolve(`${SNAPSHOT_DIR}/${id}.${timestamp}.json`);
+  while (existsSync(path)) {
+    timestamp += 1;
+    path = resolve(`${SNAPSHOT_DIR}/${id}.${timestamp}.json`);
+  }
+  return path;
+}
+
+function hasSnapshotHistoryForFile(absPath) {
+  if (!existsSync(SNAPSHOT_DIR)) return false;
+  const id = snapshotIdForPath(absPath);
+  return readdirSync(SNAPSHOT_DIR).some((name) => new RegExp(`^${id}\\.\\d+\\.json$`).test(name));
+}
+
+function preserveLegacySnapshotForHistory(absPath, snapshotPath) {
+  if (!existsSync(snapshotPath) || hasSnapshotHistoryForFile(absPath)) return;
+
+  const legacy = JSON.parse(readFileSync(snapshotPath, 'utf8'));
+  writeFileSync(
+    snapshotHistoryPathForFile(absPath),
+    JSON.stringify({
+      file: legacy.file ?? absPath,
+      state: legacy.state ?? legacy,
+      createdAt: legacy.createdAt ?? statSync(snapshotPath).mtime.toISOString(),
+    }, null, 2),
+    'utf8',
+  );
+}
+
+function readLocalSnapshotHistory() {
+  if (!existsSync(SNAPSHOT_DIR)) return [];
+
+  const entries = readdirSync(SNAPSHOT_DIR, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.json'));
+  const historyEntries = entries.filter((entry) => /^[a-f0-9]{16}\.\d+\.json$/.test(entry.name));
+  const historyIds = new Set(historyEntries.map((entry) => entry.name.slice(0, 16)));
+  const legacyEntries = entries.filter((entry) =>
+    /^[a-f0-9]{16}\.json$/.test(entry.name) && !historyIds.has(entry.name.slice(0, 16)));
+  const snapshotEntries = [...historyEntries, ...legacyEntries];
+
+  return snapshotEntries.map((entry) => {
+    const path = resolve(SNAPSHOT_DIR, entry.name);
+    const snapshot = JSON.parse(readFileSync(path, 'utf8'));
+    const state = snapshot?.state ?? snapshot;
+    if (typeof snapshot?.file !== 'string') {
+      throw new Error(`Invalid snapshot file: ${path}`);
+    }
+    return {
+      file: snapshot.file,
+      state,
+      createdAt: snapshot.createdAt ?? statSync(path).mtime.toISOString(),
+    };
+  });
+}
+
+function summarizeSnapshotHistory(snapshots, limit, diffOpts = {}) {
+  const byFile = new Map();
+  for (const snapshot of snapshots) {
+    const records = byFile.get(snapshot.file) ?? [];
+    records.push(snapshot);
+    byFile.set(snapshot.file, records);
+  }
+
+  const summaries = [];
+  for (const records of byFile.values()) {
+    records.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+    for (let index = 0; index < records.length; index += 1) {
+      summaries.push({
+        ...records[index],
+        changeCount: index === 0
+          ? 0
+          : diffTrees(records[index - 1].state, records[index].state, diffOpts).length,
+      });
+    }
+  }
+
+  return summaries
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+    .slice(0, limit);
 }
 
 function parseCsv(value) {
@@ -80,30 +165,20 @@ function validateInterval(interval) {
   }
 }
 
-function stripUnsetCliOverrides(opts) {
-  const out = { ...opts };
-  // Don't let Commander defaults wipe .flectorc values for optional features
-  for (const key of [
-    'policies',
-    'plugins',
-    'arrayIdKey',
-    'maskSecrets',
-    'maskSecretsWebhooks',
-    'arrayIgnoreOrder',
-    'snapshotRef',
-    'ignore',
-  ]) {
-    if (out[key] === undefined || out[key] === false || out[key] === null || out[key] === '') {
-      delete out[key];
-    }
-  }
-  return out;
+function stripUnsetCliOverrides(opts, command) {
+  return Object.fromEntries(
+    Object.entries(opts).filter(([key]) => command.getOptionValueSource(key) === 'cli'),
+  );
 }
 
 function diffOptionsFromEffective(effective, ignorePaths) {
+  const arrayIdKey = effective.arrayIdKey || null;
   return {
     ignorePaths,
-    arrayIdKey: effective.arrayIdKey || null,
+    arrayIdKey,
+    // Explicit --array-id-key / arrayIdKey enables identity matching even when
+    // .flectorc sets arrayId:false (index escape hatch for auto-detect only).
+    arrayIdentity: arrayIdKey ? true : effective.arrayId !== false,
     arrayIgnoreOrder: Boolean(effective.arrayIgnoreOrder),
   };
 }
@@ -174,6 +249,19 @@ function shouldFailFromChanges(events, failOn) {
   return false;
 }
 
+function escapeWorkflowCommandData(value) {
+  return String(value)
+    .replaceAll('%', '%25')
+    .replaceAll('\r', '%0D')
+    .replaceAll('\n', '%0A');
+}
+
+function escapeWorkflowCommandProperty(value) {
+  return escapeWorkflowCommandData(value)
+    .replaceAll(':', '%3A')
+    .replaceAll(',', '%2C');
+}
+
 function printCiOutput(results, format) {
   if (format === 'json') {
     console.log(JSON.stringify(results, null, 2));
@@ -190,13 +278,14 @@ function printCiOutput(results, format) {
       for (const event of result.envelope.changes) {
         const title = `flecto ${event.type}`;
         const detail = event.note ? `${event.path} (${event.note})` : event.path;
-        console.log(`::warning file=${result.file},title=${title}::${detail}`);
+        console.log(`::warning file=${escapeWorkflowCommandProperty(result.file)},title=${escapeWorkflowCommandProperty(title)}::${escapeWorkflowCommandData(detail)}`);
       }
       for (const finding of result.policies) {
         const level = finding.severity === 'error' ? 'error' : 'warning';
         const pack = finding.pack ? ` [${finding.pack}]` : '';
         const title = `flecto policy ${finding.id}${pack}`;
-        console.log(`::${level} file=${result.file},title=${title}::${finding.path}: ${finding.message}`);
+        const detail = `${finding.path}: ${finding.message}`;
+        console.log(`::${level} file=${escapeWorkflowCommandProperty(result.file)},title=${escapeWorkflowCommandProperty(title)}::${escapeWorkflowCommandData(detail)}`);
       }
     }
   }
@@ -227,18 +316,20 @@ program
   .option('--ignore <keys>', 'Comma-separated key paths to ignore (e.g. "updated_at,meta.ts")')
   .option('--policies <ids>', 'Comma-separated policy pack ids (default: default)')
   .option('--plugins <paths>', 'Comma-separated local ESM plugin paths')
-  .option('--array-id-key <key>', 'Diff arrays by this object identity key (opt-in)')
+  .option('--array-id-key <key>', 'Diff arrays by this object identity key')
+  .option('--no-array-id', 'Diff arrays by index instead of object identity')
   .option('--array-ignore-order', 'Treat array order as insignificant', false)
   .option('--mask-secrets', 'Mask secret-like values in human output', false)
   .option('--mask-secrets-webhooks', 'Also mask secrets in webhook payloads', false)
   .option('--snapshot', 'Save current state as baseline instead of watching')
   .option('--diff', 'Diff current file against saved baseline and exit')
-  .action(async (files, opts) => {
+  .option('--allow-empty', 'Allow --snapshot to succeed when nothing was written', false)
+  .action(async (files, opts, command) => {
     try {
       const { config } = loadRcConfig(process.cwd());
       const profile = resolveProfileName(opts.profile);
-      const effective = resolveEffectiveOptions(config, profile, stripUnsetCliOverrides(opts));
-      const { policies, plugins } = resolvePolicyOptions(effective);
+      const effective = resolveEffectiveOptions(config, profile, stripUnsetCliOverrides(opts, command));
+      const { policies, plugins, severityRemap } = resolvePolicyOptions(effective);
       const targets = (await resolveTargetFiles(files, config)).map((f) => resolve(f));
       if (targets.length === 0) {
         throw new Error('No files matched. Provide files or configure .flectorc files/include.');
@@ -256,12 +347,30 @@ program
 
       if (effective.snapshot) {
         mkdirSync(SNAPSHOT_DIR, { recursive: true });
+        let written = 0;
         for (const filepath of targets) {
-          if (!existsSync(filepath) || !isSupported(filepath)) continue;
+          if (!existsSync(filepath)) {
+            renderWarn(`Skipping missing file: ${filepath}`);
+            continue;
+          }
+          if (!isSupported(filepath)) {
+            renderWarn(`Skipping unsupported file: ${filepath}`);
+            continue;
+          }
           const state = parseFile(filepath);
           const snapshotPath = snapshotPathForFile(filepath);
-          writeFileSync(snapshotPath, JSON.stringify({ file: filepath, state }, null, 2), 'utf8');
+          preserveLegacySnapshotForHistory(filepath, snapshotPath);
+          const snapshot = { file: filepath, state, createdAt: new Date().toISOString() };
+          writeFileSync(snapshotPath, JSON.stringify(snapshot, null, 2), 'utf8');
+          writeFileSync(snapshotHistoryPathForFile(filepath), JSON.stringify(snapshot, null, 2), 'utf8');
           console.log(chalk.green(`✓ Snapshot saved: ${snapshotPath}`));
+          written += 1;
+        }
+        if (written === 0 && !effective.allowEmpty) {
+          throw new Error(
+            'No snapshots written — all targets were missing or unsupported.' +
+              ' Pass --allow-empty to allow an empty snapshot run.',
+          );
         }
         return;
       }
@@ -310,10 +419,11 @@ program
                   source: 'watch',
                   policies,
                   plugins,
+                  severityRemap,
                 });
               } catch (err) {
                 renderError(`policy evaluation failed: ${err.message}`);
-                if (String(effective.onAlertFailure) === 'exit') process.exitCode = 1;
+                process.exit(1);
               }
               renderPolicyFindings(policyFindings);
               if (effective.command || effective.webhook) {
@@ -379,6 +489,56 @@ program
   });
 
 program
+  .command('history [files...]')
+  .description('Summarize drift across local snapshots')
+  .option('-l, --limit <n>', 'Number of recent snapshots to show', '10')
+  .option('-p, --profile <name>', 'Use profile from .flectorc (else FLECTO_PROFILE)')
+  .option('--ignore <keys>', 'Comma-separated key paths to ignore (e.g. "updated_at,meta.ts")')
+  .option('--array-id-key <key>', 'Diff arrays by this object identity key (opt-in)')
+  .option('--array-ignore-order', 'Treat array order as insignificant', false)
+  .action(async (files, opts, command) => {
+    try {
+      const limit = Number.parseInt(String(opts.limit), 10);
+      if (!Number.isInteger(limit) || limit < 1) {
+        throw new Error('--limit must be a positive integer');
+      }
+
+      const { config } = loadRcConfig(process.cwd());
+      const profile = resolveProfileName(opts.profile);
+      const effective = resolveEffectiveOptions(config, profile, stripUnsetCliOverrides(opts, command));
+      const ignorePaths = parseCsv(effective.ignore);
+      const dOpts = diffOptionsFromEffective(effective, ignorePaths);
+
+      const allSnapshots = readLocalSnapshotHistory();
+      let snapshots = allSnapshots;
+      if (files.length > 0) {
+        const targets = new Set((await resolveTargetFiles(files, config)).map((file) => resolve(file)));
+        snapshots = snapshots.filter((snapshot) => targets.has(resolve(snapshot.file)));
+      }
+
+      const summaries = summarizeSnapshotHistory(snapshots, limit, dOpts);
+      if (summaries.length === 0) {
+        if (files.length > 0 && allSnapshots.length > 0) {
+          throw new Error(
+            'No local snapshots matched the given files. Omit files to view all saved snapshot history.',
+          );
+        }
+        throw new Error('No local snapshots found. Run "flecto watch <file> --snapshot" first.');
+      }
+
+      console.log(`Local snapshot history (${summaries.length} snapshots)`);
+      for (const snapshot of summaries) {
+        const file = relative(process.cwd(), snapshot.file) || snapshot.file;
+        const changes = `${snapshot.changeCount} change${snapshot.changeCount === 1 ? '' : 's'}`;
+        console.log(`${snapshot.createdAt}  ${file} — ${changes}`);
+      }
+    } catch (err) {
+      renderError(err.message);
+      process.exit(1);
+    }
+  });
+
+program
   .command('ci [files...]')
   .description('Run semantic diff in CI mode')
   .option('-p, --profile <name>', 'Use profile from .flectorc (else FLECTO_PROFILE)')
@@ -388,22 +548,24 @@ program
   .option('--ignore <keys>', 'Comma-separated key paths to ignore')
   .option('--policies <ids>', 'Comma-separated policy pack ids')
   .option('--plugins <paths>', 'Comma-separated local ESM plugin paths')
-  .option('--array-id-key <key>', 'Diff arrays by this object identity key (opt-in)')
+  .option('--array-id-key <key>', 'Diff arrays by this object identity key')
+  .option('--no-array-id', 'Diff arrays by index instead of object identity')
   .option('--array-ignore-order', 'Treat array order as insignificant', false)
   .option('--mask-secrets', 'Mask secret-like values in CI output', false)
-  .action(async (files, opts) => {
+  .option('--allow-empty', 'Allow CI to succeed when no files were diffed', false)
+  .action(async (files, opts, command) => {
     try {
       const { config } = loadRcConfig(process.cwd());
       const profile = resolveProfileName(opts.profile);
-      const effective = resolveEffectiveOptions(config, profile, stripUnsetCliOverrides(opts));
-      const { policies: packIds, plugins } = resolvePolicyOptions(effective);
+      const effective = resolveEffectiveOptions(config, profile, stripUnsetCliOverrides(opts, command));
+      const { policies: packIds, plugins, severityRemap } = resolvePolicyOptions(effective);
       const targets = (await resolveTargetFiles(files, config)).map((f) => resolve(f));
       if (targets.length === 0) {
         throw new Error('No files matched. Provide files or configure .flectorc files/include.');
       }
 
       const ignorePaths = parseCsv(effective.ignore);
-      const failOn = new Set(parseCsv(effective.failOn));
+      const failOn = new Set(parseCsv(effective.failOn ?? 'changed,policy,error'));
       const format = String(effective.format ?? 'json');
       if (!['json', 'ndjson', 'github-annotations'].includes(format)) {
         throw new Error('--format must be json, ndjson, or github-annotations');
@@ -414,9 +576,17 @@ program
       /** @type {any[]} */
       const results = [];
       let shouldFail = false;
+      let diffed = 0;
 
       for (const filepath of targets) {
-        if (!existsSync(filepath) || !isSupported(filepath)) continue;
+        if (!existsSync(filepath)) {
+          renderWarn(`Skipping missing file: ${filepath}`);
+          continue;
+        }
+        if (!isSupported(filepath)) {
+          renderWarn(`Skipping unsupported file: ${filepath}`);
+          continue;
+        }
         const after = parseFile(filepath);
         let before;
         try {
@@ -435,6 +605,7 @@ program
           source: 'ci',
           policies: packIds,
           plugins,
+          severityRemap,
         });
         const outboundChanges = maybeMaskChanges(events, maskSecrets);
         const envelope = createEnvelope({
@@ -444,10 +615,18 @@ program
           policies: policyFindings,
         });
         results.push({ file: filepath, envelope, policies: policyFindings });
+        diffed += 1;
 
         if (shouldFailFromChanges(events, failOn) || shouldFailFromPolicy(policyFindings, failOn)) {
           shouldFail = true;
         }
+      }
+
+      if (diffed === 0 && !effective.allowEmpty) {
+        throw new Error(
+          'No files were diffed — all targets were missing or unsupported.' +
+            ' Pass --allow-empty to allow an empty CI run.',
+        );
       }
 
       printCiOutput(results, format);
@@ -457,6 +636,53 @@ program
       process.exit(1);
     }
   });
+
+{
+  const policies = program
+    .command('policies')
+    .description('Work with policy packs and plugins');
+
+  policies
+    .command('test <fixtureDir>')
+    .description('Assert policy findings from a fixture directory')
+    .option('--config <name>', 'Fixture config file name', 'flecto-policy-test.json')
+    .action(async (fixtureDir, opts) => {
+      try {
+        const result = await testPolicyFixture(fixtureDir, { configName: opts.config });
+        console.log(chalk.green(
+          `✓ Policy fixture passed: ${result.fixtureDir} (${result.findings.length} findings)`,
+        ));
+      } catch (err) {
+        renderError(err.message);
+        process.exitCode = 1;
+      }
+    });
+
+  policies
+    .command('list')
+    .description('List built-in and local policy packs')
+    .option('--json', 'Output machine-readable JSON')
+    .action((opts) => {
+      try {
+        const packs = listPolicyPacks(process.cwd());
+        if (opts.json) {
+          console.log(JSON.stringify(packs, null, 2));
+          return;
+        }
+
+        console.log('Resolution order: policies/<id>.json, .yaml, .yml, then built-in packs.');
+        console.log('id\tsource path\trules\toverrides builtin');
+        for (const pack of packs) {
+          console.log(
+            `${pack.id}\t${pack.sourcePath}\t${pack.ruleCount}\t${pack.overridesBuiltin ? 'yes' : 'no'}`,
+          );
+        }
+      } catch (err) {
+        renderError(err.message);
+        process.exit(1);
+      }
+    });
+}
 
 program
   .command('init')
@@ -485,8 +711,13 @@ program
         exclude: config?.exclude ?? [],
       });
       renderInfo(`resolved files: ${files.length}`);
+      const [major, minor] = process.versions.node.split('.').map(Number);
+      if (major < 20 || (major === 20 && minor < 19)) {
+        throw new Error(`Node.js ${process.versions.node} is unsupported. Use Node.js >= 20.19.0.`);
+      }
+      renderInfo(`node: ${process.versions.node}`);
       if (typeof fetch !== 'function') {
-        throw new Error('Global fetch unavailable. Use Node.js >= 18.');
+        throw new Error('Global fetch unavailable. Use Node.js >= 20.19.0.');
       }
       renderInfo('fetch: available');
       renderInfo(`version: ${PKG.version}`);
@@ -497,7 +728,7 @@ program
     }
   });
 
-program.parse(process.argv);
+await program.parseAsync(process.argv);
 
 if (!process.argv.slice(2).length) {
   program.help();

@@ -107,10 +107,10 @@ describe('array identity diff', () => {
     assert.equal(events.length, 0);
   });
 
-  test('without arrayIdKey reorder looks like changes', () => {
+  test('arrayIdentity false makes reorder look like changes', () => {
     const before = { servers: [{ id: 'a', port: 1 }, { id: 'b', port: 2 }] };
     const after = { servers: [{ id: 'b', port: 2 }, { id: 'a', port: 1 }] };
-    const events = diffTrees(before, after);
+    const events = diffTrees(before, after, { arrayIdentity: false });
     assert.ok(events.length > 0);
   });
 });

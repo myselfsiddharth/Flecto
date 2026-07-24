@@ -19,7 +19,7 @@
         "path": "(debug|allow_insecure|disable_tls|skip_tls_verify)",
         "pathFlags": "i"
       },
-      "afterEquals": true,
+      "afterTruthy": true,
       "message": "Potentially dangerous toggle enabled."
     },
     {

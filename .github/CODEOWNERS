@@ -1,0 +1,6 @@
+* @myselfsiddharth
+
+# Prefer CODEOWNER review for governance and release automation
+/.github/ @myselfsiddharth
+/package.json @myselfsiddharth
+/schemas/ @myselfsiddharth

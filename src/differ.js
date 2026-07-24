@@ -138,7 +138,7 @@ function matchParts(patternParts, pathParts) {
  * @param {unknown} after
  * @param {string} path
  * @param {ChangeEvent[]} events  accumulator
- * @param {{ arrayIdKey?: string | null, arrayIgnoreOrder?: boolean }} [options]
+ * @param {{ arrayIdKey?: string | null, arrayIdentity?: boolean, arrayIgnoreOrder?: boolean }} [options]
  */
 function diffValues(before, after, path, events, options = {}) {
   const beforeIsObj = isPlainObject(before);
@@ -199,7 +199,7 @@ function diffValues(before, after, path, events, options = {}) {
  * @param {Record<string, unknown>} after
  * @param {string} basePath
  * @param {ChangeEvent[]} events
- * @param {{ arrayIdKey?: string | null, arrayIgnoreOrder?: boolean }} [options]
+ * @param {{ arrayIdKey?: string | null, arrayIdentity?: boolean, arrayIgnoreOrder?: boolean }} [options]
  */
 function diffObjects(before, after, basePath, events, options = {}) {
   const beforeKeys = new Set(Object.keys(before));
@@ -244,43 +244,90 @@ function identityKey(item, idKey) {
 }
 
 /**
- * Diff arrays by identity key when configured; otherwise by index.
+ * @param {unknown[]} items
+ * @param {string} idKey
+ * @returns {Map<string, { value: unknown, index: number }> | null}
+ */
+function identityMap(items, idKey) {
+  /** @type {Map<string, { value: unknown, index: number }>} */
+  const map = new Map();
+  for (let i = 0; i < items.length; i++) {
+    const key = identityKey(items[i], idKey);
+    if (key == null || map.has(key)) return null;
+    map.set(key, { value: items[i], index: i });
+  }
+  return map;
+}
+
+/**
+ * Select a configured identity key, or auto-detect id then name.
+ * @param {unknown[]} before
+ * @param {unknown[]} after
+ * @param {{ arrayIdKey?: string | null, arrayIdentity?: boolean }} options
+ * @returns {string | null}
+ */
+function resolveArrayIdKey(before, after, options) {
+  // An explicit key always enables identity matching, even when arrayIdentity
+  // is off (e.g. .flectorc arrayId:false plus CLI --array-id-key).
+  const configured = options.arrayIdKey ? String(options.arrayIdKey) : null;
+  if (configured) return configured;
+
+  if (options.arrayIdentity === false) return null;
+
+  for (const candidate of ['id', 'name']) {
+    if (identityMap(before, candidate) && identityMap(after, candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+/**
+ * Produce a stable JSON signature for order-insensitive array comparison.
+ * Object keys are sorted so their insertion order does not affect equality.
+ * Non-JSON values fall back to their identity, avoiding serialization errors.
+ * @param {unknown} value
+ * @returns {unknown}
+ */
+function arraySignature(value) {
+  try {
+    const canonicalize = (item) => {
+      if (Array.isArray(item)) return item.map(canonicalize);
+      if (
+        !isPlainObject(item) ||
+        (Object.getPrototypeOf(item) !== Object.prototype && Object.getPrototypeOf(item) !== null)
+      ) {
+        return item;
+      }
+      return Object.fromEntries(
+        Object.keys(item)
+          .sort()
+          .map((key) => [key, canonicalize(item[key])])
+      );
+    };
+    const signature = JSON.stringify(canonicalize(value));
+    return signature === undefined ? value : signature;
+  } catch {
+    return value;
+  }
+}
+
+/**
+ * Diff arrays by configured or auto-detected identity key; otherwise by index.
  * @param {unknown[]} before
  * @param {unknown[]} after
  * @param {string} basePath
  * @param {ChangeEvent[]} events
- * @param {{ arrayIdKey?: string | null, arrayIgnoreOrder?: boolean }} [options]
+ * @param {{ arrayIdKey?: string | null, arrayIdentity?: boolean, arrayIgnoreOrder?: boolean }} [options]
  */
 function diffArrays(before, after, basePath, events, options = {}) {
-  const idKey = options.arrayIdKey ? String(options.arrayIdKey) : null;
+  const idKey = resolveArrayIdKey(before, after, options);
 
   if (idKey) {
-    /** @type {Map<string, { value: unknown, index: number }>} */
-    const beforeMap = new Map();
-    /** @type {Map<string, { value: unknown, index: number }>} */
-    const afterMap = new Map();
-    let canUseIdentity = true;
+    const beforeMap = identityMap(before, idKey);
+    const afterMap = identityMap(after, idKey);
 
-    for (let i = 0; i < before.length; i++) {
-      const key = identityKey(before[i], idKey);
-      if (key == null || beforeMap.has(key)) {
-        canUseIdentity = false;
-        break;
-      }
-      beforeMap.set(key, { value: before[i], index: i });
-    }
-    if (canUseIdentity) {
-      for (let i = 0; i < after.length; i++) {
-        const key = identityKey(after[i], idKey);
-        if (key == null || afterMap.has(key)) {
-          canUseIdentity = false;
-          break;
-        }
-        afterMap.set(key, { value: after[i], index: i });
-      }
-    }
-
-    if (canUseIdentity) {
+    if (beforeMap && afterMap) {
       for (const [key, afterItem] of afterMap) {
         const childPath = `${basePath}[${JSON.stringify(key)}]`;
         if (!beforeMap.has(key)) {
@@ -301,19 +348,22 @@ function diffArrays(before, after, basePath, events, options = {}) {
 
   if (options.arrayIgnoreOrder) {
     // Order-insensitive without id key: multiset compare via JSON signatures
-    const beforeSigs = before.map((v) => JSON.stringify(v));
-    const afterSigs = after.map((v) => JSON.stringify(v));
-    /** @type {Map<string, number>} */
+    /** @type {Map<unknown, { count: number, value: unknown }>} */
     const counts = new Map();
-    for (const s of beforeSigs) counts.set(s, (counts.get(s) ?? 0) + 1);
-    for (const s of afterSigs) {
-      const n = counts.get(s) ?? 0;
-      if (n > 0) counts.set(s, n - 1);
-      else events.push({ type: 'added', path: `${basePath}[*]`, after: JSON.parse(s) });
+    for (const value of before) {
+      const signature = arraySignature(value);
+      const entry = counts.get(signature);
+      if (entry) entry.count++;
+      else counts.set(signature, { count: 1, value });
     }
-    for (const [s, n] of counts) {
-      for (let i = 0; i < n; i++) {
-        events.push({ type: 'removed', path: `${basePath}[*]`, before: JSON.parse(s) });
+    for (const value of after) {
+      const entry = counts.get(arraySignature(value));
+      if (entry?.count > 0) entry.count--;
+      else events.push({ type: 'added', path: `${basePath}[*]`, after: value });
+    }
+    for (const entry of counts.values()) {
+      for (let i = 0; i < entry.count; i++) {
+        events.push({ type: 'removed', path: `${basePath}[*]`, before: entry.value });
       }
     }
     return;
@@ -337,7 +387,7 @@ function diffArrays(before, after, basePath, events, options = {}) {
  * Accepts any JSON-like values at the root (object/array/scalar/null).
  * @param {unknown} before
  * @param {unknown} after
- * @param {{ ignorePaths?: string[], arrayIdKey?: string | null, arrayIgnoreOrder?: boolean }} [options]
+ * @param {{ ignorePaths?: string[], arrayIdKey?: string | null, arrayIdentity?: boolean, arrayIgnoreOrder?: boolean }} [options]
  * @returns {ChangeEvent[]}
  */
 export function diffTrees(before, after, options = {}) {
@@ -346,6 +396,7 @@ export function diffTrees(before, after, options = {}) {
   const ignore = makeIgnoreMatcher(options.ignorePaths ?? []);
   const diffOpts = {
     arrayIdKey: options.arrayIdKey ?? null,
+    arrayIdentity: options.arrayIdentity !== false,
     arrayIgnoreOrder: Boolean(options.arrayIgnoreOrder),
   };
 
