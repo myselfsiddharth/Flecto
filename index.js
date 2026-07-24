@@ -339,7 +339,7 @@ program
       const { config } = loadRcConfig(process.cwd());
       const profile = resolveProfileName(opts.profile);
       const effective = resolveEffectiveOptions(config, profile, stripUnsetCliOverrides(opts));
-      const { policies, plugins } = resolvePolicyOptions(effective);
+      const { policies, plugins, severityRemap } = resolvePolicyOptions(effective);
       const targets = (await resolveTargetFiles(files, config)).map((f) => resolve(f));
       if (targets.length === 0) {
         throw new Error('No files matched. Provide files or configure .flectorc files/include.');
@@ -429,6 +429,7 @@ program
                   source: 'watch',
                   policies,
                   plugins,
+                  severityRemap,
                 });
               } catch (err) {
                 renderError(`policy evaluation failed: ${err.message}`);
@@ -566,7 +567,7 @@ program
       const { config } = loadRcConfig(process.cwd());
       const profile = resolveProfileName(opts.profile);
       const effective = resolveEffectiveOptions(config, profile, stripUnsetCliOverrides(opts));
-      const { policies: packIds, plugins } = resolvePolicyOptions(effective);
+      const { policies: packIds, plugins, severityRemap } = resolvePolicyOptions(effective);
       const targets = (await resolveTargetFiles(files, config)).map((f) => resolve(f));
       if (targets.length === 0) {
         throw new Error('No files matched. Provide files or configure .flectorc files/include.');
@@ -613,6 +614,7 @@ program
           source: 'ci',
           policies: packIds,
           plugins,
+          severityRemap,
         });
         const outboundChanges = maybeMaskChanges(events, maskSecrets);
         const envelope = createEnvelope({

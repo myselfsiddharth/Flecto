@@ -32,7 +32,8 @@ import yaml from 'js-yaml';
  *   profile?: string | null,
  *   source?: 'watch' | 'ci' | 'diff',
  *   policies?: string[],
- *   plugins?: string[]
+ *   plugins?: string[],
+ *   severityRemap?: Record<string, PolicySeverity | 'off'>
  * }} PolicyEvalOptions
  */
 
@@ -272,17 +273,20 @@ function formatMessage(rule, change) {
 /**
  * @param {PolicyPack} pack
  * @param {import('./differ.js').ChangeEvent[]} changes
+ * @param {Record<string, PolicySeverity | 'off'>} [severityRemap]
  * @returns {PolicyFinding[]}
  */
-export function evaluatePack(pack, changes) {
+export function evaluatePack(pack, changes, severityRemap = {}) {
   /** @type {PolicyFinding[]} */
   const findings = [];
   for (const change of changes) {
     for (const rule of pack.rules ?? []) {
       if (!ruleMatches(rule, change)) continue;
+      const severity = severityRemap[String(rule.id)] ?? rule.severity ?? 'warn';
+      if (severity === 'off') continue;
       findings.push({
         id: String(rule.id),
-        severity: rule.severity ?? 'warn',
+        severity,
         path: change.path ?? '',
         message: formatMessage(rule, change),
         pack: pack.id,
@@ -364,12 +368,19 @@ export async function evaluatePolicies(changes, options = {}) {
   const cwd = options.cwd ?? process.cwd();
   const packIds = options.policies?.length ? options.policies : ['default'];
   const plugins = options.plugins ?? [];
+  const severityRemap = options.severityRemap ?? {};
 
   /** @type {PolicyFinding[]} */
   const findings = [];
-  for (const packId of packIds) {
-    const pack = loadPack(packId, cwd);
-    findings.push(...evaluatePack(pack, changes));
+  const packs = packIds.map((packId) => loadPack(packId, cwd));
+  const knownRuleIds = new Set(packs.flatMap((pack) => pack.rules.map((rule) => String(rule.id))));
+  for (const ruleId of Object.keys(severityRemap)) {
+    if (!knownRuleIds.has(ruleId)) {
+      console.warn(`Unknown policy rule id in severityRemap: "${ruleId}"`);
+    }
+  }
+  for (const pack of packs) {
+    findings.push(...evaluatePack(pack, changes, severityRemap));
   }
 
   const ctx = {
