@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'fs';
 import { join, resolve } from 'path';
 import { tmpdir } from 'os';
-import { spawnSync } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 import { createHash } from 'crypto';
 
 test('ci mode returns non-zero when fail-on changed', () => {
@@ -154,6 +154,54 @@ test('snapshot fails closed when nothing was written', () => {
     assert.match(run.stderr, /Skipping unsupported file/);
     assert.match(run.stderr, /Skipping missing file/);
     assert.equal(allowed.status, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('watch fails closed on policy pack errors regardless of alert failure setting', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-watch-policy-fail-'));
+  const file = join(dir, 'config.json');
+  const rootIndex = resolve(process.cwd(), 'index.js');
+  writeFileSync(file, JSON.stringify({ enabled: false }), 'utf8');
+
+  try {
+    const result = await new Promise((resolve, reject) => {
+      const child = spawn(
+        process.execPath,
+        [rootIndex, 'watch', file, '--polling', '--interval', '25', '--policies', 'missing-pack', '--on-alert-failure', 'warn'],
+        { cwd: dir },
+      );
+      let stdout = '';
+      let stderr = '';
+      let changed = false;
+      const timeout = setTimeout(() => {
+        child.kill();
+        reject(new Error('watch did not exit after the policy pack error'));
+      }, 5000);
+
+      child.stdout.on('data', (chunk) => {
+        stdout += chunk;
+        if (!changed && stdout.includes('flecto watching')) {
+          changed = true;
+          setTimeout(() => writeFileSync(file, JSON.stringify({ enabled: true }), 'utf8'), 100);
+        }
+      });
+      child.stderr.on('data', (chunk) => {
+        stderr += chunk;
+      });
+      child.on('error', (err) => {
+        clearTimeout(timeout);
+        reject(err);
+      });
+      child.on('close', (status) => {
+        clearTimeout(timeout);
+        resolve({ status, stderr });
+      });
+    });
+
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /policy evaluation failed: Unknown policy pack "missing-pack"/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
