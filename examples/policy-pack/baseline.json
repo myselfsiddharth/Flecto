@@ -1,0 +1,8 @@
+{
+  "state": {
+    "service": {
+      "public": false,
+      "replicas": 2
+    }
+  }
+}
