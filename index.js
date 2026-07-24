@@ -22,7 +22,7 @@ import {
 } from './src/renderer.js';
 import { fireAlerts } from './src/alerter.js';
 import { createEnvelope } from './src/envelope.js';
-import { evaluatePolicies, highestSeverity } from './src/policy.js';
+import { evaluatePolicies, highestSeverity, listPolicyPacks } from './src/policy.js';
 import { testPolicyFixture } from './src/policy-test.js';
 import {
   loadRcConfig,
@@ -165,28 +165,10 @@ function validateInterval(interval) {
   }
 }
 
-function stripUnsetCliOverrides(opts) {
-  const out = { ...opts };
-  // Don't let Commander defaults wipe .flectorc values for optional features
-  for (const key of [
-    'policies',
-    'plugins',
-    'arrayIdKey',
-    'maskSecrets',
-    'maskSecretsWebhooks',
-    'arrayIgnoreOrder',
-    'snapshotRef',
-    'ignore',
-    'allowEmpty',
-  ]) {
-    if (out[key] === undefined || out[key] === false || out[key] === null || out[key] === '') {
-      delete out[key];
-    }
-  }
-  // Commander negated options default to true. Preserve only an explicit disable
-  // so that the CLI default does not override .flectorc values.
-  if (out.arrayId !== false) delete out.arrayId;
-  return out;
+function stripUnsetCliOverrides(opts, command) {
+  return Object.fromEntries(
+    Object.entries(opts).filter(([key]) => command.getOptionValueSource(key) === 'cli'),
+  );
 }
 
 function diffOptionsFromEffective(effective, ignorePaths) {
@@ -342,11 +324,11 @@ program
   .option('--snapshot', 'Save current state as baseline instead of watching')
   .option('--diff', 'Diff current file against saved baseline and exit')
   .option('--allow-empty', 'Allow --snapshot to succeed when nothing was written', false)
-  .action(async (files, opts) => {
+  .action(async (files, opts, command) => {
     try {
       const { config } = loadRcConfig(process.cwd());
       const profile = resolveProfileName(opts.profile);
-      const effective = resolveEffectiveOptions(config, profile, stripUnsetCliOverrides(opts));
+      const effective = resolveEffectiveOptions(config, profile, stripUnsetCliOverrides(opts, command));
       const { policies, plugins, severityRemap } = resolvePolicyOptions(effective);
       const targets = (await resolveTargetFiles(files, config)).map((f) => resolve(f));
       if (targets.length === 0) {
@@ -441,7 +423,7 @@ program
                 });
               } catch (err) {
                 renderError(`policy evaluation failed: ${err.message}`);
-                if (String(effective.onAlertFailure) === 'exit') process.exitCode = 1;
+                process.exit(1);
               }
               renderPolicyFindings(policyFindings);
               if (effective.command || effective.webhook) {
@@ -514,7 +496,7 @@ program
   .option('--ignore <keys>', 'Comma-separated key paths to ignore (e.g. "updated_at,meta.ts")')
   .option('--array-id-key <key>', 'Diff arrays by this object identity key (opt-in)')
   .option('--array-ignore-order', 'Treat array order as insignificant', false)
-  .action(async (files, opts) => {
+  .action(async (files, opts, command) => {
     try {
       const limit = Number.parseInt(String(opts.limit), 10);
       if (!Number.isInteger(limit) || limit < 1) {
@@ -523,7 +505,7 @@ program
 
       const { config } = loadRcConfig(process.cwd());
       const profile = resolveProfileName(opts.profile);
-      const effective = resolveEffectiveOptions(config, profile, stripUnsetCliOverrides(opts));
+      const effective = resolveEffectiveOptions(config, profile, stripUnsetCliOverrides(opts, command));
       const ignorePaths = parseCsv(effective.ignore);
       const dOpts = diffOptionsFromEffective(effective, ignorePaths);
 
@@ -571,11 +553,11 @@ program
   .option('--array-ignore-order', 'Treat array order as insignificant', false)
   .option('--mask-secrets', 'Mask secret-like values in CI output', false)
   .option('--allow-empty', 'Allow CI to succeed when no files were diffed', false)
-  .action(async (files, opts) => {
+  .action(async (files, opts, command) => {
     try {
       const { config } = loadRcConfig(process.cwd());
       const profile = resolveProfileName(opts.profile);
-      const effective = resolveEffectiveOptions(config, profile, stripUnsetCliOverrides(opts));
+      const effective = resolveEffectiveOptions(config, profile, stripUnsetCliOverrides(opts, command));
       const { policies: packIds, plugins, severityRemap } = resolvePolicyOptions(effective);
       const targets = (await resolveTargetFiles(files, config)).map((f) => resolve(f));
       if (targets.length === 0) {
@@ -583,7 +565,7 @@ program
       }
 
       const ignorePaths = parseCsv(effective.ignore);
-      const failOn = new Set(parseCsv(effective.failOn));
+      const failOn = new Set(parseCsv(effective.failOn ?? 'changed,policy,error'));
       const format = String(effective.format ?? 'json');
       if (!['json', 'ndjson', 'github-annotations'].includes(format)) {
         throw new Error('--format must be json, ndjson, or github-annotations');
@@ -655,23 +637,52 @@ program
     }
   });
 
-program
-  .command('policies')
-  .description('Work with policy packs and plugins')
-  .command('test <fixtureDir>')
-  .description('Assert policy findings from a fixture directory')
-  .option('--config <name>', 'Fixture config file name', 'flecto-policy-test.json')
-  .action(async (fixtureDir, opts) => {
-    try {
-      const result = await testPolicyFixture(fixtureDir, { configName: opts.config });
-      console.log(chalk.green(
-        `✓ Policy fixture passed: ${result.fixtureDir} (${result.findings.length} findings)`,
-      ));
-    } catch (err) {
-      renderError(err.message);
-      process.exitCode = 1;
-    }
-  });
+{
+  const policies = program
+    .command('policies')
+    .description('Work with policy packs and plugins');
+
+  policies
+    .command('test <fixtureDir>')
+    .description('Assert policy findings from a fixture directory')
+    .option('--config <name>', 'Fixture config file name', 'flecto-policy-test.json')
+    .action(async (fixtureDir, opts) => {
+      try {
+        const result = await testPolicyFixture(fixtureDir, { configName: opts.config });
+        console.log(chalk.green(
+          `✓ Policy fixture passed: ${result.fixtureDir} (${result.findings.length} findings)`,
+        ));
+      } catch (err) {
+        renderError(err.message);
+        process.exitCode = 1;
+      }
+    });
+
+  policies
+    .command('list')
+    .description('List built-in and local policy packs')
+    .option('--json', 'Output machine-readable JSON')
+    .action((opts) => {
+      try {
+        const packs = listPolicyPacks(process.cwd());
+        if (opts.json) {
+          console.log(JSON.stringify(packs, null, 2));
+          return;
+        }
+
+        console.log('Resolution order: policies/<id>.json, .yaml, .yml, then built-in packs.');
+        console.log('id\tsource path\trules\toverrides builtin');
+        for (const pack of packs) {
+          console.log(
+            `${pack.id}\t${pack.sourcePath}\t${pack.ruleCount}\t${pack.overridesBuiltin ? 'yes' : 'no'}`,
+          );
+        }
+      } catch (err) {
+        renderError(err.message);
+        process.exit(1);
+      }
+    });
+}
 
 program
   .command('init')
@@ -700,8 +711,13 @@ program
         exclude: config?.exclude ?? [],
       });
       renderInfo(`resolved files: ${files.length}`);
+      const [major, minor] = process.versions.node.split('.').map(Number);
+      if (major < 20 || (major === 20 && minor < 19)) {
+        throw new Error(`Node.js ${process.versions.node} is unsupported. Use Node.js >= 20.19.0.`);
+      }
+      renderInfo(`node: ${process.versions.node}`);
       if (typeof fetch !== 'function') {
-        throw new Error('Global fetch unavailable. Use Node.js >= 18.');
+        throw new Error('Global fetch unavailable. Use Node.js >= 20.19.0.');
       }
       renderInfo('fetch: available');
       renderInfo(`version: ${PKG.version}`);

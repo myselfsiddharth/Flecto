@@ -1,0 +1,44 @@
+{
+  "id": "node-runtime",
+  "rules": [
+    {
+      "id": "node-runtime-engine-removed",
+      "severity": "warn",
+      "when": ["removed"],
+      "match": {
+        "pathEquals": "engines.node"
+      },
+      "message": "Node.js engine requirement was removed. Keep a supported runtime floor to avoid accidental runtime downgrades."
+    },
+    {
+      "id": "node-runtime-tls-verification-disabled",
+      "severity": "error",
+      "when": ["added", "changed"],
+      "match": {
+        "path": "(^|\\.)NODE_TLS_REJECT_UNAUTHORIZED$"
+      },
+      "afterIn": [0, "0"],
+      "message": "NODE_TLS_REJECT_UNAUTHORIZED disables TLS certificate verification. Remove it and fix the certificate chain."
+    },
+    {
+      "id": "node-runtime-debug-enabled",
+      "severity": "warn",
+      "when": ["added", "changed"],
+      "match": {
+        "path": "(^|\\.)NODE_DEBUG$"
+      },
+      "afterMatches": ".+",
+      "message": "NODE_DEBUG is enabled. Confirm verbose runtime debugging is appropriate for this environment."
+    },
+    {
+      "id": "node-runtime-inspector-enabled",
+      "severity": "warn",
+      "when": ["added", "changed"],
+      "match": {
+        "path": "(^|\\.)NODE_OPTIONS$"
+      },
+      "afterMatches": "(^|\\s)--inspect(?:-brk)?(?:=|\\s|$)",
+      "message": "Node.js inspector is enabled through NODE_OPTIONS. Avoid exposing debug ports outside trusted development environments."
+    }
+  ]
+}

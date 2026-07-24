@@ -12,7 +12,7 @@ npm test
 node index.js doctor
 ```
 
-Node.js **18+** is required.
+Node.js **20.19.0+** is required.
 
 ## How we work
 

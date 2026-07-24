@@ -154,7 +154,11 @@ export function maskSensitiveValue(value, path = '') {
   if (Array.isArray(value)) {
     return value.map((v, i) => maskSensitiveValue(v, `${path}[${i}]`));
   }
-  if (value && typeof value === 'object') {
+  if (
+    value
+    && typeof value === 'object'
+    && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null)
+  ) {
     /** @type {Record<string, unknown>} */
     const out = {};
     for (const [k, v] of Object.entries(value)) {
@@ -171,10 +175,9 @@ export function maskSensitiveValue(value, path = '') {
  * @returns {import('./differ.js').ChangeEvent}
  */
 export function maskChangeEvent(event) {
-  if (!SECRET_PATH_RE.test(event.path ?? '')) return event;
   return {
     ...event,
-    before: event.before === undefined ? undefined : '***',
-    after: event.after === undefined ? undefined : '***',
+    before: event.before === undefined ? undefined : maskSensitiveValue(event.before, event.path),
+    after: event.after === undefined ? undefined : maskSensitiveValue(event.after, event.path),
   };
 }

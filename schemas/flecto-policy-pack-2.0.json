@@ -30,10 +30,18 @@
           "additionalProperties": false,
           "properties": {
             "path": { "type": "string" },
-            "pathFlags": { "type": "string" }
+            "pathFlags": { "type": "string" },
+            "pathEquals": { "type": "string" },
+            "pathPrefix": { "type": "string" }
           }
         },
+        "beforeEquals": true,
         "afterEquals": true,
+        "beforeIn": { "type": "array" },
+        "afterIn": { "type": "array" },
+        "beforeTruthy": { "const": true },
+        "afterTruthy": { "const": true },
+        "afterMatches": { "type": "string" },
         "numericJump": {
           "type": "object",
           "additionalProperties": false,
@@ -45,8 +53,71 @@
             }
           }
         },
+        "numericDelta": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["min"],
+          "properties": {
+            "min": {
+              "type": "number",
+              "minimum": 0
+            }
+          }
+        },
+        "allOf": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/clause" }
+        },
+        "anyOf": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/clause" }
+        },
         "message": { "type": "string" },
         "messageTemplate": { "type": "string" }
+      }
+    },
+    "clause": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "match": { "$ref": "#/$defs/match" },
+        "beforeEquals": true,
+        "afterEquals": true,
+        "beforeIn": { "type": "array" },
+        "afterIn": { "type": "array" },
+        "beforeTruthy": { "const": true },
+        "afterTruthy": { "const": true },
+        "afterMatches": { "type": "string" },
+        "numericJump": { "$ref": "#/$defs/numericJump" },
+        "numericDelta": { "$ref": "#/$defs/numericDelta" }
+      }
+    },
+    "match": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "path": { "type": "string" },
+        "pathFlags": { "type": "string" },
+        "pathEquals": { "type": "string" },
+        "pathPrefix": { "type": "string" }
+      }
+    },
+    "numericJump": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["minMultiple"],
+      "properties": {
+        "minMultiple": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+    "numericDelta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["min"],
+      "properties": {
+        "min": { "type": "number", "minimum": 0 }
       }
     }
   }

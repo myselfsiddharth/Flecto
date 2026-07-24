@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'fs';
 import { join, resolve } from 'path';
 import { tmpdir } from 'os';
-import { spawnSync } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 import { createHash } from 'crypto';
 
 test('ci mode returns non-zero when fail-on changed', () => {
@@ -23,6 +23,35 @@ test('ci mode returns non-zero when fail-on changed', () => {
   rmSync(dir, { recursive: true, force: true });
   assert.equal(run.status, 1);
   assert.match(run.stdout, /"changes"/);
+});
+
+test('ci profile values override Commander defaults', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-profile-'));
+  const file = join(dir, 'config.json');
+  const snapshot = join(dir, 'snapshot.json');
+  const rc = join(dir, '.flectorc.json');
+  const rootIndex = resolve(process.cwd(), 'index.js');
+
+  try {
+    writeFileSync(file, JSON.stringify({ a: 2 }, null, 2), 'utf8');
+    writeFileSync(snapshot, JSON.stringify({ state: { a: 1 } }, null, 2), 'utf8');
+    writeFileSync(rc, JSON.stringify({
+      profiles: {
+        regression: { format: 'ndjson', failOn: '' },
+      },
+    }), 'utf8');
+
+    const run = spawnSync(
+      process.execPath,
+      [rootIndex, 'ci', file, '--profile', 'regression', '--snapshot-ref', snapshot],
+      { cwd: dir, encoding: 'utf8' }
+    );
+
+    assert.equal(run.status, 0);
+    assert.equal(JSON.parse(run.stdout).envelope.changes.length, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('ci applies profile severityRemap before fail-on checks', () => {
@@ -154,6 +183,54 @@ test('snapshot fails closed when nothing was written', () => {
     assert.match(run.stderr, /Skipping unsupported file/);
     assert.match(run.stderr, /Skipping missing file/);
     assert.equal(allowed.status, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('watch fails closed on policy pack errors regardless of alert failure setting', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-watch-policy-fail-'));
+  const file = join(dir, 'config.json');
+  const rootIndex = resolve(process.cwd(), 'index.js');
+  writeFileSync(file, JSON.stringify({ enabled: false }), 'utf8');
+
+  try {
+    const result = await new Promise((resolve, reject) => {
+      const child = spawn(
+        process.execPath,
+        [rootIndex, 'watch', file, '--polling', '--interval', '25', '--policies', 'missing-pack', '--on-alert-failure', 'warn'],
+        { cwd: dir },
+      );
+      let stdout = '';
+      let stderr = '';
+      let changed = false;
+      const timeout = setTimeout(() => {
+        child.kill();
+        reject(new Error('watch did not exit after the policy pack error'));
+      }, 5000);
+
+      child.stdout.on('data', (chunk) => {
+        stdout += chunk;
+        if (!changed && stdout.includes('flecto watching')) {
+          changed = true;
+          setTimeout(() => writeFileSync(file, JSON.stringify({ enabled: true }), 'utf8'), 100);
+        }
+      });
+      child.stderr.on('data', (chunk) => {
+        stderr += chunk;
+      });
+      child.on('error', (err) => {
+        clearTimeout(timeout);
+        reject(err);
+      });
+      child.on('close', (status) => {
+        clearTimeout(timeout);
+        resolve({ status, stderr });
+      });
+    });
+
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /policy evaluation failed: Unknown policy pack "missing-pack"/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -486,6 +563,65 @@ test('ci --array-id-key overrides .flectorc arrayId false', () => {
     );
     assert.equal(withKey.status, 1);
     assert.equal(JSON.parse(withKey.stdout)[0].envelope.changes[0].path, 'services["api"].port');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('policies list discovers built-ins and local overrides from cwd', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-policies-'));
+  const rootIndex = resolve(process.cwd(), 'index.js');
+
+  try {
+    const builtins = spawnSync(
+      process.execPath,
+      [rootIndex, 'policies', 'list', '--json'],
+      { cwd: dir, encoding: 'utf8' },
+    );
+    assert.equal(builtins.status, 0);
+    const builtinPacks = JSON.parse(builtins.stdout);
+    assert.deepEqual(
+      builtinPacks.map((pack) => pack.id),
+      ['compose', 'default', 'node-runtime', 'strict-prod'],
+    );
+    assert.ok(builtinPacks.every((pack) => pack.source === 'builtin'));
+    assert.ok(builtinPacks.every((pack) => !pack.overridesBuiltin));
+
+    const policiesDir = join(dir, 'policies');
+    mkdirSync(policiesDir);
+    writeFileSync(
+      join(policiesDir, 'default.yaml'),
+      'id: default\nrules:\n  - id: local-default\n    severity: warn\n',
+      'utf8',
+    );
+    writeFileSync(
+      join(policiesDir, 'custom.json'),
+      JSON.stringify({ id: 'custom', rules: [{ id: 'custom-rule', severity: 'info' }] }),
+      'utf8',
+    );
+
+    const listed = spawnSync(
+      process.execPath,
+      [rootIndex, 'policies', 'list', '--json'],
+      { cwd: dir, encoding: 'utf8' },
+    );
+    assert.equal(listed.status, 0);
+    const packs = JSON.parse(listed.stdout);
+    const defaultPack = packs.find((pack) => pack.id === 'default');
+    const customPack = packs.find((pack) => pack.id === 'custom');
+    const strictProdPack = packs.find((pack) => pack.id === 'strict-prod');
+
+    assert.deepEqual(defaultPack, {
+      id: 'default',
+      sourcePath: join(policiesDir, 'default.yaml'),
+      source: 'local',
+      ruleCount: 1,
+      overridesBuiltin: true,
+    });
+    assert.equal(customPack.source, 'local');
+    assert.equal(customPack.ruleCount, 1);
+    assert.equal(customPack.overridesBuiltin, false);
+    assert.equal(strictProdPack.source, 'builtin');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

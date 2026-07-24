@@ -75,6 +75,30 @@ describe('diffTrees', () => {
     assertEvent(events, { type: 'changed', path: 'items[1]', before: 2, after: 99 });
   });
 
+  test('arrayIgnoreOrder ignores object key ordering', () => {
+    const before = { items: [{ x: 1, y: 2 }] };
+    const after = { items: [{ y: 2, x: 1 }] };
+    const events = diffTrees(before, after, { arrayIgnoreOrder: true });
+    assert.equal(events.length, 0);
+  });
+
+  test('arrayIgnoreOrder distinguishes Date values', () => {
+    const before = { items: [new Date('2024-01-01T00:00:00.000Z')] };
+    const after = { items: [new Date('2024-01-02T00:00:00.000Z')] };
+    const events = diffTrees(before, after, { arrayIgnoreOrder: true });
+    assert.equal(events.length, 2);
+    assertEvent(events, { type: 'added', path: 'items[*]', after: after.items[0] });
+    assertEvent(events, { type: 'removed', path: 'items[*]', before: before.items[0] });
+  });
+
+  test('arrayIgnoreOrder handles undefined array values', () => {
+    const events = diffTrees({ items: [undefined] }, { items: [] }, { arrayIgnoreOrder: true });
+    assert.equal(events.length, 1);
+    assert.equal(events[0].type, 'removed');
+    assert.equal(events[0].path, 'items[*]');
+    assert.equal(events[0].before, undefined);
+  });
+
   test('type change: string → number', () => {
     const events = diffTrees({ timeout: '30' }, { timeout: 30 });
     assert.equal(events.length, 1);
