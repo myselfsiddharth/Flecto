@@ -165,25 +165,10 @@ function validateInterval(interval) {
   }
 }
 
-function stripUnsetCliOverrides(opts) {
-  const out = { ...opts };
-  // Don't let Commander defaults wipe .flectorc values for optional features
-  for (const key of [
-    'policies',
-    'plugins',
-    'arrayIdKey',
-    'maskSecrets',
-    'maskSecretsWebhooks',
-    'arrayIgnoreOrder',
-    'snapshotRef',
-    'ignore',
-    'allowEmpty',
-  ]) {
-    if (out[key] === undefined || out[key] === false || out[key] === null || out[key] === '') {
-      delete out[key];
-    }
-  }
-  return out;
+function stripUnsetCliOverrides(opts, command) {
+  return Object.fromEntries(
+    Object.entries(opts).filter(([key]) => command.getOptionValueSource(key) === 'cli'),
+  );
 }
 
 function diffOptionsFromEffective(effective, ignorePaths) {
@@ -334,11 +319,11 @@ program
   .option('--snapshot', 'Save current state as baseline instead of watching')
   .option('--diff', 'Diff current file against saved baseline and exit')
   .option('--allow-empty', 'Allow --snapshot to succeed when nothing was written', false)
-  .action(async (files, opts) => {
+  .action(async (files, opts, command) => {
     try {
       const { config } = loadRcConfig(process.cwd());
       const profile = resolveProfileName(opts.profile);
-      const effective = resolveEffectiveOptions(config, profile, stripUnsetCliOverrides(opts));
+      const effective = resolveEffectiveOptions(config, profile, stripUnsetCliOverrides(opts, command));
       const { policies, plugins, severityRemap } = resolvePolicyOptions(effective);
       const targets = (await resolveTargetFiles(files, config)).map((f) => resolve(f));
       if (targets.length === 0) {
@@ -506,7 +491,7 @@ program
   .option('--ignore <keys>', 'Comma-separated key paths to ignore (e.g. "updated_at,meta.ts")')
   .option('--array-id-key <key>', 'Diff arrays by this object identity key (opt-in)')
   .option('--array-ignore-order', 'Treat array order as insignificant', false)
-  .action(async (files, opts) => {
+  .action(async (files, opts, command) => {
     try {
       const limit = Number.parseInt(String(opts.limit), 10);
       if (!Number.isInteger(limit) || limit < 1) {
@@ -515,7 +500,7 @@ program
 
       const { config } = loadRcConfig(process.cwd());
       const profile = resolveProfileName(opts.profile);
-      const effective = resolveEffectiveOptions(config, profile, stripUnsetCliOverrides(opts));
+      const effective = resolveEffectiveOptions(config, profile, stripUnsetCliOverrides(opts, command));
       const ignorePaths = parseCsv(effective.ignore);
       const dOpts = diffOptionsFromEffective(effective, ignorePaths);
 
@@ -562,11 +547,11 @@ program
   .option('--array-ignore-order', 'Treat array order as insignificant', false)
   .option('--mask-secrets', 'Mask secret-like values in CI output', false)
   .option('--allow-empty', 'Allow CI to succeed when no files were diffed', false)
-  .action(async (files, opts) => {
+  .action(async (files, opts, command) => {
     try {
       const { config } = loadRcConfig(process.cwd());
       const profile = resolveProfileName(opts.profile);
-      const effective = resolveEffectiveOptions(config, profile, stripUnsetCliOverrides(opts));
+      const effective = resolveEffectiveOptions(config, profile, stripUnsetCliOverrides(opts, command));
       const { policies: packIds, plugins, severityRemap } = resolvePolicyOptions(effective);
       const targets = (await resolveTargetFiles(files, config)).map((f) => resolve(f));
       if (targets.length === 0) {
@@ -574,7 +559,7 @@ program
       }
 
       const ignorePaths = parseCsv(effective.ignore);
-      const failOn = new Set(parseCsv(effective.failOn));
+      const failOn = new Set(parseCsv(effective.failOn ?? 'changed,policy,error'));
       const format = String(effective.format ?? 'json');
       if (!['json', 'ndjson', 'github-annotations'].includes(format)) {
         throw new Error('--format must be json, ndjson, or github-annotations');
