@@ -7,6 +7,14 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- `--mask-secrets` now redacts nested secret values in terminal output
+  (`watch` and `watch --diff`), matching the masking already applied to
+  webhook/CI payloads. Previously a change on a benign-looking path such as
+  `database` printed its `password` / `api_key` children in the clear.
+  ([#24])
+
 ## [2.1.0] - 2026-07-24
 
 ### Added
