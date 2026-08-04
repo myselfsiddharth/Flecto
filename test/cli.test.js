@@ -627,3 +627,37 @@ test('policies list discovers built-ins and local overrides from cwd', () => {
   }
 });
 
+
+test('watch --diff --mask-secrets redacts nested secrets in terminal output', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-mask-'));
+  const file = join(dir, 'config.json');
+  const rootIndex = resolve(process.cwd(), 'index.js');
+
+  try {
+    writeFileSync(file, JSON.stringify({ service: 'api' }, null, 2), 'utf8');
+    const snapshot = spawnSync(
+      process.execPath,
+      [rootIndex, 'watch', file, '--snapshot'],
+      { cwd: dir, encoding: 'utf8' },
+    );
+    assert.equal(snapshot.status, 0);
+
+    writeFileSync(file, JSON.stringify({
+      service: 'api',
+      database: { host: 'db.internal.test', password: 'hunter2' },
+    }, null, 2), 'utf8');
+
+    const diff = spawnSync(
+      process.execPath,
+      [rootIndex, 'watch', file, '--diff', '--mask-secrets'],
+      { cwd: dir, encoding: 'utf8' },
+    );
+
+    assert.equal(diff.status, 1);
+    assert.doesNotMatch(diff.stdout, /hunter2/);
+    assert.match(diff.stdout, /"password":"\*\*\*"/);
+    assert.match(diff.stdout, /db\.internal\.test/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

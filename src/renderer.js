@@ -10,12 +10,19 @@ const SECRET_PATH_RE = /(secret|token|password|api[_-]?key|private[_-]?key|crede
  */
 function fmt(v, opts = {}) {
   if (v === undefined) return '';
-  if (opts.maskSecrets && opts.path && SECRET_PATH_RE.test(opts.path)) {
-    return chalk.dim('"***"');
+  let value = v;
+  if (opts.maskSecrets) {
+    if (opts.path && SECRET_PATH_RE.test(opts.path)) {
+      return chalk.dim('"***"');
+    }
+    // The changed path itself can look benign while the value carries secrets,
+    // e.g. "database" holding { password }. Redact those the same way the
+    // webhook/CI payloads do.
+    value = maskSensitiveValue(v, opts.path ?? '');
   }
-  if (typeof v === 'string') return JSON.stringify(v);
-  if (typeof v === 'object' && v !== null) return JSON.stringify(v);
-  return String(v);
+  if (typeof value === 'string') return JSON.stringify(value);
+  if (typeof value === 'object' && value !== null) return JSON.stringify(value);
+  return String(value);
 }
 
 /**
