@@ -18,7 +18,7 @@ function captureStdout(fn) {
     console.log = original;
   }
   // Strip ANSI styling so assertions do not depend on chalk's color support.
-  return lines.join('\n').replaceAll(/\[[0-9;]*m/g, '');
+  return lines.join('\n').replaceAll(/\u001b\[[0-9;]*m/gu, '');
 }
 
 test('maskChangeEvent recursively masks secrets in parent object changes', () => {
