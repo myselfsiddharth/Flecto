@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'fs';
+import { mkdirSync, mkdtempSync, writeFileSync, rmSync, realpathSync } from 'fs';
 import { join, resolve } from 'path';
 import { tmpdir } from 'os';
 import { spawn, spawnSync } from 'child_process';
@@ -483,6 +483,51 @@ test('ci mode reads git snapshot refs for paths with spaces', () => {
   }
 });
 
+test('ci mode reads git snapshot refs when run from a subdirectory', () => {
+  const gitVersion = spawnSync('git', ['--version'], { encoding: 'utf8' });
+  if (gitVersion.status !== 0) {
+    return;
+  }
+
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-git-subdir-'));
+  const nested = join(dir, 'services', 'api');
+  const file = join(nested, 'config.json');
+  const rootIndex = resolve(process.cwd(), 'index.js');
+
+  try {
+    mkdirSync(nested, { recursive: true });
+    writeFileSync(file, JSON.stringify({ limit: 1 }, null, 2), 'utf8');
+
+    assert.equal(spawnSync('git', ['init'], { cwd: dir, encoding: 'utf8' }).status, 0);
+    assert.equal(spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir, encoding: 'utf8' }).status, 0);
+    assert.equal(spawnSync('git', ['config', 'user.name', 'Flecto Test'], { cwd: dir, encoding: 'utf8' }).status, 0);
+    assert.equal(spawnSync('git', ['add', '.'], { cwd: dir, encoding: 'utf8' }).status, 0);
+    assert.equal(spawnSync('git', ['commit', '-m', 'baseline'], { cwd: dir, encoding: 'utf8' }).status, 0);
+
+    writeFileSync(file, JSON.stringify({ limit: 2 }, null, 2), 'utf8');
+
+    // git show <rev>:<path> resolves <path> from the repository root, so this
+    // must not be diffed against a cwd-relative path.
+    const run = spawnSync(
+      process.execPath,
+      [rootIndex, 'ci', 'config.json', '--snapshot-ref', 'HEAD', '--format', 'json', '--fail-on', 'changed'],
+      { cwd: nested, encoding: 'utf8' }
+    );
+
+    assert.equal(run.status, 1);
+    const results = JSON.parse(run.stdout);
+    assert.equal(results[0].envelope.changes.length, 1);
+    assert.deepEqual(results[0].envelope.changes[0], {
+      type: 'changed',
+      path: 'limit',
+      before: 1,
+      after: 2,
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('ci array identity supports auto-detection, custom keys, and index escape hatch', () => {
   const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-array-id-'));
   const file = join(dir, 'config.json');
@@ -569,7 +614,9 @@ test('ci --array-id-key overrides .flectorc arrayId false', () => {
 });
 
 test('policies list discovers built-ins and local overrides from cwd', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-policies-'));
+  // realpath: the CLI reports canonical pack paths, and macOS resolves
+  // /var/folders temp dirs to /private/var/folders.
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'flecto-cli-policies-')));
   const rootIndex = resolve(process.cwd(), 'index.js');
 
   try {

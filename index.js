@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { program } from 'commander';
-import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, realpathSync } from 'fs';
 import { resolve, relative, dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { createHash } from 'crypto';
@@ -222,6 +222,38 @@ function readSnapshotStateFromFile(snapshotPath) {
   return snap?.state ?? snap;
 }
 
+/**
+ * Resolve a file to a path relative to its git repository root.
+ *
+ * `git show <rev>:<path>` interprets <path> from the repository root, so a
+ * cwd-relative path breaks whenever Flecto runs from a subdirectory. Both sides
+ * are canonicalized first: process.cwd() reports a symlink-resolved path while
+ * CLI arguments keep the symlinks the user typed, and on macOS /tmp and
+ * /var/folders are symlinks, so comparing the two forms directly misresolves.
+ * @param {string} filePath
+ * @returns {string} POSIX-style path relative to the repository root
+ */
+function gitRepoRelativePath(filePath) {
+  const top = execFileSync('git', ['-C', dirname(filePath), 'rev-parse', '--show-toplevel'], {
+    encoding: 'utf8',
+  }).trim();
+  return relative(canonicalPath(top), canonicalPath(filePath)).replaceAll('\\', '/');
+}
+
+/**
+ * Resolve symlinks where possible, falling back to the input when the path does
+ * not exist on disk.
+ * @param {string} path
+ * @returns {string}
+ */
+function canonicalPath(path) {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
 function readSnapshotStateFromRef(filePath, snapshotRef) {
   if (!snapshotRef) return readSnapshotStateFromFile(snapshotPathForFile(filePath));
   const maybePath = resolve(snapshotRef);
@@ -229,7 +261,7 @@ function readSnapshotStateFromRef(filePath, snapshotRef) {
     return readSnapshotStateFromFile(maybePath);
   }
 
-  const rel = relative(process.cwd(), filePath).replaceAll('\\', '/');
+  const rel = gitRepoRelativePath(filePath);
   const raw = execFileSync('git', ['show', `${snapshotRef}:${rel}`], { encoding: 'utf8' });
   return parseContent(filePath, raw);
 }

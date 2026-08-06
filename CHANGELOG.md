@@ -9,6 +9,12 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ### Fixed
 
+- `flecto ci --snapshot-ref <git-ref>` now resolves the baseline correctly when
+  run from a subdirectory of the repository. `git show <rev>:<path>` resolves
+  `<path>` from the repository root, so the previous cwd-relative path failed
+  outside the repo root — a common setup in monorepos. Paths are also
+  canonicalized before comparison, fixing baseline resolution under symlinked
+  directories such as macOS `/tmp` and `/var/folders`. ([#79])
 - `--mask-secrets` now redacts nested secret values in terminal output
   (`watch` and `watch --diff`), matching the masking already applied to
   webhook/CI payloads. Previously a change on a benign-looking path such as
@@ -107,5 +113,6 @@ The format is based on [Keep a Changelog], and this project adheres to
 [#38]: https://github.com/myselfsiddharth/Flecto/issues/38
 [#39]: https://github.com/myselfsiddharth/Flecto/issues/39
 [#40]: https://github.com/myselfsiddharth/Flecto/pull/40
+[#79]: https://github.com/myselfsiddharth/Flecto/issues/79
 [Keep a Changelog]: https://keepachangelog.com/en/1.1.0/
 [Semantic Versioning]: https://semver.org/spec/v2.0.0.html
