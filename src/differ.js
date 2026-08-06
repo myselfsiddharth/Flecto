@@ -1,3 +1,5 @@
+import { annotateEncryptedChanges } from './encrypted.js';
+
 /**
  * @typedef {{ type: 'added' | 'removed' | 'changed', path: string, before?: unknown, after?: unknown, note?: string }} ChangeEvent
  */
@@ -412,5 +414,10 @@ export function diffTrees(before, after, options = {}) {
     diffValues(before, after, '<root>', events, diffOpts);
   }
 
-  return events.filter(e => !ignore(e.path));
+  // Encrypted files carry signals a key-by-key walk cannot express: the file
+  // gaining or losing encryption, and a MAC that moved on its own. This is a
+  // no-op — the same array, untouched — when neither side is encrypted.
+  // Ignore patterns are applied afterwards so `--ignore` silences the derived
+  // paths exactly like any other.
+  return annotateEncryptedChanges(before, after, events).filter(e => !ignore(e.path));
 }

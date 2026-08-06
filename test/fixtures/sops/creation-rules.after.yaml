@@ -1,0 +1,6 @@
+# `creation-rules.before.yaml` with a second recipient added to the prod rule.
+creation_rules:
+    - path_regex: secrets/prod/.*\.yaml$
+      age: age1exampleexampleexampleexampleexampleexampleexample000000,age1newcomernewcomernewcomernewcomernewcomernewcomer000000
+    - path_regex: secrets/dev/.*\.yaml$
+      age: age1devdevdevdevdevdevdevdevdevdevdevdevdevdevdevdev000000

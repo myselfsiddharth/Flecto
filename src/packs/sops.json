@@ -1,0 +1,61 @@
+{
+  "id": "sops",
+  "rules": [
+    {
+      "id": "sops-file-decrypted",
+      "severity": "error",
+      "when": ["changed"],
+      "match": { "pathEquals": "<encryption>" },
+      "afterEquals": "plaintext",
+      "message": "This file was encrypted and is now plaintext. Treat every value in it as exposed: rotate the secrets, then restore encryption before merging."
+    },
+    {
+      "id": "sops-value-decrypted",
+      "severity": "error",
+      "when": ["changed"],
+      "afterEquals": "<no longer encrypted>",
+      "messageTemplate": "{path} was an encrypted value and is now stored in the clear. Rotate it and re-encrypt the file."
+    },
+    {
+      "id": "sops-recipient-added",
+      "severity": "error",
+      "when": ["added"],
+      "match": {
+        "path": "^sops\\.(kms|gcp_kms|azure_kv|hc_vault|age|pgp)(?:$|[.\\[])"
+      },
+      "messageTemplate": "A decryption recipient was added at {path}. That key can now decrypt this file — confirm it is authorized and that the change was intended."
+    },
+    {
+      "id": "sops-recipient-removed",
+      "severity": "warn",
+      "when": ["removed"],
+      "match": {
+        "path": "^sops\\.(kms|gcp_kms|azure_kv|hc_vault|age|pgp)(?:$|[.\\[])"
+      },
+      "messageTemplate": "A decryption recipient was removed at {path}. Anything that key already read stays readable to its holder — rotate the secrets if the removal was a revocation."
+    },
+    {
+      "id": "sops-mac-changed-without-value-change",
+      "severity": "warn",
+      "when": ["changed"],
+      "match": { "pathEquals": "<encryption.mac>" },
+      "message": "The SOPS MAC changed but no value it covers did. A normal edit moves both together, so this points at a hand-edited or tampered metadata block."
+    },
+    {
+      "id": "sops-file-encrypted",
+      "severity": "info",
+      "when": ["changed"],
+      "match": { "pathEquals": "<encryption>" },
+      "beforeEquals": "plaintext",
+      "message": "This file is now encrypted. Confirm the values it held while plaintext were rotated — git history still has them."
+    },
+    {
+      "id": "sops-creation-rule-recipients-changed",
+      "severity": "warn",
+      "match": {
+        "path": "^creation_rules\\b.*\\b(kms|gcp_kms|azure_kv|hc_vault|age|pgp|key_groups)\\b"
+      },
+      "messageTemplate": "A SOPS creation rule changed at {path}. This decides who future encryptions are readable by; existing files keep their current recipients until they are re-encrypted."
+    }
+  ]
+}

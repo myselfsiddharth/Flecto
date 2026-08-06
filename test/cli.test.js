@@ -756,7 +756,7 @@ test('policies list discovers built-ins and local overrides from cwd', () => {
     const builtinPacks = JSON.parse(builtins.stdout);
     assert.deepEqual(
       builtinPacks.map((pack) => pack.id),
-      ['compose', 'default', 'kubernetes', 'node-runtime', 'strict-prod', 'terraform'],
+      ['compose', 'default', 'kubernetes', 'node-runtime', 'sops', 'strict-prod', 'terraform'],
     );
     assert.ok(builtinPacks.every((pack) => pack.source === 'builtin'));
     assert.ok(builtinPacks.every((pack) => !pack.overridesBuiltin));

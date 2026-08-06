@@ -1,0 +1,8 @@
+service: billing-api
+replicas: 3
+database:
+    host: db.internal
+    pool_size: 10
+features:
+    - checkout
+    - refunds

@@ -1,5 +1,6 @@
 import chalk from 'chalk';
 import { redactSecretString } from './secrets.js';
+import { ENCRYPTED_DISPLAY, displayEncrypted, isEncryptedSentinel } from './encrypted.js';
 
 const SECRET_PATH_RE = /(secret|token|password|api[_-]?key|private[_-]?key|credential)/i;
 
@@ -11,7 +12,10 @@ const SECRET_PATH_RE = /(secret|token|password|api[_-]?key|private[_-]?key|crede
  */
 function fmt(v, opts = {}) {
   if (v === undefined) return '';
-  let value = v;
+  // An encrypted value reads the same masked or not: there is nothing to mask,
+  // because the parser never carried the ciphertext this far.
+  if (isEncryptedSentinel(v)) return chalk.dim(ENCRYPTED_DISPLAY);
+  let value = displayEncrypted(v);
   if (opts.maskSecrets) {
     if (opts.path && SECRET_PATH_RE.test(opts.path)) {
       return chalk.dim('"***"');
@@ -19,7 +23,7 @@ function fmt(v, opts = {}) {
     // The changed path itself can look benign while the value carries secrets,
     // e.g. "database" holding { password }. Redact those the same way the
     // webhook/CI payloads do.
-    value = maskSensitiveValue(v, opts.path ?? '');
+    value = maskSensitiveValue(value, opts.path ?? '');
   }
   if (typeof value === 'string') return JSON.stringify(value);
   if (typeof value === 'object' && value !== null) return JSON.stringify(value);
@@ -60,6 +64,16 @@ function renderEvent(event, mode, opts = {}) {
     const line = `  ${chalk.red('-')} ${chalk.red(path)}: ${chalk.red(fmt(before, maskOpts))}${noteStr}`;
     return mode === 'verbose'
       ? `${line}\n    ${chalk.dim('(key removed)')}`
+      : line;
+  }
+
+  // Both sides ciphertext: the only honest thing to say is that it moved.
+  // Printing the two sentinels would be noise, and printing what they stand for
+  // is not something Flecto can do or wants to be able to do.
+  if (isEncryptedSentinel(before) && isEncryptedSentinel(after)) {
+    const line = `  ${chalk.yellow('~')} ${chalk.yellow(path)}: ${chalk.dim('<encrypted value changed>')}`;
+    return mode === 'verbose'
+      ? `${line}\n    ${chalk.dim('(Flecto never decrypts — only that the ciphertext differs is known)')}`
       : line;
   }
 

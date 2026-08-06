@@ -33,6 +33,43 @@ The format is based on [Keep a Changelog], and this project adheres to
   `Service` document is a single change carrying the whole manifest, and a rule
   anchored at `spec.type` never sees inside it. It is opt-in per pack and off by
   default, so every existing pack behaves exactly as before. ([#76])
+- SOPS- and age-aware diffing, structural and **without ever decrypting**.
+  Encrypted files were previously the ones Flecto helped with least: skipped, or
+  read as ordinary YAML with ciphertext blobs filling the diff. They are now
+  detected from their **contents** — a SOPS metadata block (a `sops` map with a
+  version plus a MAC, a modification stamp, or a key group; also the flat
+  `sops_*` form used for dotenv and INI), or a recognized ciphertext container
+  (`ENC[AES256_GCM,…]`, an armored age blob, an armored PGP message). Filenames
+  are only a hint: teams commit fully encrypted `values.prod.yaml`, and
+  `.sops.yaml` is a *plaintext* creation-rules config. A config that merely pins
+  `sops.version` is not mistaken for an encrypted file. `.age` files, and any
+  file that is one armored blob, are now supported as a single opaque value.
+  Every ciphertext-bearing value is replaced **in the parser** with an opaque
+  `<encrypted:SCHEME:DIGEST>` sentinel, so no diff, snapshot, webhook payload,
+  PR comment, or HTML report can carry ciphertext — there is no code path that
+  produces any, with or without `--mask-secrets`. Human output collapses it
+  further, to `~ db.password: <encrypted value changed>`. What you get instead
+  is the structure: keys added and removed, which encrypted values moved, the
+  `sops` metadata block, and — the useful part — the recipient list. Public
+  identifiers stay visible (age recipient, PGP fingerprint, KMS ARN) while the
+  data key sealed to each is redacted, and the key groups are re-keyed by
+  recipient identity so a recipient inserted at the front reads as one addition
+  rather than "every recipient changed". Two synthetic paths carry what a
+  key-by-key walk cannot express: `<encryption>` when a file gains or loses
+  encryption, and `<encryption.mac>` when the MAC moves while every value it
+  covers stays put. Both respect `--ignore` like any other path. A value that
+  stopped being encrypted is reported as changed with the new value withheld —
+  the event is that it was exposed, and a CI log should not widen that. A new
+  built-in `sops` policy pack covers recipient added (`error`), recipient
+  removed (`warn`), a lone MAC change (`warn`), a file that became encrypted
+  (`info`), and `.sops.yaml` creation-rule recipient changes (`warn`); the
+  `default` pack gains the two that catch a secret committed in the clear,
+  `sops-file-decrypted` and `sops-value-decrypted`, both `error`. Flecto never
+  shells out to `sops`, `age`, or `gpg`, never reads a key file, agent socket,
+  or KMS credential, and has no flag that turns decryption on. Unencrypted files
+  are untouched: a tree with nothing to redact comes back from the encryption
+  pass as the same object, and a diff between two of them returns the very array
+  it always did. ([#77])
 - A second bundled composite Action, `flecto-pr-risk`, that packages the pull
   request risk comment as a one-line adoption: `uses:` it after
   `actions/checkout` and the defaults do the rest (`format: pr-comment`,
@@ -328,6 +365,7 @@ The format is based on [Keep a Changelog], and this project adheres to
 [#74]: https://github.com/myselfsiddharth/Flecto/issues/74
 [#75]: https://github.com/myselfsiddharth/Flecto/issues/75
 [#76]: https://github.com/myselfsiddharth/Flecto/issues/76
+[#77]: https://github.com/myselfsiddharth/Flecto/issues/77
 [#78]: https://github.com/myselfsiddharth/Flecto/issues/78
 [#79]: https://github.com/myselfsiddharth/Flecto/issues/79
 [Keep a Changelog]: https://keepachangelog.com/en/1.1.0/

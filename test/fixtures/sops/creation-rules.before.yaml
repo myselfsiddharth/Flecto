@@ -1,0 +1,8 @@
+# A `.sops.yaml` creation-rules config. This file is NOT encrypted — it is the
+# plaintext rulebook that decides who future encryptions are readable by — so
+# Flecto diffs it exactly like any other YAML.
+creation_rules:
+    - path_regex: secrets/prod/.*\.yaml$
+      age: age1exampleexampleexampleexampleexampleexampleexample000000
+    - path_regex: secrets/dev/.*\.yaml$
+      age: age1devdevdevdevdevdevdevdevdevdevdevdevdevdevdevdev000000

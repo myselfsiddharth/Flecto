@@ -3,8 +3,9 @@ import { basename, extname } from 'path';
 import yaml from 'js-yaml';
 import TOML from '@iarna/toml';
 import dotenv from 'dotenv';
+import { isArmoredAgeFile, normalizeEncrypted, opaqueFileState } from './encrypted.js';
 
-const SUPPORTED_EXT = ['.json', '.yaml', '.yml', '.toml', '.env', '.ini'];
+const SUPPORTED_EXT = ['.json', '.yaml', '.yml', '.toml', '.env', '.ini', '.age'];
 
 /**
  * True for dotenv-like names: `.env`, `.env.*`, `*.env`
@@ -184,6 +185,13 @@ export function parseYamlStream(raw) {
 
 /**
  * Auto-detect the format of a file and parse it into a plain JS object.
+ *
+ * The parsed tree then goes through the encryption pass (see encrypted.js),
+ * which replaces every ciphertext-bearing value with an opaque sentinel. Doing
+ * it here rather than at render time is what makes the guarantee absolute:
+ * nothing downstream — diff, snapshot, webhook, report — is ever handed
+ * ciphertext, because the parser never produces any. A file with nothing to
+ * redact comes back as the very same object.
  * @param {string} filepath
  * @param {string} raw
  * @returns {unknown}
@@ -201,8 +209,16 @@ export function parseContent(filepath, raw) {
       `Supported extensions: ${supported}`
     );
   }
+
+  // A `.age` file, and any file that opens with the age armor header, is one
+  // opaque blob rather than a config document. There is no structure to parse
+  // and no parser that would not be guessing.
+  if (ext === '.age' || isArmoredAgeFile(raw)) {
+    return opaqueFileState(raw);
+  }
+
+  let parsed;
   try {
-    let parsed;
     if (envLike || ext === '.env') {
       parsed = dotenv.parse(raw);
     } else if (iniLike) {
@@ -214,7 +230,6 @@ export function parseContent(filepath, raw) {
     } else if (ext === '.toml') {
       parsed = TOML.parse(raw);
     }
-    return normalizeParsedValue(parsed);
   } catch (err) {
     const lineMatch = err.message?.match(/line (\d+)/i);
     const lineInfo = lineMatch ? ` (line ${lineMatch[1]})` : '';
@@ -222,6 +237,8 @@ export function parseContent(filepath, raw) {
       `Parse error in "${filepath}"${lineInfo}: ${err.message}`
     );
   }
+
+  return normalizeEncrypted(normalizeParsedValue(parsed));
 }
 
 /**
