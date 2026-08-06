@@ -93,18 +93,22 @@ export function renderChanges(filepath, events, mode = 'compact', opts = {}) {
 }
 
 /**
- * Print a diff result (for --diff mode) to stdout.
+ * Print a diff result (for `watch --diff` and `compare`) to stdout.
+ * `baseline` names the side the events are measured from, so a cross-file
+ * comparison reads unambiguously; it defaults to the saved snapshot.
  * @param {string} filepath
  * @param {import('./differ.js').ChangeEvent[]} events
- * @param {{ maskSecrets?: boolean }} [opts]
+ * @param {{ maskSecrets?: boolean, baseline?: string }} [opts]
  */
 export function renderDiff(filepath, events, opts = {}) {
+  const baseline = opts.baseline ?? 'snapshot';
+
   if (events.length === 0) {
-    console.log(chalk.green(`✓ ${filepath} matches snapshot — no changes`));
+    console.log(chalk.green(`✓ ${filepath} matches ${baseline} — no changes`));
     return;
   }
 
-  console.log(chalk.cyan(`${filepath}`) + ` — ${events.length} change${events.length !== 1 ? 's' : ''} from snapshot:`);
+  console.log(chalk.cyan(`${filepath}`) + ` — ${events.length} change${events.length !== 1 ? 's' : ''} from ${baseline}:`);
   for (const event of events) {
     console.log(renderEvent(event, 'compact', opts));
   }

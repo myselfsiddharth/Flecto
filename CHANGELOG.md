@@ -37,6 +37,21 @@ The format is based on [Keep a Changelog], and this project adheres to
   context only, since no `terraform` pack ships yet and `.tf` is not a parseable
   format. `init` prints what it detected and why, and falls back to the previous
   generic starter config when nothing is found. ([#72])
+- `flecto compare <fileA> <fileB>`: run the differ and policy engine across two
+  different files, for environment skew ("works in staging, fails in prod")
+  rather than drift in one file over time. `fileA` is the baseline, so `+` is
+  present only in `fileB` and `-` only in `fileA`. The two files need not share
+  a format — `config/prod.yaml` against `config/prod.json` works, since every
+  supported format parses to a plain tree. Respects `--profile`, `--ignore`,
+  `--policies`, `--plugins`, `--array-id-key`, `--no-array-id`,
+  `--array-ignore-order`, and `--mask-secrets` exactly as `ci` does, and adds
+  `--fail-on` with the same triggers (defaulting to
+  `changed,added,removed,policy,error`, since environments that should match
+  ought to match on added and removed keys too). Output defaults to the
+  human-readable renderer; `--format json|ndjson|github-annotations` emits the
+  same envelopes and result shape as `ci`, plus a `baseline` field naming
+  `fileA`. Exit code is `0` when the files match under the active fail triggers,
+  `1` otherwise. ([#70])
 
 ### Changed
 
@@ -153,6 +168,7 @@ The format is based on [Keep a Changelog], and this project adheres to
 [#40]: https://github.com/myselfsiddharth/Flecto/pull/40
 [#66]: https://github.com/myselfsiddharth/Flecto/issues/66
 [#69]: https://github.com/myselfsiddharth/Flecto/issues/69
+[#70]: https://github.com/myselfsiddharth/Flecto/issues/70
 [#72]: https://github.com/myselfsiddharth/Flecto/issues/72
 [#79]: https://github.com/myselfsiddharth/Flecto/issues/79
 [Keep a Changelog]: https://keepachangelog.com/en/1.1.0/

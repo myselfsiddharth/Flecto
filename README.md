@@ -185,6 +185,26 @@ flecto watch config/prod.yaml \
 Changes arrive as a versioned JSON envelope, and `at-least-once` persists and
 retries failed deliveries. → **[Webhooks and commands](docs/webhooks.md)**
 
+### Compare two environments
+
+"Works in staging, fails in prod" is usually one key apart:
+
+```bash
+flecto compare config/prod.yaml config/staging.yaml
+```
+
+```
+"+" exists only in the compared file, "-" only in the baseline, "~" differs
+/path/to/config/staging.yaml — 2 changes from /path/to/config/prod.yaml:
+  - only_in_prod: true
+  ~ database.pool_size: 5 → 20
+  ! policy(warn) [default] database.pool_size: Pool size increased from 5 to 20 (>=2x).
+```
+
+The first file is the baseline, the files don't have to share a format, and
+`--format json` gives you the same output `flecto ci` produces.
+→ **[CLI reference](docs/cli-reference.md#flecto-compare-filea-fileb)**
+
 ### Track drift over time
 
 ```bash
@@ -311,6 +331,7 @@ Explicit CLI flags win over profiles, which win over `defaults`.
 | `flecto watch --snapshot` | Save the current state as a baseline |
 | `flecto watch --diff` | Compare against the baseline and exit |
 | `flecto ci [files...]` | One-shot check with a gate-able exit code |
+| `flecto compare <fileA> <fileB>` | Diff two files against each other (`fileA` is the baseline) |
 | `flecto history [files...]` | Summarize drift across local snapshots |
 | `flecto policies list` | List available policy packs |
 | `flecto policies test <dir>` | Assert pack and plugin findings from fixtures |
