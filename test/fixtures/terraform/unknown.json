@@ -1,0 +1,55 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.5",
+  "resource_changes": [
+    {
+      "address": "aws_instance.web",
+      "mode": "managed",
+      "type": "aws_instance",
+      "name": "web",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "ami": "ami-0123456789abcdef0",
+          "instance_type": "t3.micro",
+          "tags": { "Name": "web" }
+        },
+        "after_unknown": {
+          "id": true,
+          "arn": true,
+          "private_ip": true,
+          "tags": {},
+          "root_block_device": [
+            { "volume_id": true, "volume_size": false }
+          ]
+        },
+        "before_sensitive": false,
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "aws_lb.app",
+      "mode": "managed",
+      "type": "aws_lb",
+      "name": "app",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["update"],
+        "before": {
+          "name": "app",
+          "dns_name": "app-1234.eu-west-1.elb.amazonaws.com",
+          "idle_timeout": 60
+        },
+        "after": {
+          "name": "app",
+          "idle_timeout": 90
+        },
+        "after_unknown": { "dns_name": true },
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    }
+  ]
+}

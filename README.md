@@ -325,6 +325,7 @@ services doesn't read as a wall of changes.
 | `compose` | Privileged services, host networking, Docker socket mounts, sensitive bind mounts |
 | `kubernetes` | Privileged containers, host namespaces, weakened `runAsNonRoot`, added `SYS_ADMIN`, unpinned images, replica jumps, dropped limits, `LoadBalancer`/`NodePort` exposure |
 | `node-runtime` | Dropped engine requirements, TLS verification bypasses, debug/inspector flags |
+| `terraform` | Replaced and destroyed stateful resources, ingress opened to `0.0.0.0/0`, IAM wildcards, public S3, capacity jumps |
 
 ```bash
 flecto policies list          # see what resolves here, built-in and local
@@ -416,6 +417,7 @@ Explicit CLI flags win over profiles, which win over `defaults`.
 | `flecto watch --diff` | Compare against the baseline and exit |
 | `flecto ci [files...]` | One-shot check with a gate-able exit code |
 | `flecto compare <fileA> <fileB>` | Diff two files against each other (`fileA` is the baseline) |
+| `flecto plan <planFiles...>` | Review `terraform show -json` output and gate on it |
 | `flecto history [files...]` | Summarize drift across local snapshots |
 | `flecto report [files...]` | Render that history as a self-contained HTML file |
 | `flecto policies add <name>` | Install a pack from an `flecto-pack-*` npm package |
@@ -436,6 +438,7 @@ Explicit CLI flags win over profiles, which win over `defaults`.
 | **[Configuration](docs/configuration.md)** | `.flectorc`, profiles, ignore patterns, array identity, masking |
 | **[CI](docs/ci.md)** | Baselines, fail triggers, output formats, the bundled GitHub Actions |
 | **[Kubernetes](docs/kubernetes.md)** | Diffing rendered Helm/Kustomize manifests before they reach a cluster |
+| **[Terraform plans](docs/terraform.md)** | Reviewing `terraform show -json` output and the `terraform` pack |
 | **[Webhooks and commands](docs/webhooks.md)** | Envelope shape, delivery modes, command environment |
 | **[Policy packs](docs/policy-packs.md)** | Writing declarative rules |
 | **[Plugins](docs/plugins.md)** · **[Cookbook](docs/plugin-cookbook.md)** | Rules that need real code |

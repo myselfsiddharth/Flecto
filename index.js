@@ -23,6 +23,11 @@ import {
   maskSensitiveValue,
 } from './src/renderer.js';
 import { deliverPrComment, renderPrComment } from './src/pr-comment.js';
+import {
+  diffTerraformPlan,
+  formatPlanSummary,
+  readTerraformPlanFile,
+} from './src/terraform.js';
 import { renderReportHtml } from './src/report.js';
 import { redactSecretString } from './src/secrets.js';
 import { fireAlerts } from './src/alerter.js';
@@ -50,6 +55,16 @@ const PKG = JSON.parse(
 
 const SNAPSHOT_DIR = '.flecto-snapshots';
 const FAIL_ON_CHOICES = ['changed', 'added', 'removed', 'policy', 'error', 'warn'];
+
+/**
+ * `flecto plan` defaults. A plan is expected to contain changes — that is the
+ * point of running one — so gating on `changed` the way `ci` does would fail
+ * every non-empty plan. The `terraform` pack reserves `error` for the patterns
+ * that genuinely should block a merge and leaves cost and sizing advice at
+ * `warn`, so `error` is the default gate; `--fail-on policy` or `warn` widens it.
+ */
+const PLAN_DEFAULT_FAIL_ON = 'error';
+const PLAN_DEFAULT_POLICIES = 'terraform';
 
 function snapshotIdForPath(absPath) {
   const normalized = absPath.replaceAll('\\', '/');
@@ -868,6 +883,108 @@ program
         console.log(body);
         await deliverPrCommentSafely(body, prCommentPost);
       } else {
+        printCiOutput(results, format);
+      }
+      process.exit(shouldFail ? 1 : 0);
+    } catch (err) {
+      renderError(err.message);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('plan <planFiles...>')
+  .description('Diff Terraform plan JSON (terraform show -json) and run policies on it')
+  .option('-p, --profile <name>', 'Use profile from .flectorc (else FLECTO_PROFILE)')
+  .option('--format <type>', 'Output format: human | json | ndjson | github-annotations | pr-comment', 'human')
+  .option('--pr-comment-post', 'With --format pr-comment, upsert the comment on the PR (needs GITHUB_TOKEN + PR context)', false)
+  .option('--fail-on <rules>', 'Comma-separated fail rules: changed,added,removed,policy,error,warn', PLAN_DEFAULT_FAIL_ON)
+  .option('--ignore <keys>', 'Comma-separated key paths to ignore, e.g. "**.tags_all,**.#action"')
+  .option('--policies <ids>', `Comma-separated policy pack ids (default: ${PLAN_DEFAULT_POLICIES})`)
+  .option('--plugins <paths>', 'Comma-separated local ESM plugin paths')
+  .option('--mask-secrets', 'Also mask Flecto-detected secret-like values (Terraform-sensitive values are always redacted)', false)
+  .action(async (planFiles, opts, command) => {
+    try {
+      const { config } = loadRcConfig(process.cwd());
+      const profile = resolveProfileName(opts.profile);
+      const effective = resolveEffectiveOptions(config, profile, stripUnsetCliOverrides(opts, command));
+      // A plan carries Terraform-shaped paths, so the config-file packs are not
+      // the useful default here; `terraform` is. An explicit --policies or a
+      // .flectorc entry still wins.
+      const { policies: packIds, plugins, severityRemap } = resolvePolicyOptions(
+        effective.policies === undefined
+          ? { ...effective, policies: PLAN_DEFAULT_POLICIES }
+          : effective,
+      );
+
+      const ignorePaths = parseCsv(effective.ignore);
+      const failOn = new Set(parseCsv(effective.failOn ?? PLAN_DEFAULT_FAIL_ON));
+      const format = String(effective.format ?? 'human');
+      if (!['human', 'json', 'ndjson', 'github-annotations', 'pr-comment'].includes(format)) {
+        throw new Error('--format must be human, json, ndjson, github-annotations, or pr-comment');
+      }
+      const prCommentPost = Boolean(effective.prCommentPost);
+      if (prCommentPost && format !== 'pr-comment') {
+        renderWarn('Ignoring --pr-comment-post: it only applies to --format pr-comment.');
+      }
+      const maskSecrets = Boolean(effective.maskSecrets);
+
+      /** @type {any[]} */
+      const results = [];
+      let shouldFail = false;
+
+      for (const planFile of planFiles) {
+        const filepath = resolve(planFile);
+        if (!existsSync(filepath)) {
+          throw new Error(`File not found: ${filepath}`);
+        }
+        const plan = readTerraformPlanFile(filepath);
+        const { changes, summary, formatVersion, terraformVersion, warnings } =
+          diffTerraformPlan(plan, { ignorePaths });
+        for (const warning of warnings) renderWarn(warning);
+
+        // Terraform-sensitive values were already replaced during conversion,
+        // so policies never see them. --mask-secrets adds Flecto's own
+        // value-shaped detection on top, for credentials Terraform did not mark.
+        const policyFindings = await evaluatePolicies(changes, {
+          cwd: process.cwd(),
+          file: filepath,
+          profile: profile ?? null,
+          source: 'ci',
+          policies: packIds,
+          plugins,
+          severityRemap,
+        });
+        const outboundChanges = maybeMaskChanges(changes, maskSecrets);
+        const envelope = createEnvelope({
+          source: 'ci',
+          file: filepath,
+          changes: outboundChanges,
+          policies: maybeMaskFindings(policyFindings, maskSecrets),
+        });
+        results.push({ file: filepath, envelope, policies: envelope.policies });
+
+        if (format === 'human') {
+          const version = [
+            formatVersion ? `plan format ${formatVersion}` : null,
+            terraformVersion ? `terraform ${terraformVersion}` : null,
+          ].filter(Boolean).join(', ');
+          renderInfo(`${filepath}${version ? ` — ${version}` : ''}`);
+          renderInfo(formatPlanSummary(summary));
+          renderDiff(filepath, outboundChanges, { maskSecrets, baseline: 'the current state' });
+          renderPolicyFindings(envelope.policies);
+        }
+
+        if (shouldFailFromChanges(changes, failOn) || shouldFailFromPolicy(policyFindings, failOn)) {
+          shouldFail = true;
+        }
+      }
+
+      if (format === 'pr-comment') {
+        const body = renderPrComment(results, { cwd: process.cwd(), failed: shouldFail });
+        console.log(body);
+        await deliverPrCommentSafely(body, prCommentPost);
+      } else if (format !== 'human') {
         printCiOutput(results, format);
       }
       process.exit(shouldFail ? 1 : 0);

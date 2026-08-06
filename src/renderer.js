@@ -44,22 +44,25 @@ function timestamp() {
 function renderEvent(event, mode, opts = {}) {
   const { type, path, before, after, note } = event;
   const maskOpts = { maskSecrets: Boolean(opts.maskSecrets), path };
+  // Notes ride on every change type — a Terraform plan explains a create or a
+  // destroy there. The tree differ only ever notes changed events, so existing
+  // added/removed output is unaffected.
+  const noteStr = note ? chalk.dim(` [${note}]`) : '';
 
   if (type === 'added') {
-    const line = `  ${chalk.green('+')} ${chalk.green(path)}: ${chalk.green(fmt(after, maskOpts))}`;
+    const line = `  ${chalk.green('+')} ${chalk.green(path)}: ${chalk.green(fmt(after, maskOpts))}${noteStr}`;
     return mode === 'verbose'
       ? `${line}\n    ${chalk.dim('(key added)')}`
       : line;
   }
 
   if (type === 'removed') {
-    const line = `  ${chalk.red('-')} ${chalk.red(path)}: ${chalk.red(fmt(before, maskOpts))}`;
+    const line = `  ${chalk.red('-')} ${chalk.red(path)}: ${chalk.red(fmt(before, maskOpts))}${noteStr}`;
     return mode === 'verbose'
       ? `${line}\n    ${chalk.dim('(key removed)')}`
       : line;
   }
 
-  const noteStr = note ? chalk.dim(` [${note}]`) : '';
   if (mode === 'verbose') {
     return [
       `  ${chalk.yellow('~')} ${chalk.yellow(path)}${noteStr}`,

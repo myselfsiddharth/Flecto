@@ -1,0 +1,120 @@
+{
+  "id": "terraform",
+  "rules": [
+    {
+      "id": "terraform-resource-replaced",
+      "severity": "error",
+      "when": ["removed"],
+      "match": {
+        "path": "\\.#action$"
+      },
+      "beforeEquals": "replace",
+      "message": "Terraform will destroy and recreate this resource. Expect downtime, a new resource id, and the loss of anything held only on the existing instance. Check which attribute forced the replacement."
+    },
+    {
+      "id": "terraform-stateful-resource-destroyed",
+      "severity": "error",
+      "when": ["removed"],
+      "match": {
+        "path": "(^|\\.)(aws_db_instance|aws_db_cluster_snapshot|aws_rds_cluster|aws_rds_cluster_instance|aws_dynamodb_table|aws_s3_bucket|aws_ebs_volume|aws_efs_file_system|aws_elasticache_cluster|aws_elasticache_replication_group|aws_redshift_cluster|aws_docdb_cluster|aws_neptune_cluster|google_sql_database_instance|google_storage_bucket|azurerm_storage_account|azurerm_mssql_database)\\..*\\.#action$"
+      },
+      "beforeIn": ["delete", "replace"],
+      "message": "Terraform will destroy a stateful resource. Its data does not survive. Take a final snapshot, or add a prevent_destroy lifecycle block, before applying."
+    },
+    {
+      "id": "terraform-security-group-open-ingress",
+      "severity": "error",
+      "when": ["added", "changed"],
+      "afterIn": ["0.0.0.0/0", "::/0"],
+      "anyOf": [
+        {
+          "match": {
+            "path": "(^|\\.)aws_security_group\\..*\\.ingress\\[[^\\]]*\\]\\.(ipv6_)?cidr_blocks\\[[^\\]]*\\]$"
+          }
+        },
+        {
+          "match": {
+            "path": "(^|\\.)aws_vpc_security_group_ingress_rule\\..*\\.cidr_ipv[46]$"
+          }
+        }
+      ],
+      "messageTemplate": "Security group ingress will accept traffic from the whole internet ({after}). Restrict the source to a known CIDR, a prefix list, or another security group."
+    },
+    {
+      "id": "terraform-iam-wildcard",
+      "severity": "error",
+      "when": ["added", "changed"],
+      "match": {
+        "path": "(^|\\.)aws_iam_[a-z_]+\\..*\\.policy$"
+      },
+      "afterMatches": "\"(Action|NotAction|Resource|NotResource)\"\\s*:\\s*(\"\\*\"|\\[[^\\]]*\"\\*\")",
+      "message": "IAM policy grants a wildcard action or resource (\"*\"). Scope it to the specific actions and ARNs the principal needs."
+    },
+    {
+      "id": "terraform-s3-public-access-block-disabled",
+      "severity": "error",
+      "when": ["added", "changed", "removed"],
+      "anyOf": [
+        {
+          "match": {
+            "path": "(^|\\.)aws_s3_bucket_public_access_block\\..*\\.(block_public_acls|block_public_policy|ignore_public_acls|restrict_public_buckets)$"
+          },
+          "afterEquals": false
+        },
+        {
+          "match": {
+            "path": "(^|\\.)aws_s3_bucket_public_access_block\\..*\\.#action$"
+          },
+          "beforeIn": ["delete", "replace"]
+        }
+      ],
+      "message": "S3 public access block is being turned off or removed. Leave all four block_public_* settings enabled unless the bucket is deliberately a public website."
+    },
+    {
+      "id": "terraform-s3-public-acl",
+      "severity": "error",
+      "when": ["added", "changed"],
+      "match": {
+        "path": "(^|\\.)aws_s3_bucket(_acl)?\\..*\\.acl$"
+      },
+      "afterIn": ["public-read", "public-read-write", "authenticated-read"],
+      "messageTemplate": "S3 bucket ACL set to \"{after}\", which exposes objects outside the account. Use a bucket policy scoped to known principals instead."
+    },
+    {
+      "id": "terraform-instance-size-changed",
+      "severity": "warn",
+      "when": ["changed"],
+      "match": {
+        "path": "(^|\\.)(aws_instance|aws_db_instance|aws_rds_cluster_instance|aws_launch_template|aws_launch_configuration|aws_elasticache_cluster|google_compute_instance|azurerm_linux_virtual_machine|azurerm_windows_virtual_machine)\\..*\\.(instance_type|instance_class|node_type|machine_type|size|vm_size)$"
+      },
+      "messageTemplate": "Instance size changes from {before} to {after}. Confirm the cost impact, and whether the change forces a restart or a replacement."
+    },
+    {
+      "id": "terraform-capacity-jump",
+      "severity": "warn",
+      "when": ["changed"],
+      "match": {
+        "path": "\\.(desired_capacity|max_size|min_size|desired_count|node_count|initial_node_count|instance_count|number_of_nodes|max_capacity|min_capacity)$"
+      },
+      "numericJump": { "minMultiple": 2 },
+      "messageTemplate": "Capacity at {path} jumps from {before} to {after} (>=2x). Confirm the quota headroom and the cost of the new floor."
+    },
+    {
+      "id": "terraform-sensitive-value-changed",
+      "severity": "warn",
+      "when": ["added", "changed", "removed"],
+      "anyOf": [
+        { "afterEquals": "(sensitive value)" },
+        { "beforeEquals": "(sensitive value)" }
+      ],
+      "message": "A value Terraform marks sensitive is being set, changed, or removed. Flecto redacted it. Confirm it lives in a secret store and that anything depending on it is rotated."
+    },
+    {
+      "id": "terraform-hardcoded-credential",
+      "severity": "error",
+      "when": ["added", "changed"],
+      "afterLooksSecret": true,
+      "message": "A planned attribute value looks like a credential (known token format or high-entropy string) that Terraform did not mark sensitive. Move it to a secret store and rotate it."
+    }
+  ]
+}

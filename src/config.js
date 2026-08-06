@@ -143,8 +143,9 @@ export async function resolveFiles(input) {
  * Detect stack signals in a directory and map them to policy packs and file
  * patterns. Only built-in pack ids and patterns Flecto can actually parse are
  * ever returned, so a config built from this stays loadable by every command.
- * Terraform files are reported as context only: no `terraform` pack ships yet,
- * and `.tf` is not a supported parse format.
+ * Terraform files are reported as context only: `.tf` is not a supported parse
+ * format, and the `terraform` pack reads plan JSON rather than `.tf` sources,
+ * so neither belongs in a config built from a directory listing.
  * @param {string} cwd
  * @returns {StackDetection}
  */
@@ -194,7 +195,7 @@ export function detectStack(cwd = process.cwd()) {
       id: 'terraform',
       evidence: terraformFiles,
       pack: null,
-      summary: `Detected Terraform files (${terraformFiles.join(', ')}) → no terraform pack ships yet and .tf is not a parseable format, so nothing was enabled`,
+      summary: `Detected Terraform files (${terraformFiles.join(', ')}) → .tf is not a parseable format, so nothing was enabled; run "flecto plan" on "terraform show -json" output to use the terraform pack`,
     });
   }
 

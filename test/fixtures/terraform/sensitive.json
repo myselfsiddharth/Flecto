@@ -1,0 +1,68 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.5",
+  "resource_changes": [
+    {
+      "address": "aws_db_instance.main",
+      "mode": "managed",
+      "type": "aws_db_instance",
+      "name": "main",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["update"],
+        "before": {
+          "identifier": "main",
+          "password": "correct-horse-battery-staple-1",
+          "allocated_storage": 100
+        },
+        "after": {
+          "identifier": "main",
+          "password": "correct-horse-battery-staple-2",
+          "allocated_storage": 100
+        },
+        "after_unknown": {},
+        "before_sensitive": { "password": true },
+        "after_sensitive": { "password": true }
+      }
+    },
+    {
+      "address": "aws_secretsmanager_secret_version.app",
+      "mode": "managed",
+      "type": "aws_secretsmanager_secret_version",
+      "name": "app",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "secret_string": "prod-shared-passphrase-value",
+          "version_stages": ["AWSCURRENT"]
+        },
+        "after_unknown": { "id": true },
+        "before_sensitive": false,
+        "after_sensitive": { "secret_string": true }
+      }
+    },
+    {
+      "address": "aws_ecs_task_definition.api",
+      "mode": "managed",
+      "type": "aws_ecs_task_definition",
+      "name": "api",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["update"],
+        "before": {
+          "family": "api",
+          "environment": { "LOG_LEVEL": "info", "DB_DSN": "postgres://api:old-inner-passphrase@db.internal/api" }
+        },
+        "after": {
+          "family": "api",
+          "environment": { "LOG_LEVEL": "debug", "DB_DSN": "postgres://api:new-inner-passphrase@db.internal/api" }
+        },
+        "after_unknown": {},
+        "before_sensitive": { "environment": true },
+        "after_sensitive": { "environment": true }
+      }
+    }
+  ]
+}

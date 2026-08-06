@@ -148,6 +148,53 @@ Envelopes carry `source: "diff"`.
 
 ---
 
+## `flecto plan <planFiles...>`
+
+Diff Terraform plan JSON (the output of `terraform show -json`) and run
+policies on it — the same differ, envelope, and exit-code model every other
+Flecto command uses, pointed at a plan instead of a config file.
+
+```bash
+terraform plan -out plan.tfplan
+terraform show -json plan.tfplan > plan.json
+
+flecto plan plan.json
+```
+
+Flecto never runs the `terraform` binary; it only reads the JSON you hand it.
+
+| Flag | Default | Description |
+|---|---|---|
+| `-p, --profile <name>` | — | Use a profile from `.flectorc` (else `FLECTO_PROFILE`) |
+| `--format <type>` | `human` | `human`, `json`, `ndjson`, `github-annotations`, or `pr-comment` |
+| `--pr-comment-post` | off | With `--format pr-comment`, upsert the comment on the PR (needs `GITHUB_TOKEN` + PR context) |
+| `--fail-on <rules>` | `error` | Comma-separated fail rules: `changed`, `added`, `removed`, `policy`, `error`, `warn` |
+| `--ignore <keys>` | — | Comma-separated key paths to ignore, e.g. `**.tags_all,**.#action` |
+| `--policies <ids>` | `terraform` | Comma-separated policy pack ids |
+| `--plugins <paths>` | — | Comma-separated local ESM plugin paths |
+| `--mask-secrets` | off | Also mask Flecto-detected secret-like values (Terraform-sensitive values are always redacted, regardless of this flag) |
+
+**Fail triggers:** the same set `ci` uses — `changed`, `added`, `removed`,
+`policy`, `error`, `warn`. The default is `error` alone, not `changed`: a plan
+is supposed to contain changes, so gating on their existence would fail every
+non-empty plan.
+
+**Exit codes:** `0` when nothing matched a fail trigger, `1` when something did
+or the run errored.
+
+A replace (destroy-and-recreate) is reported as a `removed` event, so
+`--fail-on removed` catches every replace with no policy pack loaded at all.
+Values Terraform marks sensitive are redacted to `(sensitive value)`
+unconditionally, before any formatter sees them.
+
+Several plan files in one run each produce their own result entry, exactly
+like `ci` with multiple files.
+
+Full guide, including the `terraform` policy pack and CI wiring:
+[terraform.md](terraform.md).
+
+---
+
 ## `flecto history [files...]`
 
 Summarize drift across local snapshots in `.flecto-snapshots/`. Omit `files` to
