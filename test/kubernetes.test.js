@@ -381,24 +381,23 @@ test('expandChangeSubtrees mirrors removals and leaves other changes alone', () 
   assert.deepEqual(expandChangeSubtrees(untouched), untouched);
 });
 
-test('expandChangeSubtrees terminates on a recursive YAML anchor', () => {
-  // `a: &x { b: *x }` parses to a genuinely cyclic object. The differ never
-  // recurses into an added subtree, so expansion is the first walk to meet one.
-  const dir = mkdtempSync(join(tmpdir(), 'flecto-k8s-cycle-'));
-  try {
-    const file = join(dir, 'cyclic.yaml');
-    writeFileSync(file, 'kind: Deployment\nloop: &anchor\n  self: *anchor\n  privileged: true\n', 'utf8');
-    const parsed = parseFile(file);
-    assert.equal(parsed.loop.self, parsed.loop, 'fixture should parse to a cycle');
+test('expandChangeSubtrees terminates on a cyclic subtree', () => {
+  // `loop: &anchor { self: *anchor }` is what a recursive YAML anchor parses
+  // to. The cycle is built here rather than parsed from a file: parseContent
+  // cannot currently load a recursive anchor at all (see #103), and the unit
+  // under test is the guard in the expansion walk, not the parser. The differ
+  // never recurses into an added subtree, so expansion is the first walk that
+  // can meet a cycle.
+  const loop = { privileged: true };
+  loop.self = loop;
+  const parsed = { kind: 'Deployment', loop };
+  assert.equal(parsed.loop.self, parsed.loop, 'fixture should be cyclic');
 
-    const expanded = expandChangeSubtrees(diffTrees({}, parsed));
-    assert.ok(expanded.length > 0);
-    // The scalar beneath the anchor is still reached; the cycle just stops.
-    assert.ok(expanded.some((change) => change.path === 'loop.privileged' && change.after === true));
-    assert.ok(expanded.every((change) => (change.path.match(/self/g) ?? []).length <= 1));
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  const expanded = expandChangeSubtrees(diffTrees({}, parsed));
+  assert.ok(expanded.length > 0);
+  // The scalar beneath the anchor is still reached; the cycle just stops.
+  assert.ok(expanded.some((change) => change.path === 'loop.privileged' && change.after === true));
+  assert.ok(expanded.every((change) => (change.path.match(/self/g) ?? []).length <= 1));
 });
 
 test('expandChangeSubtrees walks a shared node once per branch', () => {
