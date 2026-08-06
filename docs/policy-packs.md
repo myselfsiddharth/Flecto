@@ -31,6 +31,24 @@ A pack must be an object with a `rules` array. The top-level `id` is optional; i
 }
 ```
 
+### `expandSubtrees`
+
+The differ reports an added or removed key once, carrying its whole subtree as
+the value: adding a nested block is *one* change at the parent path, not one per
+field. A path-anchored rule cannot see inside such a value. Set the optional
+pack-level `expandSubtrees` to expand added and removed subtrees into the leaf
+changes they imply before rules run, so a rule fires the same way whether a
+field changed in place or arrived with its parent:
+
+```json
+{ "id": "kubernetes", "expandSubtrees": true, "rules": [] }
+```
+
+A finding's path can then be deeper than any change in the emitted change list —
+the finding names the leaf that is risky. The flag is per pack and defaults to
+`false`, so packs that do not set it are unaffected. The built-in `kubernetes`
+pack enables it; see [Kubernetes](kubernetes.md#whole-subtree-changes).
+
 Activate one or more packs with comma-separated ids:
 
 ```bash

@@ -1,0 +1,187 @@
+# Rendered from the same chart with a values file that regresses every guard the
+# `kubernetes` pack watches, plus a whole new workload added in one go.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: api
+  namespace: prod
+  labels:
+    app.kubernetes.io/name: api
+    app.kubernetes.io/instance: api
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: api-credentials
+  namespace: prod
+type: Opaque
+data:
+  # Placeholder values only — never a real credential in a fixture.
+  database-password: ZmFrZQ==
+  session-key: ZmFrZQ==
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-config
+  namespace: prod
+data:
+  LOG_LEVEL: info
+  FEATURE_BILLING: "false"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  namespace: prod
+  labels:
+    app.kubernetes.io/name: api
+spec:
+  type: LoadBalancer
+  selector:
+    app.kubernetes.io/name: api
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: prod
+  labels:
+    app.kubernetes.io/name: api
+    app.kubernetes.io/version: 1.4.2
+spec:
+  replicas: 12
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: api
+    spec:
+      serviceAccountName: api
+      hostNetwork: true
+      securityContext:
+        runAsNonRoot: false
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: migrate
+          image: ghcr.io/acme/api:1.4.2
+          imagePullPolicy: IfNotPresent
+          command:
+            - /app/migrate
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            limits:
+              cpu: 200m
+              memory: 256Mi
+            requests:
+              cpu: 50m
+              memory: 128Mi
+      containers:
+        - name: api
+          image: ghcr.io/acme/api:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: LOG_LEVEL
+              value: info
+            - name: LEGACY_ROUTER
+              value: "off"
+          securityContext:
+            allowPrivilegeEscalation: true
+            privileged: true
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            capabilities:
+              drop:
+                - ALL
+              add:
+                - NET_BIND_SERVICE
+                - SYS_ADMIN
+          resources:
+            limits:
+              cpu: 500m
+            requests:
+              cpu: 100m
+              memory: 256Mi
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: api
+  namespace: prod
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: api
+  minReplicas: 3
+  maxReplicas: 10
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: debug-shell
+  namespace: prod
+  labels:
+    app.kubernetes.io/name: debug-shell
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: debug-shell
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: debug-shell
+    spec:
+      hostPID: true
+      containers:
+        - name: shell
+          image: busybox
+          command:
+            - sleep
+            - infinity
+          securityContext:
+            allowPrivilegeEscalation: true
+            privileged: true
+            runAsNonRoot: false
+            capabilities:
+              add:
+                - NET_ADMIN
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: debug-shell
+  namespace: prod
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: debug-shell
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      protocol: TCP

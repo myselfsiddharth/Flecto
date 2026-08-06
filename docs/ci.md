@@ -366,6 +366,24 @@ way, so it drops into a pipeline wherever `flecto ci` does. Flags:
 
 ---
 
+## Gating rendered Kubernetes manifests
+
+The same `compare` shape gates a Helm or Kustomize change before `helm upgrade`
+runs: render the base and the head to plain multi-document YAML, then diff the
+two through the `kubernetes` policy pack.
+
+```bash
+helm template api ./charts/api -f values/prod.yaml > /tmp/head.yaml
+flecto compare /tmp/base.yaml /tmp/head.yaml --policies kubernetes --fail-on error
+```
+
+Flecto never invokes `helm` or `kustomize` — neither binary is a dependency, and
+neither is needed on the runner beyond whatever already renders your manifests.
+The full workflow, the pack's rules, and its limits:
+[kubernetes.md](kubernetes.md).
+
+---
+
 ## Empty runs
 
 If every target is missing or unsupported, `flecto ci` and

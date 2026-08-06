@@ -7,6 +7,7 @@
   "required": ["rules"],
   "properties": {
     "id": { "type": "string", "minLength": 1 },
+    "expandSubtrees": { "type": "boolean" },
     "rules": {
       "type": "array",
       "items": { "$ref": "#/$defs/rule" }

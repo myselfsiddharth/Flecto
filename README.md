@@ -263,6 +263,28 @@ can attach it to an incident thread and it renders offline. No server and no
 account, same as everything else here.
 → **[CLI reference](docs/cli-reference.md#flecto-report-files)**
 
+### Review a Kubernetes change before it reaches a cluster
+
+ArgoCD, Flux, and `helm diff` compare the cluster to the repo — which needs a
+cluster, and an apply that already happened. Flecto compares the manifests *this
+pull request would produce* against the ones `main` produces:
+
+```bash
+helm template api ./charts/api -f values/prod.yaml > /tmp/head.yaml
+flecto compare /tmp/base.yaml /tmp/head.yaml --policies kubernetes --fail-on error
+```
+
+```
+~ Service/prod/api.spec.type: "ClusterIP" → "LoadBalancer"
+  ! policy(error) [kubernetes] Service type is LoadBalancer, which exposes the
+    workload outside the cluster. Confirm the exposure is intended.
+```
+
+Multi-document YAML is keyed by `kind/namespace/name`, so findings name the
+resource. Flecto never runs `helm` or `kustomize` — you render, it diffs, so any
+renderer works and no binary is needed in CI.
+→ **[Kubernetes](docs/kubernetes.md)**
+
 ### Encode your own rules
 
 Beyond the built-in packs, write rules as declarative JSON or YAML — no code:
@@ -301,6 +323,7 @@ services doesn't read as a wall of changes.
 | `default` | Secret-like keys added or changed, secret-shaped *values* under any key, dangerous toggles, pool-size jumps |
 | `strict-prod` | The same ground, with production-grade severities and matching |
 | `compose` | Privileged services, host networking, Docker socket mounts, sensitive bind mounts |
+| `kubernetes` | Privileged containers, host namespaces, weakened `runAsNonRoot`, added `SYS_ADMIN`, unpinned images, replica jumps, dropped limits, `LoadBalancer`/`NodePort` exposure |
 | `node-runtime` | Dropped engine requirements, TLS verification bypasses, debug/inspector flags |
 
 ```bash
@@ -412,6 +435,7 @@ Explicit CLI flags win over profiles, which win over `defaults`.
 | **[CLI reference](docs/cli-reference.md)** | Every command, flag, and exit code |
 | **[Configuration](docs/configuration.md)** | `.flectorc`, profiles, ignore patterns, array identity, masking |
 | **[CI](docs/ci.md)** | Baselines, fail triggers, output formats, the bundled GitHub Actions |
+| **[Kubernetes](docs/kubernetes.md)** | Diffing rendered Helm/Kustomize manifests before they reach a cluster |
 | **[Webhooks and commands](docs/webhooks.md)** | Envelope shape, delivery modes, command environment |
 | **[Policy packs](docs/policy-packs.md)** | Writing declarative rules |
 | **[Plugins](docs/plugins.md)** · **[Cookbook](docs/plugin-cookbook.md)** | Rules that need real code |
