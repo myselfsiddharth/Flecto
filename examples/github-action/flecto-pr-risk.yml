@@ -1,0 +1,41 @@
+name: Flecto PR risk
+
+# Drop this file in as .github/workflows/flecto-pr-risk.yml and adjust the
+# `targets` glob. Nothing else needs wiring: the Action diffs against the pull
+# request's base commit on its own.
+
+on:
+  pull_request:
+    paths:
+      - "config/**"
+
+# contents: read       — actions/checkout
+# pull-requests: write — upsert the sticky risk comment.
+# Without pull-requests: write the job still runs and still fails on risky
+# changes; only the comment is skipped, with a warning in the log.
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  config-risk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Required. The baseline is the pull request's base commit, which the
+          # default shallow checkout (depth 1) does not contain — the Action
+          # fails with an explicit message rather than reporting "no changes".
+          fetch-depth: 0
+
+      - uses: myselfsiddharth/Flecto/.github/actions/flecto-pr-risk@main
+        with:
+          targets: config/**/*.{yaml,yml,json,toml,ini}
+          # Everything below is already the default; shown so you can see the
+          # knobs. `uses:` plus `targets:` is a complete adoption.
+          fail-on: policy,error
+          format: pr-comment
+          pr-comment-post: "true"
+          mask-secrets: "true"
+          # Pin to an exact version for reproducible builds, e.g. "2.1.0".
+          flecto-version: "2"

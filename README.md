@@ -173,6 +173,24 @@ a GitHub PR run, keeps **one** sticky comment up to date instead of adding a new
 one per push. Without that flag it just prints the markdown, so it can't post
 from your laptop.
 
+The `flecto-pr-risk` Action is that, packaged — the whole adoption is one
+`uses:`, with the baseline resolved from the pull request rather than `HEAD~1`:
+
+```yaml
+permissions:
+  contents: read
+  pull-requests: write
+
+steps:
+  - uses: actions/checkout@v7
+    with:
+      fetch-depth: 0
+  - uses: myselfsiddharth/Flecto/.github/actions/flecto-pr-risk@main
+```
+
+A fork's pull request gets a read-only token, so the comment is skipped with a
+warning there — the check itself still runs and still fails on risky changes.
+
 Works on any CI runner — it's a plain CLI with meaningful exit codes.
 → **[CI guide](docs/ci.md)**
 
@@ -379,7 +397,7 @@ Explicit CLI flags win over profiles, which win over `defaults`.
 |---|---|
 | **[CLI reference](docs/cli-reference.md)** | Every command, flag, and exit code |
 | **[Configuration](docs/configuration.md)** | `.flectorc`, profiles, ignore patterns, array identity, masking |
-| **[CI](docs/ci.md)** | Baselines, fail triggers, output formats, the GitHub Action |
+| **[CI](docs/ci.md)** | Baselines, fail triggers, output formats, the bundled GitHub Actions |
 | **[Webhooks and commands](docs/webhooks.md)** | Envelope shape, delivery modes, command environment |
 | **[Policy packs](docs/policy-packs.md)** | Writing declarative rules |
 | **[Plugins](docs/plugins.md)** · **[Cookbook](docs/plugin-cookbook.md)** | Rules that need real code |
