@@ -134,6 +134,15 @@ The format is based on [Keep a Changelog], and this project adheres to
   same envelopes and result shape as `ci`, plus a `baseline` field naming
   `fileA`. Exit code is `0` when the files match under the active fail triggers,
   `1` otherwise. ([#70])
+- A reproducible large-repo benchmark harness (`npm run bench`) and the findings
+  it produced in [docs/performance.md](docs/performance.md). The harness
+  generates a synthetic repo at 50/250/1000 config files — including deeply
+  nested trees and files with 5,000-entry arrays — snapshots it, mutates it, and
+  then measures `flecto ci` end to end while attributing time across glob
+  discovery, snapshot load, parse, diff, and policy evaluation. It uses
+  `node:perf_hooks` only, adds no dependency, never runs during `npm test`, and
+  is excluded from the published package. Developer tooling: nothing in `src/`
+  or the CLI depends on it. ([#78])
 
 ### Changed
 
@@ -144,6 +153,14 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ### Fixed
 
+- `flecto watch --snapshot` no longer degrades quadratically with the number of
+  tracked files. Deciding whether a file already had snapshot history listed the
+  whole `.flecto-snapshots/` directory once per file — and compiled a regular
+  expression once per directory entry — so re-snapshotting a repo cost N
+  listings of O(N) entries. The directory is now listed once per run. Measured
+  on 1,000 tracked files, re-snapshotting went from 2,229 ms to 546 ms (~4x);
+  the first snapshot of a repo, which never took this path, is unchanged.
+  ([#78])
 - `flecto ci --snapshot-ref <git-ref>` now resolves the baseline correctly when
   run from a subdirectory of the repository. `git show <rev>:<path>` resolves
   `<path>` from the repository root, so the previous cwd-relative path failed
@@ -257,6 +274,7 @@ The format is based on [Keep a Changelog], and this project adheres to
 [#72]: https://github.com/myselfsiddharth/Flecto/issues/72
 [#74]: https://github.com/myselfsiddharth/Flecto/issues/74
 [#75]: https://github.com/myselfsiddharth/Flecto/issues/75
+[#78]: https://github.com/myselfsiddharth/Flecto/issues/78
 [#79]: https://github.com/myselfsiddharth/Flecto/issues/79
 [Keep a Changelog]: https://keepachangelog.com/en/1.1.0/
 [Semantic Versioning]: https://semver.org/spec/v2.0.0.html

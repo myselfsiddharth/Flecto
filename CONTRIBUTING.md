@@ -29,6 +29,14 @@ Node.js **20.19.0+** is required.
 - PR titles should be concise and descriptive (conventional style encouraged: `feat:`, `fix:`, `docs:`, `ci:`, `chore:`).
 - Do not force-push to `main`. Force-pushes on shared PR branches are discouraged after review has started — prefer new commits or a coordinated rebase.
 
+## Benchmarks
+
+`npm run bench` generates a synthetic repo in a temp directory and reports where
+`flecto ci` spends its time. It never runs as part of `npm test` or CI, and it
+is not published to npm. Findings and methodology live in
+[docs/performance.md](docs/performance.md) — update that page if a change moves
+the numbers.
+
 ## Code guidelines
 
 - Match existing style in `src/` and `test/` (ESM, `node:test`).

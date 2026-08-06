@@ -70,14 +70,27 @@ function snapshotHistoryPathForFile(absPath) {
   return path;
 }
 
-function hasSnapshotHistoryForFile(absPath) {
-  if (!existsSync(SNAPSHOT_DIR)) return false;
-  const id = snapshotIdForPath(absPath);
-  return readdirSync(SNAPSHOT_DIR).some((name) => new RegExp(`^${id}\\.\\d+\\.json$`).test(name));
+/**
+ * Snapshot ids that already have at least one timestamped history entry.
+ *
+ * Listed once per run and threaded through the snapshot loop: probing the
+ * directory per file made writing N baselines cost N listings of O(N) entries
+ * each, which is quadratic in the number of tracked files.
+ * @returns {Set<string>}
+ */
+function snapshotIdsWithHistory() {
+  /** @type {Set<string>} */
+  const ids = new Set();
+  if (!existsSync(SNAPSHOT_DIR)) return ids;
+  for (const name of readdirSync(SNAPSHOT_DIR)) {
+    const match = /^([a-f0-9]{16})\.\d+\.json$/.exec(name);
+    if (match) ids.add(match[1]);
+  }
+  return ids;
 }
 
-function preserveLegacySnapshotForHistory(absPath, snapshotPath) {
-  if (!existsSync(snapshotPath) || hasSnapshotHistoryForFile(absPath)) return;
+function preserveLegacySnapshotForHistory(absPath, snapshotPath, idsWithHistory) {
+  if (!existsSync(snapshotPath) || idsWithHistory.has(snapshotIdForPath(absPath))) return;
 
   const legacy = JSON.parse(readFileSync(snapshotPath, 'utf8'));
   writeFileSync(
@@ -435,6 +448,7 @@ program
 
       if (effective.snapshot) {
         mkdirSync(SNAPSHOT_DIR, { recursive: true });
+        const idsWithHistory = snapshotIdsWithHistory();
         let written = 0;
         for (const filepath of targets) {
           if (!existsSync(filepath)) {
@@ -447,10 +461,13 @@ program
           }
           const state = parseFile(filepath);
           const snapshotPath = snapshotPathForFile(filepath);
-          preserveLegacySnapshotForHistory(filepath, snapshotPath);
+          preserveLegacySnapshotForHistory(filepath, snapshotPath, idsWithHistory);
           const snapshot = { file: filepath, state, createdAt: new Date().toISOString() };
           writeFileSync(snapshotPath, JSON.stringify(snapshot, null, 2), 'utf8');
           writeFileSync(snapshotHistoryPathForFile(filepath), JSON.stringify(snapshot, null, 2), 'utf8');
+          // Keep the set in step with what this run has written, so a repeated
+          // target behaves exactly as it did when the check hit the disk.
+          idsWithHistory.add(snapshotIdForPath(filepath));
           console.log(chalk.green(`✓ Snapshot saved: ${snapshotPath}`));
           written += 1;
         }
