@@ -128,12 +128,22 @@ To test a rule against fixtures, see
 ## A secret wasn't masked
 
 Masking matches on the *key name* — `secret`, `token`, `password`, `api_key`,
-`private_key`, `credential`. A secret under a key name that gives no hint is not
-currently detected. [#66](https://github.com/myselfsiddharth/Flecto/issues/66)
-tracks value-based detection.
+`private_key`, `credential` — and, independently, on the *value*: known token
+formats (AWS, GitHub, Slack, Google, Stripe, JWT, PEM private-key blocks, URL
+credentials) plus a high-entropy fallback for opaque strings. See
+[secret masking](configuration.md#secret-masking) for the exact rules.
+
+A value can still slip through, by design. The entropy fallback ignores strings
+under 24 characters, strings containing `.` `/` `:` or whitespace, strings that
+are not a mix of upper, lower, and digits, and anything word-shaped — the gates
+are tuned so a hostname or file path is never masked, which costs some recall.
+An all-lowercase API key, or a standard-base64 secret containing `/`, is missed
+unless its format is one of the known ones. Rename the key to something
+`api_key`-shaped, or put the value behind an env reference, to get it covered.
 
 Also check scope: `--mask-secrets` covers terminal output only. Add
-`--mask-secrets-webhooks` for webhook payloads.
+`--mask-secrets-webhooks` for webhook payloads. And masking is opt-in: without
+`--mask-secrets`, nothing is redacted regardless of how the value looks.
 
 ---
 

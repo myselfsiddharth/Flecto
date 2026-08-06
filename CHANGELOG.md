@@ -9,6 +9,17 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ### Added
 
+- Value-pattern secret detection. Secrets are now found by what the value looks
+  like, not only by the key name: known token formats (AWS `AKIA…`/`ASIA…`,
+  GitHub `ghp_…`/`gho_…`/`ghu_…`/`ghs_…`/`ghr_…`, Slack `xox[abprs]-…`, Google
+  `AIza…`, Stripe `sk_live_…`/`rk_live_…`, JWTs, PEM private-key blocks, and
+  credentials embedded in a `scheme://user:password@host` URL) plus a
+  conservative high-entropy fallback for opaque strings. The same detection
+  drives `--mask-secrets` redaction and the new `secret-value-detected` rule in
+  the built-in `default` and `strict-prod` packs, so a credential under a boring
+  key such as `db.connstr` is both flagged and masked. Packs can use it directly
+  through the new `afterLooksSecret` / `beforeLooksSecret` predicates. Key-name
+  detection is unchanged. ([#66])
 - Multi-document YAML support (`---`-separated), the usual shape of a Kubernetes
   manifest. Previously such a file failed to parse. Each document is diffed
   under its own key: `kind/name` for Kubernetes-shaped documents (namespaced
@@ -140,6 +151,7 @@ The format is based on [Keep a Changelog], and this project adheres to
 [#38]: https://github.com/myselfsiddharth/Flecto/issues/38
 [#39]: https://github.com/myselfsiddharth/Flecto/issues/39
 [#40]: https://github.com/myselfsiddharth/Flecto/pull/40
+[#66]: https://github.com/myselfsiddharth/Flecto/issues/66
 [#69]: https://github.com/myselfsiddharth/Flecto/issues/69
 [#72]: https://github.com/myselfsiddharth/Flecto/issues/72
 [#79]: https://github.com/myselfsiddharth/Flecto/issues/79

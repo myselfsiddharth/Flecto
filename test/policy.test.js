@@ -38,6 +38,72 @@ describe('policy engine', () => {
     assert.equal(findings[0].severity, 'error');
   });
 
+  test('flags a secret-shaped value stored under an innocuous key', async () => {
+    const findings = await evaluatePolicies([
+      {
+        type: 'added',
+        path: 'db.connstr',
+        after: 'postgres://app:7Kq2vNbXp9TzR4wY@db.internal.example.test:5432/appdb',
+      },
+    ]);
+    assert.equal(findings.length, 1);
+    assert.equal(findings[0].id, 'secret-value-detected');
+    assert.equal(findings[0].severity, 'error');
+    assert.equal(findings[0].path, 'db.connstr');
+  });
+
+  test('flags a known token format nested under a benign parent path', async () => {
+    const findings = await evaluatePolicies([
+      {
+        type: 'changed',
+        path: 'service',
+        before: { value: 'unset' },
+        after: { value: 'AKIAIOSFODNN7EXAMPLE' },
+      },
+    ]);
+    assert.deepEqual(findings.map((finding) => finding.id), ['secret-value-detected']);
+  });
+
+  test('reports both secret rules when a secret value sits under a secret-looking key', async () => {
+    const findings = await evaluatePolicies([
+      {
+        type: 'changed',
+        path: 'auth.api_key',
+        before: 'unset',
+        after: 'ghp_aB3dE5fG7hJ9kL1mN3pQ5rS7tU9vW1xY3zA5',
+      },
+    ]);
+    assert.deepEqual(
+      findings.map((finding) => finding.id).sort(),
+      ['secret-key-changed', 'secret-value-detected'],
+    );
+  });
+
+  test('does not flag benign values that merely look opaque', async () => {
+    const findings = await evaluatePolicies([
+      { type: 'changed', path: 'db.host', before: 'db.old.example.test', after: 'db.internal.example.test' },
+      { type: 'changed', path: 'app.version', before: '2.0.0', after: '2.1.0-rc.1' },
+      {
+        type: 'changed',
+        path: 'build.commit',
+        before: '9f2b7c1a4d5e6f708192a3b4c5d6e7f8091a2b3c',
+        after: 'c3b2a1908f7e6d5c4b3a2019f8e7d6c5b4a30291',
+      },
+      { type: 'added', path: 'request.trace_id', after: '550e8400-e29b-41d4-a716-446655440000' },
+      { type: 'added', path: 'paths.cache', after: '/var/lib/Docker/Volumes/AppData2024/backups' },
+      { type: 'added', path: 'image.ref', after: 'ghcr.io/acme/checkout-service:1.14.2' },
+    ]);
+    assert.deepEqual(findings, []);
+  });
+
+  test('silences value-based secret detection with an off remap', async () => {
+    const findings = await evaluatePolicies(
+      [{ type: 'added', path: 'db.connstr', after: 'AKIAIOSFODNN7EXAMPLE' }],
+      { severityRemap: { 'secret-value-detected': 'off' } },
+    );
+    assert.deepEqual(findings, []);
+  });
+
   test('flags large pool size increase', async () => {
     const findings = await evaluatePolicies([
       { type: 'changed', path: 'database.pool_size', before: 10, after: 40 },
@@ -168,6 +234,18 @@ describe('policy engine', () => {
     });
   });
 
+  test('rejects a non-true afterLooksSecret predicate', () => {
+    withLocalPack('bad-secret-predicate', {
+      id: 'bad-secret-predicate',
+      rules: [{ id: 'broken-rule', severity: 'warn', afterLooksSecret: false }],
+    }, (cwd) => {
+      assert.throws(
+        () => loadPack('bad-secret-predicate', cwd),
+        /rule "broken-rule"\.afterLooksSecret must be true/,
+      );
+    });
+  });
+
   test('rejects invalid match regular expressions on load', () => {
     withLocalPack('invalid-regexp', {
       id: 'invalid-regexp',
@@ -235,6 +313,15 @@ describe('policy engine', () => {
     assert.equal(findings[0].pack, 'strict-prod');
   });
 
+  test('strict-prod flags a secret-shaped value that was removed', async () => {
+    const findings = await evaluatePolicies(
+      [{ type: 'removed', path: 'db.connstr', before: 'AKIAIOSFODNN7EXAMPLE' }],
+      { policies: ['strict-prod'] },
+    );
+    assert.deepEqual(findings.map((finding) => finding.id), ['secret-value-detected']);
+    assert.equal(findings[0].severity, 'error');
+  });
+
   test('lists and loads the compose builtin pack', () => {
     assert.ok(listBuiltinPackIds().includes('compose'));
     assert.equal(loadPack('compose').id, 'compose');
@@ -298,6 +385,27 @@ describe('policy engine', () => {
       { id: 'is-configured', severity: 'info', afterTruthy: true },
     ], [{ type: 'changed', path: 'feature.enabled', before: true, after: 'yes' }]);
     assert.deepEqual(findings.map((finding) => finding.id), ['was-configured', 'is-configured']);
+  });
+
+  test('matches symmetric secret-value predicates', async () => {
+    const findings = await evaluateCustomPack([
+      { id: 'was-secret', severity: 'info', beforeLooksSecret: true },
+      { id: 'is-secret', severity: 'info', afterLooksSecret: true },
+    ], [{
+      type: 'changed',
+      path: 'db.connstr',
+      before: 'AKIAIOSFODNN7EXAMPLE',
+      after: 'gT4kQ9wZ2mB7xL5nR8vC3jH6pY1sD0fA',
+    }]);
+    assert.deepEqual(findings.map((finding) => finding.id), ['was-secret', 'is-secret']);
+  });
+
+  test('does not match secret-value predicates on ordinary values', async () => {
+    const findings = await evaluateCustomPack([
+      { id: 'was-secret', severity: 'info', beforeLooksSecret: true },
+      { id: 'is-secret', severity: 'info', afterLooksSecret: true },
+    ], [{ type: 'changed', path: 'db.host', before: 'db.old.example.test', after: 'db.internal.example.test' }]);
+    assert.deepEqual(findings, []);
   });
 
   test('matches exact and prefixed paths without regular expressions', async () => {

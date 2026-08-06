@@ -2,6 +2,7 @@ import { existsSync, readFileSync, readdirSync } from 'fs';
 import { dirname, isAbsolute, join, resolve } from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 import yaml from 'js-yaml';
+import { containsSecret } from './secrets.js';
 
 /**
  * @typedef {'info' | 'warn' | 'error'} PolicySeverity
@@ -24,6 +25,8 @@ import yaml from 'js-yaml';
  *   afterIn?: unknown[],
  *   beforeTruthy?: true,
  *   afterTruthy?: true,
+ *   beforeLooksSecret?: true,
+ *   afterLooksSecret?: true,
  *   afterMatches?: string,
  *   numericJump?: { minMultiple: number },
  *   numericDelta?: { min: number },
@@ -41,6 +44,8 @@ import yaml from 'js-yaml';
  *   afterIn?: unknown[],
  *   beforeTruthy?: true,
  *   afterTruthy?: true,
+ *   beforeLooksSecret?: true,
+ *   afterLooksSecret?: true,
  *   afterMatches?: string,
  *   numericJump?: { minMultiple: number },
  *   numericDelta?: { min: number }
@@ -65,11 +70,13 @@ const CHANGE_TYPES = new Set(['added', 'removed', 'changed']);
 const RULE_FIELDS = new Set([
   'id', 'severity', 'when', 'match', 'beforeEquals', 'afterEquals',
   'beforeIn', 'afterIn', 'beforeTruthy', 'afterTruthy', 'numericJump',
+  'beforeLooksSecret', 'afterLooksSecret',
   'afterMatches', 'numericDelta', 'allOf', 'anyOf', 'message', 'messageTemplate',
 ]);
 const CLAUSE_FIELDS = new Set([
   'match', 'beforeEquals', 'afterEquals', 'beforeIn', 'afterIn',
-  'beforeTruthy', 'afterTruthy', 'afterMatches', 'numericJump', 'numericDelta',
+  'beforeTruthy', 'afterTruthy', 'beforeLooksSecret', 'afterLooksSecret',
+  'afterMatches', 'numericJump', 'numericDelta',
 ]);
 const MATCH_FIELDS = new Set(['path', 'pathFlags', 'pathEquals', 'pathPrefix']);
 
@@ -206,6 +213,8 @@ function validateRule(candidate, location, isClause = false) {
   validateArrayPredicate(rule.afterIn, 'afterIn', location);
   validateTruthyPredicate(rule.beforeTruthy, 'beforeTruthy', location);
   validateTruthyPredicate(rule.afterTruthy, 'afterTruthy', location);
+  validateTruthyPredicate(rule.beforeLooksSecret, 'beforeLooksSecret', location);
+  validateTruthyPredicate(rule.afterLooksSecret, 'afterLooksSecret', location);
   validateRegexPredicate(rule.afterMatches, 'afterMatches', location);
   validateNumericPredicate(rule.numericJump, 'numericJump', 'minMultiple', location, true);
   validateNumericPredicate(rule.numericDelta, 'numericDelta', 'min', location, false);
@@ -400,6 +409,10 @@ function matchClause(clause, change) {
   if (clause.afterIn && !clause.afterIn.includes(change.after)) return false;
   if (clause.beforeTruthy && !isTruthyToggle(change.before)) return false;
   if (clause.afterTruthy && !isTruthyToggle(change.after)) return false;
+  // Value-shaped secret detection, shared with the masking path so a rule and
+  // the redaction it triggers never disagree.
+  if (clause.beforeLooksSecret && !containsSecret(change.before)) return false;
+  if (clause.afterLooksSecret && !containsSecret(change.after)) return false;
   if (clause.afterMatches && (typeof change.after !== 'string' || !new RegExp(clause.afterMatches).test(change.after))) return false;
 
   if (clause.numericJump) {

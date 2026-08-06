@@ -229,7 +229,7 @@ services doesn't read as a wall of changes.
 
 | Pack | Catches |
 |---|---|
-| `default` | Secret-like keys added or changed, dangerous toggles, pool-size jumps |
+| `default` | Secret-like keys added or changed, secret-shaped *values* under any key, dangerous toggles, pool-size jumps |
 | `strict-prod` | The same ground, with production-grade severities and matching |
 | `compose` | Privileged services, host networking, Docker socket mounts, sensitive bind mounts |
 | `node-runtime` | Dropped engine requirements, TLS verification bypasses, debug/inspector flags |

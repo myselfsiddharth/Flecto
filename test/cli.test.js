@@ -675,6 +675,69 @@ test('policies list discovers built-ins and local overrides from cwd', () => {
 });
 
 
+test('watch --diff --mask-secrets redacts secret-shaped values under innocuous keys', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-mask-value-'));
+  const file = join(dir, 'config.json');
+  const rootIndex = resolve(process.cwd(), 'index.js');
+
+  try {
+    writeFileSync(file, JSON.stringify({ service: 'api' }, null, 2), 'utf8');
+    const snapshot = spawnSync(
+      process.execPath,
+      [rootIndex, 'watch', file, '--snapshot'],
+      { cwd: dir, encoding: 'utf8' },
+    );
+    assert.equal(snapshot.status, 0);
+
+    writeFileSync(file, JSON.stringify({
+      service: 'api',
+      database: {
+        host: 'db.internal.test',
+        connstr: 'postgres://app:7Kq2vNbXp9TzR4wY@db.internal.test:5432/appdb',
+      },
+      build: { commit: '9f2b7c1a4d5e6f708192a3b4c5d6e7f8091a2b3c' },
+    }, null, 2), 'utf8');
+
+    const diff = spawnSync(
+      process.execPath,
+      [rootIndex, 'watch', file, '--diff', '--mask-secrets'],
+      { cwd: dir, encoding: 'utf8' },
+    );
+
+    assert.equal(diff.status, 1);
+    assert.doesNotMatch(diff.stdout, /7Kq2vNbXp9TzR4wY/);
+    assert.match(diff.stdout, /postgres:\/\/app:\*\*\*@db\.internal\.test:5432\/appdb/);
+    assert.match(diff.stdout, /9f2b7c1a4d5e6f708192a3b4c5d6e7f8091a2b3c/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('ci flags a secret-shaped value under an innocuous key', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-secret-value-'));
+  const file = join(dir, 'config.json');
+  const snapshot = join(dir, 'snapshot.json');
+  const rootIndex = resolve(process.cwd(), 'index.js');
+
+  try {
+    writeFileSync(file, JSON.stringify({ db: { connstr: 'AKIAIOSFODNN7EXAMPLE' } }, null, 2), 'utf8');
+    writeFileSync(snapshot, JSON.stringify({ state: { db: { connstr: 'unset' } } }, null, 2), 'utf8');
+
+    const run = spawnSync(
+      process.execPath,
+      [rootIndex, 'ci', file, '--snapshot-ref', snapshot, '--format', 'json', '--fail-on', 'policy'],
+      { cwd: dir, encoding: 'utf8' },
+    );
+
+    assert.equal(run.status, 1);
+    const [result] = JSON.parse(run.stdout);
+    assert.deepEqual(result.policies.map((finding) => finding.id), ['secret-value-detected']);
+    assert.equal(result.policies[0].severity, 'error');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('watch --diff --mask-secrets redacts nested secrets in terminal output', () => {
   const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-mask-'));
   const file = join(dir, 'config.json');

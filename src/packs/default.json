@@ -12,6 +12,13 @@
       "message": "Sensitive-looking key added or changed. Confirm secret storage, rotation, and access controls."
     },
     {
+      "id": "secret-value-detected",
+      "severity": "error",
+      "when": ["added", "changed"],
+      "afterLooksSecret": true,
+      "message": "Value looks like a credential (known token format or high-entropy string) regardless of its key name. Move it to a secret store and rotate it."
+    },
+    {
       "id": "dangerous-toggle-enabled",
       "severity": "error",
       "when": ["changed"],

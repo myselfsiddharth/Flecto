@@ -72,6 +72,7 @@ Each rule produces one finding for every change that satisfies all specified con
 | `match.path` | Optional JavaScript regular expression matched against the semantic change path. |
 | `match.pathFlags` | Optional JavaScript regular-expression flags, such as `i`. |
 | `afterEquals` | Optional exact post-change value matcher. |
+| `beforeLooksSecret` / `afterLooksSecret` | `true` when the value — or any string nested inside it — looks like a credential. |
 | `numericJump.minMultiple` | Optional numeric increase threshold. |
 | `message` | Static finding text. |
 | `messageTemplate` | Finding text with `{before}`, `{after}`, and `{path}` placeholders. Takes precedence over `message`. |
@@ -83,6 +84,36 @@ Paths use dot notation and array indices, for example `database.pool_size` and `
 ```
 
 `numericJump` matches only when both values are JavaScript numbers, the previous value is greater than zero, and `after >= before * minMultiple`.
+
+## Secret-shaped values
+
+`afterLooksSecret` (and its mirror `beforeLooksSecret`) matches on the value
+rather than the path, so a credential stored under a name like `db.connstr` or a
+bare `value` is caught:
+
+```json
+{
+  "id": "credential-in-config",
+  "severity": "error",
+  "when": ["added", "changed"],
+  "afterLooksSecret": true,
+  "message": "This value looks like a credential."
+}
+```
+
+The predicate is true when the value — or any string nested inside an object or
+array value — matches a known token format (AWS, GitHub, Slack, Google, Stripe,
+JWT, PEM private-key block, or credentials embedded in a URL) or clears a
+conservative high-entropy test. It is the same detection that `--mask-secrets`
+uses, documented in [secret masking](configuration.md#secret-masking); benign
+shapes such as hostnames, UUIDs, git SHAs, version strings, and file paths do
+not match, and environment references such as `${DB_PASSWORD}` are ignored.
+
+The built-in `default` and `strict-prod` packs ship this as
+`secret-value-detected` (`error`), alongside the key-name rule
+`secret-key-changed`; `strict-prod` also covers removals. A change whose key
+*and* value both look secret produces both findings. Silence either one per
+profile with `severityRemap`.
 
 ## Exact values, truthiness, and coercion
 
