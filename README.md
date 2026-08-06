@@ -167,6 +167,12 @@ steps:
       snapshot-ref: HEAD~1
 ```
 
+Prefer a summary nobody can miss? `--format pr-comment` renders the changes and
+policy findings as markdown and, when you opt in with `--pr-comment-post` inside
+a GitHub PR run, keeps **one** sticky comment up to date instead of adding a new
+one per push. Without that flag it just prints the markdown, so it can't post
+from your laptop.
+
 Works on any CI runner — it's a plain CLI with meaningful exit codes.
 → **[CI guide](docs/ci.md)**
 

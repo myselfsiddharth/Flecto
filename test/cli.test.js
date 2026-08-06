@@ -879,3 +879,138 @@ test('watch rejects an unknown webhook format from the CLI and from .flectorc', 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('ci --format pr-comment prints sticky markdown and keeps the diff exit code', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-pr-comment-'));
+  const file = join(dir, 'config.json');
+  const snapshot = join(dir, 'snapshot.json');
+  const rootIndex = resolve(process.cwd(), 'index.js');
+
+  try {
+    writeFileSync(file, JSON.stringify({ logging: { debug: true } }), 'utf8');
+    writeFileSync(snapshot, JSON.stringify({ state: { logging: { debug: false } } }), 'utf8');
+
+    const run = spawnSync(
+      process.execPath,
+      [rootIndex, 'ci', file, '--snapshot-ref', snapshot, '--format', 'pr-comment', '--fail-on', 'changed'],
+      { cwd: dir, encoding: 'utf8' },
+    );
+
+    assert.equal(run.status, 1);
+    assert.equal(run.stdout.split('\n')[0], '<!-- flecto:pr-comment -->');
+    assert.match(run.stdout, /## Flecto — config change report/);
+    assert.match(run.stdout, /❌ \*\*Check failing\*\*/);
+    assert.match(run.stdout, /\| changed \| `logging\.debug` \| `false` \| `true` \|/);
+    // Nothing is posted without the explicit opt-in, so nothing warns about it.
+    assert.doesNotMatch(run.stderr, /PR comment/);
+
+    const passing = spawnSync(
+      process.execPath,
+      [rootIndex, 'ci', file, '--snapshot-ref', snapshot, '--format', 'pr-comment', '--fail-on', ''],
+      { cwd: dir, encoding: 'utf8' },
+    );
+
+    assert.equal(passing.status, 0);
+    assert.match(passing.stdout, /✅ \*\*Check passing\*\*/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('ci --pr-comment-post warns without a PR context but keeps the real exit code', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-pr-post-'));
+  const file = join(dir, 'config.json');
+  const snapshot = join(dir, 'snapshot.json');
+  const rootIndex = resolve(process.cwd(), 'index.js');
+  // A laptop-like environment: no token, no repository, no pull request ref.
+  const env = {
+    ...process.env,
+    GITHUB_TOKEN: '',
+    GITHUB_REPOSITORY: '',
+    GITHUB_REF: '',
+    GITHUB_EVENT_PATH: '',
+  };
+
+  try {
+    writeFileSync(file, JSON.stringify({ a: 2 }), 'utf8');
+    writeFileSync(snapshot, JSON.stringify({ state: { a: 1 } }), 'utf8');
+
+    const run = spawnSync(
+      process.execPath,
+      [
+        rootIndex, 'ci', file, '--snapshot-ref', snapshot,
+        '--format', 'pr-comment', '--pr-comment-post', '--fail-on', 'changed',
+      ],
+      { cwd: dir, encoding: 'utf8', env },
+    );
+
+    assert.equal(run.status, 1);
+    assert.match(run.stdout, /<!-- flecto:pr-comment -->/);
+    assert.match(run.stderr, /Could not post the PR comment: GITHUB_TOKEN is not set/);
+
+    // The same delivery failure must not turn a passing run red either.
+    const passing = spawnSync(
+      process.execPath,
+      [
+        rootIndex, 'ci', file, '--snapshot-ref', snapshot,
+        '--format', 'pr-comment', '--pr-comment-post', '--fail-on', '',
+      ],
+      { cwd: dir, encoding: 'utf8', env },
+    );
+
+    assert.equal(passing.status, 0);
+    assert.match(passing.stderr, /Could not post the PR comment/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('ci warns when --pr-comment-post is used with another format', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-pr-post-format-'));
+  const file = join(dir, 'config.json');
+  const snapshot = join(dir, 'snapshot.json');
+  const rootIndex = resolve(process.cwd(), 'index.js');
+
+  try {
+    writeFileSync(file, JSON.stringify({ a: 2 }), 'utf8');
+    writeFileSync(snapshot, JSON.stringify({ state: { a: 1 } }), 'utf8');
+
+    const run = spawnSync(
+      process.execPath,
+      [
+        rootIndex, 'ci', file, '--snapshot-ref', snapshot,
+        '--format', 'json', '--pr-comment-post', '--fail-on', '',
+      ],
+      { cwd: dir, encoding: 'utf8' },
+    );
+
+    assert.equal(run.status, 0);
+    assert.match(run.stderr, /Ignoring --pr-comment-post/);
+    assert.match(run.stdout, /"changes"/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('ci rejects an unknown format', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-bad-format-'));
+  const file = join(dir, 'config.json');
+  const snapshot = join(dir, 'snapshot.json');
+  const rootIndex = resolve(process.cwd(), 'index.js');
+
+  try {
+    writeFileSync(file, JSON.stringify({ a: 2 }), 'utf8');
+    writeFileSync(snapshot, JSON.stringify({ state: { a: 1 } }), 'utf8');
+
+    const run = spawnSync(
+      process.execPath,
+      [rootIndex, 'ci', file, '--snapshot-ref', snapshot, '--format', 'markdown'],
+      { cwd: dir, encoding: 'utf8' },
+    );
+
+    assert.equal(run.status, 1);
+    assert.match(run.stderr, /--format must be json, ndjson, github-annotations, or pr-comment/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

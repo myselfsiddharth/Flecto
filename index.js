@@ -16,10 +16,12 @@ import {
   renderDiff,
   renderError,
   renderInfo,
+  renderNote,
   renderWarn,
   renderPolicyFindings,
   maskChangeEvent,
 } from './src/renderer.js';
+import { deliverPrComment, renderPrComment } from './src/pr-comment.js';
 import { fireAlerts } from './src/alerter.js';
 import { resolveWebhookFormat, WEBHOOK_FORMAT_CHOICES } from './src/notifiers.js';
 import { createEnvelope } from './src/envelope.js';
@@ -324,6 +326,26 @@ function printCiOutput(results, format) {
   }
 }
 
+/**
+ * Deliver the sticky PR comment without ever changing the CI outcome: a
+ * delivery problem warns, and the exit code stays with the diff/policy result.
+ * @param {string} body
+ * @param {boolean} enabled
+ */
+async function deliverPrCommentSafely(body, enabled) {
+  if (!enabled) return;
+  try {
+    const result = await deliverPrComment(body, { enabled: true });
+    if (result.posted) {
+      renderNote(`PR comment ${result.action}${result.url ? `: ${result.url}` : ''}`);
+      return;
+    }
+    renderWarn(`Could not post the PR comment: ${result.reason}`);
+  } catch (err) {
+    renderWarn(`Could not post the PR comment: ${err.message}`);
+  }
+}
+
 program
   .name('flecto')
   .description('Flecto — semantic config watcher for meaningful structured file changes')
@@ -580,7 +602,8 @@ program
   .description('Run semantic diff in CI mode')
   .option('-p, --profile <name>', 'Use profile from .flectorc (else FLECTO_PROFILE)')
   .option('--snapshot-ref <ref>', 'Snapshot reference: snapshot path or git ref')
-  .option('--format <type>', 'Output format: json | ndjson | github-annotations', 'json')
+  .option('--format <type>', 'Output format: json | ndjson | github-annotations | pr-comment', 'json')
+  .option('--pr-comment-post', 'With --format pr-comment, upsert the comment on the PR (needs GITHUB_TOKEN + PR context)', false)
   .option('--fail-on <rules>', 'Comma-separated fail rules: changed,added,removed,policy,error,warn', 'changed,policy,error')
   .option('--ignore <keys>', 'Comma-separated key paths to ignore')
   .option('--policies <ids>', 'Comma-separated policy pack ids')
@@ -604,8 +627,12 @@ program
       const ignorePaths = parseCsv(effective.ignore);
       const failOn = new Set(parseCsv(effective.failOn ?? 'changed,policy,error'));
       const format = String(effective.format ?? 'json');
-      if (!['json', 'ndjson', 'github-annotations'].includes(format)) {
-        throw new Error('--format must be json, ndjson, or github-annotations');
+      if (!['json', 'ndjson', 'github-annotations', 'pr-comment'].includes(format)) {
+        throw new Error('--format must be json, ndjson, github-annotations, or pr-comment');
+      }
+      const prCommentPost = Boolean(effective.prCommentPost);
+      if (prCommentPost && format !== 'pr-comment') {
+        renderWarn('Ignoring --pr-comment-post: it only applies to --format pr-comment.');
       }
       const maskSecrets = Boolean(effective.maskSecrets);
       const dOpts = diffOptionsFromEffective(effective, ignorePaths);
@@ -666,7 +693,13 @@ program
         );
       }
 
-      printCiOutput(results, format);
+      if (format === 'pr-comment') {
+        const body = renderPrComment(results, { cwd: process.cwd(), failed: shouldFail });
+        console.log(body);
+        await deliverPrCommentSafely(body, prCommentPost);
+      } else {
+        printCiOutput(results, format);
+      }
       process.exit(shouldFail ? 1 : 0);
     } catch (err) {
       renderError(err.message);
