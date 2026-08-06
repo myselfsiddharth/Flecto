@@ -139,6 +139,14 @@ export function renderInfo(msg) {
 }
 
 /**
+ * Print a dim status note on stderr, so it stays out of machine-readable stdout.
+ * @param {string} msg
+ */
+export function renderNote(msg) {
+  console.error(chalk.dim(msg));
+}
+
+/**
  * Print policy findings.
  * @param {import('./policy.js').PolicyFinding[]} findings
  */

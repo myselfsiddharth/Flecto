@@ -24,6 +24,20 @@ inputs:
     description: Flecto output format.
     required: false
     default: github-annotations
+  pr-comment-post:
+    description: >-
+      With format: pr-comment, upsert a single sticky comment on the pull
+      request instead of only printing the markdown. Requires github-token and
+      `permissions: pull-requests: write`.
+    required: false
+    default: "false"
+  github-token:
+    description: >-
+      Token used to post the pull request comment. Pass ${{ github.token }}
+      (or a PAT) only when pr-comment-post is true; posting is skipped without
+      it.
+    required: false
+    default: ""
   snapshot-ref:
     description: Git ref or snapshot file used as the baseline.
     required: false
@@ -50,6 +64,10 @@ runs:
         INPUT_PROFILE: ${{ inputs.profile }}
         INPUT_FORMAT: ${{ inputs.format }}
         INPUT_SNAPSHOT_REF: ${{ inputs.snapshot-ref }}
+        INPUT_PR_COMMENT_POST: ${{ inputs.pr-comment-post }}
+        # Always set explicitly: an empty value makes Flecto skip posting rather
+        # than fall back to an ambient token.
+        GITHUB_TOKEN: ${{ inputs.github-token }}
       run: |
         set -euo pipefail
 
@@ -66,6 +84,9 @@ runs:
         fi
         if [[ -n "$INPUT_SNAPSHOT_REF" ]]; then
           args+=(--snapshot-ref "$INPUT_SNAPSHOT_REF")
+        fi
+        if [[ "$INPUT_PR_COMMENT_POST" == "true" ]]; then
+          args+=(--pr-comment-post)
         fi
 
         # Pin to the compatible major line. Pin to a full version for

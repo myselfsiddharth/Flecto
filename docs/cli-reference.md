@@ -72,7 +72,8 @@ flecto ci "config/**/*.yaml" --snapshot-ref HEAD~1 --fail-on "policy,error"
 |---|---|---|
 | `-p, --profile <name>` | — | Use a profile from `.flectorc` (else `FLECTO_PROFILE`) |
 | `--snapshot-ref <ref>` | local snapshot | Baseline: a snapshot file path, or a git ref |
-| `--format <type>` | `json` | `json`, `ndjson`, or `github-annotations` |
+| `--format <type>` | `json` | `json`, `ndjson`, `github-annotations`, or `pr-comment` |
+| `--pr-comment-post` | off | With `--format pr-comment`, upsert the sticky comment on the PR |
 | `--fail-on <rules>` | `changed,policy,error` | Comma-separated fail triggers |
 | `--ignore <keys>` | — | Comma-separated key paths to ignore |
 | `--policies <ids>` | `default` | Comma-separated policy pack ids |
@@ -91,6 +92,12 @@ or when the run errored.
 Two things fail closed by design: an unresolved `--snapshot-ref` is an error
 rather than a silently empty baseline, and a run where every target is missing or
 unsupported exits non-zero unless you pass `--allow-empty`.
+
+`--format pr-comment` prints a markdown risk summary to stdout. It posts that
+summary as a single sticky pull request comment only when `--pr-comment-post` is
+passed *and* `GITHUB_TOKEN`, `GITHUB_REPOSITORY`, and a PR number (from
+`GITHUB_REF` or `GITHUB_EVENT_PATH`) are all present — otherwise it warns and
+prints. A delivery failure never changes the exit code.
 
 Full CI guide, including the GitHub Action: [ci.md](ci.md).
 

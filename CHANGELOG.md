@@ -34,6 +34,20 @@ The format is based on [Keep a Changelog], and this project adheres to
   `*.office.com`) and is opt-in: the default remains `flecto`, which posts the
   raw envelope byte-for-byte as before. `--mask-secrets-webhooks` applies to
   chat payloads too. ([#68])
+- `flecto ci --format pr-comment`: a markdown risk summary for pull requests —
+  change counts, policy findings grouped by severity with file and path, and the
+  per-file change list, collapsed into a `<details>` block past ten changes.
+  The body opens with a hidden `<!-- flecto:pr-comment -->` marker, so posting
+  updates the one comment Flecto already left instead of adding a new one per
+  push; an unchanged report skips the write entirely. Rendering to stdout is the
+  default and never touches the network. Posting requires **both** the explicit
+  `--pr-comment-post` opt-in and a complete GitHub pull request context
+  (`GITHUB_TOKEN`, `GITHUB_REPOSITORY`, and a PR number from `GITHUB_REF` or
+  `GITHUB_EVENT_PATH`); `GH_TOKEN` is ignored so a local `gh auth login` cannot
+  turn a laptop run into a comment. Delivery problems warn on stderr and leave
+  the exit code to the diff and policy result, and the token is never printed.
+  The bundled `flecto-ci` Action exposes this as the opt-in `pr-comment-post`
+  and `github-token` inputs. ([#67])
 - Multi-document YAML support (`---`-separated), the usual shape of a Kubernetes
   manifest. Previously such a file failed to parse. Each document is diffed
   under its own key: `kind/name` for Kubernetes-shaped documents (namespaced
@@ -181,6 +195,7 @@ The format is based on [Keep a Changelog], and this project adheres to
 [#39]: https://github.com/myselfsiddharth/Flecto/issues/39
 [#40]: https://github.com/myselfsiddharth/Flecto/pull/40
 [#66]: https://github.com/myselfsiddharth/Flecto/issues/66
+[#67]: https://github.com/myselfsiddharth/Flecto/issues/67
 [#68]: https://github.com/myselfsiddharth/Flecto/issues/68
 [#69]: https://github.com/myselfsiddharth/Flecto/issues/69
 [#70]: https://github.com/myselfsiddharth/Flecto/issues/70
