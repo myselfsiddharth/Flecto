@@ -20,6 +20,7 @@ import {
   renderWarn,
   renderPolicyFindings,
   maskChangeEvent,
+  maskSensitiveValue,
 } from './src/renderer.js';
 import { deliverPrComment, renderPrComment } from './src/pr-comment.js';
 import { renderReportHtml } from './src/report.js';
@@ -48,6 +49,7 @@ const PKG = JSON.parse(
 );
 
 const SNAPSHOT_DIR = '.flecto-snapshots';
+const FAIL_ON_CHOICES = ['changed', 'added', 'removed', 'policy', 'error', 'warn'];
 
 function snapshotIdForPath(absPath) {
   const normalized = absPath.replaceAll('\\', '/');
@@ -169,6 +171,18 @@ function parseCsv(value) {
   return String(value).split(',').map((s) => s.trim()).filter(Boolean);
 }
 
+function parseFailOn(value) {
+  const rules = parseCsv(value);
+  const invalid = rules.filter((rule) => !FAIL_ON_CHOICES.includes(rule));
+  if (invalid.length > 0) {
+    throw new Error(
+      `--fail-on contains unknown trigger${invalid.length === 1 ? '' : 's'}: ${invalid.join(', ')}. `
+      + `Valid triggers: ${FAIL_ON_CHOICES.join(', ')}`,
+    );
+  }
+  return new Set(rules);
+}
+
 function parseHeaders(headerList) {
   const webhookHeaders = {};
   if (!Array.isArray(headerList)) return webhookHeaders;
@@ -221,18 +235,27 @@ function maybeMaskChanges(events, maskSecrets) {
 /**
  * Redact secret-shaped text from policy messages. A rule using
  * `messageTemplate` can interpolate `{before}` / `{after}`, so a finding can
- * carry a credential even when the change events beside it are masked. Uses the
- * same value-based detection as `--mask-secrets` everywhere else.
+ * carry a credential even when the change events beside it are masked. Replace
+ * exact interpolated values using the same path-aware masking as change events,
+ * then catch any other recognizable secret fragments in free-form messages.
  * @param {import('./src/policy.js').PolicyFinding[]} findings
+ * @param {import('./src/differ.js').ChangeEvent[]} changes
  * @param {boolean} maskSecrets
  * @returns {import('./src/policy.js').PolicyFinding[]}
  */
-function maybeMaskFindings(findings, maskSecrets) {
+function maybeMaskFindings(findings, changes, maskSecrets) {
   if (!maskSecrets) return findings;
-  return findings.map((finding) => ({
-    ...finding,
-    message: redactSecretString(String(finding.message ?? '')),
-  }));
+  return findings.map((finding) => {
+    let message = String(finding.message ?? '');
+    for (const change of changes.filter((event) => event.path === finding.path)) {
+      for (const value of [change.before, change.after]) {
+        const original = String(value);
+        const masked = String(maskSensitiveValue(value, change.path));
+        if (original && original !== masked) message = message.replaceAll(original, masked);
+      }
+    }
+    return { ...finding, message: redactSecretString(message) };
+  });
 }
 
 async function resolveTargetFiles(cliFiles, rcConfig) {
@@ -259,7 +282,8 @@ async function resolveTargetFiles(cliFiles, rcConfig) {
 
   return resolveFiles({
     cwd: process.cwd(),
-    files: rcConfig?.files ?? rcConfig?.include ?? [],
+    files: rcConfig?.files ?? [],
+    include: rcConfig?.include ?? [],
     exclude: rcConfig?.exclude ?? [],
   });
 }
@@ -498,6 +522,33 @@ program
       }
 
       const watchers = [];
+      let closing = false;
+      const closeAll = async (exitCode) => {
+        if (closing) return;
+        closing = true;
+        await Promise.all(watchers.map((w) => w.close()));
+        if (exitCode === 0) {
+          console.log(chalk.dim('\nflecto stopped.'));
+        }
+        process.exit(exitCode);
+      };
+      const alertOptions = {
+        command: effective.command,
+        webhook: effective.webhook,
+        webhookHeaders,
+        webhookTimeoutMs: parseInt(String(effective.webhookTimeout ?? '5000'), 10),
+        webhookRetries: parseInt(String(effective.webhookRetries ?? '2'), 10),
+        webhookFormat,
+        deliveryMode: effective.deliveryMode,
+        onAlertFailure: effective.onAlertFailure,
+      };
+      const deliverAlert = async (envelope) => {
+        const result = await fireAlerts(alertOptions, envelope);
+        if (!result.ok && effective.onAlertFailure === 'exit') {
+          await closeAll(1);
+        }
+      };
+
       for (const filepath of targets) {
         if (!existsSync(filepath)) {
           renderWarn(`Skipping missing file: ${filepath}`);
@@ -530,25 +581,20 @@ program
                 renderError(`policy evaluation failed: ${err.message}`);
                 process.exit(1);
               }
-              renderPolicyFindings(policyFindings);
+              renderPolicyFindings(maybeMaskFindings(policyFindings, event.events, maskSecrets));
               if (effective.command || effective.webhook) {
                 const outboundChanges = maybeMaskChanges(event.events, maskSecretsWebhooks);
                 const envelope = createEnvelope({
                   source: 'watch',
                   file: event.filepath,
                   changes: outboundChanges,
-                  policies: policyFindings,
+                  policies: maybeMaskFindings(
+                    policyFindings,
+                    event.events,
+                    maskSecretsWebhooks,
+                  ),
                 });
-                await fireAlerts({
-                  command: effective.command,
-                  webhook: effective.webhook,
-                  webhookHeaders,
-                  webhookTimeoutMs: parseInt(String(effective.webhookTimeout ?? '5000'), 10),
-                  webhookRetries: parseInt(String(effective.webhookRetries ?? '2'), 10),
-                  webhookFormat,
-                  deliveryMode: effective.deliveryMode,
-                  onAlertFailure: effective.onAlertFailure,
-                }, envelope);
+                await deliverAlert(envelope);
               }
             } else {
               renderInfo(`[lifecycle] ${event.filepath}: ${event.lifecycle.type} - ${event.lifecycle.message}`);
@@ -558,16 +604,7 @@ program
                   file: event.filepath,
                   lifecycle: event.lifecycle,
                 });
-                await fireAlerts({
-                  command: effective.command,
-                  webhook: effective.webhook,
-                  webhookHeaders,
-                  webhookTimeoutMs: parseInt(String(effective.webhookTimeout ?? '5000'), 10),
-                  webhookRetries: parseInt(String(effective.webhookRetries ?? '2'), 10),
-                  webhookFormat,
-                  deliveryMode: effective.deliveryMode,
-                  onAlertFailure: effective.onAlertFailure,
-                }, envelope);
+                await deliverAlert(envelope);
               }
             }
           }
@@ -580,13 +617,6 @@ program
       }
       renderInfo('Press Ctrl+C to stop.\n');
 
-      const closeAll = async (exitCode) => {
-        await Promise.all(watchers.map((w) => w.close()));
-        if (exitCode === 0) {
-          console.log(chalk.dim('\nflecto stopped.'));
-        }
-        process.exit(exitCode);
-      };
       process.on('SIGINT', () => void closeAll(0));
       process.on('SIGTERM', () => void closeAll(0));
     } catch (err) {
@@ -713,7 +743,7 @@ program
           previousCreatedAt: summary.previousCreatedAt,
           changeCount: summary.changeCount,
           changes: maybeMaskChanges(summary.changes, maskSecrets),
-          policies: maybeMaskFindings(findings, maskSecrets),
+          policies: maybeMaskFindings(findings, summary.changes, maskSecrets),
         });
       }
 
@@ -764,7 +794,7 @@ program
       }
 
       const ignorePaths = parseCsv(effective.ignore);
-      const failOn = new Set(parseCsv(effective.failOn ?? 'changed,policy,error'));
+      const failOn = parseFailOn(effective.failOn ?? 'changed,policy,error');
       const format = String(effective.format ?? 'json');
       if (!['json', 'ndjson', 'github-annotations', 'pr-comment'].includes(format)) {
         throw new Error('--format must be json, ndjson, github-annotations, or pr-comment');
@@ -811,13 +841,14 @@ program
           severityRemap,
         });
         const outboundChanges = maybeMaskChanges(events, maskSecrets);
+        const outboundFindings = maybeMaskFindings(policyFindings, events, maskSecrets);
         const envelope = createEnvelope({
           source: 'ci',
           file: filepath,
           changes: outboundChanges,
-          policies: policyFindings,
+          policies: outboundFindings,
         });
-        results.push({ file: filepath, envelope, policies: policyFindings });
+        results.push({ file: filepath, envelope, policies: outboundFindings });
         diffed += 1;
 
         if (shouldFailFromChanges(events, failOn) || shouldFailFromPolicy(policyFindings, failOn)) {
@@ -867,7 +898,7 @@ program
       const { policies: packIds, plugins, severityRemap } = resolvePolicyOptions(effective);
 
       const ignorePaths = parseCsv(effective.ignore);
-      const failOn = new Set(parseCsv(effective.failOn ?? 'changed,added,removed,policy,error'));
+      const failOn = parseFailOn(effective.failOn ?? 'changed,added,removed,policy,error');
       const format = String(effective.format ?? 'human');
       if (!['human', 'json', 'ndjson', 'github-annotations'].includes(format)) {
         throw new Error('--format must be human, json, ndjson, or github-annotations');
@@ -901,25 +932,26 @@ program
         plugins,
         severityRemap,
       });
+      const outboundFindings = maybeMaskFindings(policyFindings, events, maskSecrets);
 
       if (format === 'human') {
         if (events.length > 0) {
           renderInfo('"+" exists only in the compared file, "-" only in the baseline, "~" differs');
         }
         renderDiff(targetPath, events, { maskSecrets, baseline: baselinePath });
-        renderPolicyFindings(policyFindings);
+        renderPolicyFindings(outboundFindings);
       } else {
         const envelope = createEnvelope({
           source: 'diff',
           file: targetPath,
           changes: maybeMaskChanges(events, maskSecrets),
-          policies: policyFindings,
+          policies: outboundFindings,
         });
         // Same envelope and printer as `ci`, so machine consumers see one shape.
         // `baseline` rides on the result wrapper rather than the envelope, which
         // is closed by schemas/flecto-envelope-2.0.json.
         printCiOutput(
-          [{ file: targetPath, baseline: baselinePath, envelope, policies: policyFindings }],
+          [{ file: targetPath, baseline: baselinePath, envelope, policies: outboundFindings }],
           format,
         );
       }

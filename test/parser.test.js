@@ -73,6 +73,45 @@ describe('single-document YAML is unchanged', () => {
   });
 });
 
+describe('parser scalar normalization', () => {
+  test('YAML timestamps become stable JSON strings', () => {
+    const parsed = parseContent(
+      'config.yaml',
+      'released_at: 2026-08-06T12:34:56Z\nrelease_date: 2026-08-06\n',
+    );
+    assert.deepEqual(parsed, {
+      released_at: '2026-08-06T12:34:56.000Z',
+      release_date: '2026-08-06T00:00:00.000Z',
+    });
+
+    const roundTripped = JSON.parse(JSON.stringify(parsed));
+    assert.deepEqual(diffTrees(parsed, roundTripped), []);
+  });
+
+  test('TOML dates, times, large integers, and non-finite numbers are JSON-safe', () => {
+    const parsed = parseContent('config.toml', `date = 2026-08-06
+time = 12:34:56.789
+datetime = 2026-08-06T12:34:56Z
+large = 9223372036854775807
+not_number = nan
+positive_infinity = +inf
+negative_infinity = -inf
+`);
+
+    assert.deepEqual(parsed, {
+      date: '2026-08-06',
+      time: '12:34:56.789',
+      datetime: '2026-08-06T12:34:56.000Z',
+      large: '9223372036854775807',
+      not_number: 'NaN',
+      positive_infinity: 'Infinity',
+      negative_infinity: '-Infinity',
+    });
+    assert.doesNotThrow(() => JSON.stringify(parsed));
+    assert.deepEqual(diffTrees(parsed, JSON.parse(JSON.stringify(parsed))), []);
+  });
+});
+
 describe('multi-document YAML', () => {
   test('documents without identity are keyed by index', () => {
     const parsed = parseYamlStream('a: 1\n---\nb: 2\n');

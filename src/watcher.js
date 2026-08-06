@@ -5,6 +5,8 @@ import { renderWarn, renderInfo } from './renderer.js';
 
 /** @typedef {import('./differ.js').ChangeEvent} ChangeEvent */
 
+const NO_STATE = Symbol('no-state');
+
 /**
  * @typedef {Object} WatcherOptions
  * @property {number}   [interval]     Polling fallback interval in ms (default: 100)
@@ -35,8 +37,8 @@ export function startWatcher(filepath, options = {}, onEvent) {
     arrayIgnoreOrder: Boolean(options.arrayIgnoreOrder),
   };
 
-  /** @type {unknown | null} */
-  let lastGoodState = null;
+  /** @type {unknown | typeof NO_STATE} */
+  let lastGoodState = NO_STATE;
 
   // Attempt initial parse so we have a baseline before the first write
   try {
@@ -70,7 +72,7 @@ export function startWatcher(filepath, options = {}, onEvent) {
     if (debounceTimer) clearTimeout(debounceTimer);
     debounceTimer = setTimeout(() => {
       handleChange(filepath, diffOpts, lastGoodState, (newState, events, lifecycle) => {
-        if (newState !== null) {
+        if (newState !== NO_STATE) {
           lastGoodState = newState;
         }
         if (lifecycle) {
@@ -129,8 +131,8 @@ function safelyEmit(onEvent, event) {
  * Internal: re-parse the file and diff against the previous state.
  * @param {string} filepath
  * @param {{ ignorePaths?: string[], arrayIdKey?: string | null, arrayIdentity?: boolean, arrayIgnoreOrder?: boolean }} diffOpts
- * @param {unknown | null} lastGoodState
- * @param {(newState: unknown | null, events: ChangeEvent[], lifecycle: { type: string, message: string } | null) => void} callback
+ * @param {unknown | typeof NO_STATE} lastGoodState
+ * @param {(newState: unknown | typeof NO_STATE, events: ChangeEvent[], lifecycle: { type: string, message: string } | null) => void} callback
  */
 function handleChange(filepath, diffOpts, lastGoodState, callback) {
   let newState;
@@ -138,11 +140,11 @@ function handleChange(filepath, diffOpts, lastGoodState, callback) {
     newState = parseFile(filepath);
   } catch (err) {
     renderWarn(`Parse error — keeping last valid state. ${err.message}`);
-    callback(lastGoodState, [], { type: 'parse-error', message: err.message });
+    callback(NO_STATE, [], { type: 'parse-error', message: err.message });
     return; // don't update lastGoodState
   }
 
-  if (lastGoodState === null) {
+  if (lastGoodState === NO_STATE) {
     // First successful parse — record as baseline, no diff to show yet
     renderInfo(`Baseline established for "${filepath}".`);
     callback(newState, [], { type: 'baseline-created', message: 'First valid state recorded.' });

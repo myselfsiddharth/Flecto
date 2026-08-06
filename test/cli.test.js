@@ -55,6 +55,75 @@ test('ci profile values override Commander defaults', () => {
   }
 });
 
+test('ci resolves both files and include patterns from .flectorc', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-include-'));
+  const configDir = join(dir, 'config');
+  const deployDir = join(dir, 'deploy');
+  const snapshot = join(dir, 'snapshot.json');
+  const rootIndex = resolve(process.cwd(), 'index.js');
+
+  try {
+    mkdirSync(configDir);
+    mkdirSync(deployDir);
+    writeFileSync(join(configDir, 'app.json'), JSON.stringify({ version: 1 }), 'utf8');
+    writeFileSync(join(deployDir, 'app.yaml'), 'version: 1\n', 'utf8');
+    writeFileSync(snapshot, JSON.stringify({ state: { version: 1 } }), 'utf8');
+    writeFileSync(join(dir, '.flectorc.json'), JSON.stringify({
+      files: ['config/**/*.json'],
+      include: ['deploy/**/*.yaml'],
+    }), 'utf8');
+
+    const run = spawnSync(
+      process.execPath,
+      [rootIndex, 'ci', '--snapshot-ref', snapshot, '--format', 'json', '--fail-on', ''],
+      { cwd: dir, encoding: 'utf8' },
+    );
+
+    assert.equal(run.status, 0, run.stderr);
+    assert.deepEqual(
+      JSON.parse(run.stdout).map((result) => result.file).sort(),
+      [join(configDir, 'app.json'), join(deployDir, 'app.yaml')]
+        .map((path) => realpathSync(path))
+        .sort(),
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('ci rejects unknown fail-on triggers from flags and profiles', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-fail-on-'));
+  const file = join(dir, 'config.json');
+  const snapshot = join(dir, 'snapshot.json');
+  const rootIndex = resolve(process.cwd(), 'index.js');
+
+  try {
+    writeFileSync(file, JSON.stringify({ version: 2 }), 'utf8');
+    writeFileSync(snapshot, JSON.stringify({ state: { version: 1 } }), 'utf8');
+
+    const fromFlag = spawnSync(
+      process.execPath,
+      [rootIndex, 'ci', file, '--snapshot-ref', snapshot, '--fail-on', 'changeed'],
+      { cwd: dir, encoding: 'utf8' },
+    );
+    writeFileSync(join(dir, '.flectorc.json'), JSON.stringify({
+      profiles: { strict: { failOn: 'changed,polciy' } },
+    }), 'utf8');
+    const fromProfile = spawnSync(
+      process.execPath,
+      [rootIndex, 'ci', file, '--profile', 'strict', '--snapshot-ref', snapshot],
+      { cwd: dir, encoding: 'utf8' },
+    );
+
+    assert.equal(fromFlag.status, 1);
+    assert.match(fromFlag.stderr, /unknown trigger: changeed/);
+    assert.equal(fromProfile.status, 1);
+    assert.match(fromProfile.stderr, /unknown trigger: polciy/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('ci applies profile severityRemap before fail-on checks', () => {
   const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-remap-'));
   const file = join(dir, 'config.json');
@@ -232,6 +301,63 @@ test('watch fails closed on policy pack errors regardless of alert failure setti
 
     assert.equal(result.status, 1);
     assert.match(result.stderr, /policy evaluation failed: Unknown policy pack "missing-pack"/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('watch exits after an alert command fails with on-alert-failure exit', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-watch-alert-fail-'));
+  const file = join(dir, 'config.json');
+  const rootIndex = resolve(process.cwd(), 'index.js');
+  writeFileSync(file, JSON.stringify({ enabled: false }), 'utf8');
+
+  try {
+    const result = await new Promise((resolveResult, reject) => {
+      const child = spawn(
+        process.execPath,
+        [
+          rootIndex,
+          'watch',
+          file,
+          '--polling',
+          '--interval',
+          '25',
+          '--command',
+          `"${process.execPath}" -e "process.exit(7)"`,
+          '--on-alert-failure',
+          'exit',
+        ],
+        { cwd: dir },
+      );
+      let stdout = '';
+      let stderr = '';
+      let changed = false;
+      const timeout = setTimeout(() => {
+        child.kill();
+        reject(new Error('watch did not exit after the alert command failed'));
+      }, 5000);
+
+      child.stdout.on('data', (chunk) => {
+        stdout += chunk;
+        if (!changed && stdout.includes('flecto watching')) {
+          changed = true;
+          setTimeout(() => writeFileSync(file, JSON.stringify({ enabled: true }), 'utf8'), 100);
+        }
+      });
+      child.stderr.on('data', (chunk) => { stderr += chunk; });
+      child.on('error', (err) => {
+        clearTimeout(timeout);
+        reject(err);
+      });
+      child.on('close', (status) => {
+        clearTimeout(timeout);
+        resolveResult({ status, stderr });
+      });
+    });
+
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /Command failed \(exit 7\)/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -734,6 +860,58 @@ test('ci flags a secret-shaped value under an innocuous key', () => {
     const [result] = JSON.parse(run.stdout);
     assert.deepEqual(result.policies.map((finding) => finding.id), ['secret-value-detected']);
     assert.equal(result.policies[0].severity, 'error');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('ci masks values interpolated into custom policy messages', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-policy-mask-'));
+  const file = join(dir, 'config.json');
+  const snapshot = join(dir, 'snapshot.json');
+  const policiesDir = join(dir, 'policies');
+  const rootIndex = resolve(process.cwd(), 'index.js');
+  const oldPassword = 'ordinary-old-value';
+  const newPassword = 'ordinary-new-value';
+
+  try {
+    mkdirSync(policiesDir);
+    writeFileSync(file, JSON.stringify({ password: newPassword }), 'utf8');
+    writeFileSync(snapshot, JSON.stringify({ state: { password: oldPassword } }), 'utf8');
+    writeFileSync(join(policiesDir, 'custom.json'), JSON.stringify({
+      id: 'custom',
+      rules: [{
+        id: 'credential-change',
+        severity: 'warn',
+        match: { pathEquals: 'password' },
+        messageTemplate: 'Credential changed from {before} to {after}',
+      }],
+    }), 'utf8');
+
+    const run = spawnSync(
+      process.execPath,
+      [
+        rootIndex,
+        'ci',
+        file,
+        '--snapshot-ref',
+        snapshot,
+        '--format',
+        'json',
+        '--policies',
+        'custom',
+        '--mask-secrets',
+        '--fail-on',
+        '',
+      ],
+      { cwd: dir, encoding: 'utf8' },
+    );
+
+    assert.equal(run.status, 0, run.stderr);
+    assert.doesNotMatch(run.stdout, new RegExp(`${oldPassword}|${newPassword}`));
+    const [result] = JSON.parse(run.stdout);
+    assert.equal(result.policies[0].message, 'Credential changed from *** to ***');
+    assert.equal(result.envelope.policies[0].message, 'Credential changed from *** to ***');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
