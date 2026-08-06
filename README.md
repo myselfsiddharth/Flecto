@@ -5,52 +5,35 @@
 <h1 align="center">Flecto</h1>
 
 <p align="center">
-  <strong>Config changes, in plain English — with risk flags built in.</strong><br/>
-  Watch · Diff · Policy · CI · Webhooks
+  <strong>Know what your config actually changed — and whether it's risky.</strong>
 </p>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/flecto"><img alt="npm" src="https://img.shields.io/npm/v/flecto?style=flat-square&color=34d399&labelColor=0b1220"/></a>
   <a href="https://github.com/myselfsiddharth/Flecto/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/myselfsiddharth/Flecto/ci.yml?branch=main&style=flat-square&label=CI&labelColor=0b1220"/></a>
   <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-8fa3bf?style=flat-square&labelColor=0b1220"/></a>
-  <a href="https://github.com/myselfsiddharth/Flecto/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/myselfsiddharth/Flecto?style=flat-square&color=fbbf24&labelColor=0b1220"/></a>
+  <a href="#documentation"><img alt="Docs" src="https://img.shields.io/badge/docs-read-34d399?style=flat-square&labelColor=0b1220"/></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/myselfsiddharth/Flecto/stargazers">⭐ Star this repo</a> if Flecto saves you from a noisy config diff — it helps others find the project.
-</p>
-
-<p align="center">
-  <img src="docs/assets/flecto-demo.png" alt="Flecto watch demo in the terminal" width="920"/>
-</p>
-
-<p align="center">
-  <img src="docs/assets/demo-watch.svg" alt="Animated Flecto watch output" width="920"/>
+  <img src="docs/assets/demo-watch.svg" alt="Flecto reporting semantic config changes in the terminal" width="920"/>
 </p>
 
 ---
 
-## Why teams use Flecto
+Config drives the parts of a system that break loudest: connection pools, feature
+flags, TLS, retries, secrets. But we still review it as text — so a reordered key
+looks identical to a doubled pool size, and `debug: true` slips through in a
+40-line formatting diff.
 
-Line diffs lie about config. Formatting churn, key reorders, and “small” YAML edits hide the changes that actually matter in production.
+Flecto reads config as structure, not lines. It tells you what changed in plain
+English, flags what looks risky, and gives you an exit code to gate on.
 
-**Flecto** turns structured config into semantic events:
-
-- What changed (`pool_size: 5 → 20`)
-- What was added or removed
-- What looks risky (secrets, dangerous toggles, pool jumps)
-- What to do next (CI gate, webhook, shell command)
-
-See the [changelog and migration notes](CHANGELOG.md) for release history and
-upcoming v2.1 behavior changes.
-
-> Diff tools compare trees. **Flecto watches, scores risk, and alerts.**
-
-| Without Flecto | With Flecto |
+| Reviewing config without Flecto | With Flecto |
 |---|---|
-| `+  40 lines of YAML noise` | `~ database.pool_size: 5 → 20` |
-| Hope someone notices `debug: true` | Policy finding → CI fails |
-| “Something in `.env` changed” | Exact keys + optional secret masking |
+| `+ 40 lines of YAML noise` | `~ database.pool_size: 5 → 20` |
+| Hope someone notices `debug: true` | Policy finding → build fails |
+| "Something in `.env` changed" | The exact keys, with secrets masked |
 
 ---
 
@@ -60,277 +43,115 @@ upcoming v2.1 behavior changes.
 npm install -g flecto
 ```
 
-Requires Node.js 20.19.0 or later.
+Requires **Node.js 20.19.0+**. Verify:
 
 ```bash
 flecto --version
 flecto doctor
 ```
 
+Prefer not to install globally? Every example below works with
+`npx --yes flecto@2` instead of `flecto`.
+
 ---
 
 ## Quick start
 
-```bash
-flecto watch config/prod.yaml
-flecto watch .env
-flecto watch settings.json
-flecto watch pyproject.toml
-flecto watch app.ini
-```
+A complete walkthrough, start to finish. Copy-paste it anywhere.
 
-That’s it — Flecto prints a clear summary on every meaningful change.
-
----
-
-## Features at a glance
-
-- **Semantic diffs** for JSON, YAML, TOML, INI, and dotenv (`.env`, `.env.*`, `*.env`)
-- **Live watch** with optional command + webhook delivery
-- **Policy packs** (`default`, `strict-prod`, `compose`, `node-runtime`) + custom `policies/*.json` + local ESM plugins
-- **CI mode** with JSON / NDJSON / GitHub annotations and fail rules
-- **Snapshots & diffs** for deploy scripts and pre-commit hooks
-- **Profiles** via `--profile` or `FLECTO_PROFILE`
-- **Default array identity** (`id` / `name`, or `--array-id-key`) and secret masking
-
----
-
-## Common use cases
-
-### Watch multiple files
+**1. Create a config file to track.**
 
 ```bash
-flecto watch "config/**/*.yaml" ".env"
+mkdir flecto-demo && cd flecto-demo && mkdir config
+cat > config/prod.yaml <<'EOF'
+database:
+  host: db.internal
+  pool_size: 5
+  ssl: true
+logging:
+  level: info
+  debug: false
+EOF
 ```
 
-### Verbose before/after
-
-```bash
-flecto watch config/prod.yaml --mode verbose
-```
-
-### Ignore noisy keys
-
-```bash
-flecto watch config/prod.yaml --ignore "updated_at,meta.timestamp"
-```
-
-| Pattern | What it ignores |
-|---|---|
-| `meta.timestamp` | That exact key |
-| `meta` | Everything under `meta.*` |
-| `servers[*].meta.timestamp` | That key inside any array item |
-| `**.updated_at` | Any key named `updated_at`, anywhere |
-
-### Run a command on change
-
-```bash
-flecto watch .env --command "docker-compose restart app"
-```
-
-Changes are passed as JSON via `FLECTO_CHANGES` (large payloads may use `FLECTO_CHANGES_FILE`).
-
-### Webhooks
-
-```bash
-flecto watch config/prod.yaml \
-  --webhook https://hooks.example.com/notify \
-  --webhook-header "Authorization: Bearer TOKEN"
-```
-
-Envelope shape (`schema_version: "2.0"`):
-
-```json
-{
-  "schema_version": "2.0",
-  "event_id": "uuid",
-  "event_type": "changes",
-  "emitted_at": "2026-04-14T10:42:31.000Z",
-  "file": "/absolute/path/to/config/prod.yaml",
-  "changes": [
-    { "type": "changed", "path": "database.pool_size", "before": 5, "after": 20 }
-  ],
-  "policies": [
-    {
-      "id": "pool-size-jump",
-      "severity": "warn",
-      "path": "database.pool_size",
-      "message": "Pool size increased from 5 to 20 (>=2x).",
-      "pack": "default"
-    }
-  ]
-}
-```
-
-JSON Schema: [`schemas/flecto-envelope-2.0.json`](schemas/flecto-envelope-2.0.json).
-
-### Policy packs and profiles
-
-```bash
-flecto ci config/prod.yaml --profile prod --snapshot-ref HEAD~1
-```
-
-```json
-{
-  "defaults": {
-    "policies": ["default"],
-    "maskSecrets": false
-  },
-  "profiles": {
-    "prod": {
-      "policies": ["default", "strict-prod"],
-      "severityRemap": { "pool-size-jump": "error" },
-      "maskSecrets": true
-    }
-  }
-}
-```
-
-Profile selection: `--profile` > `FLECTO_PROFILE` > defaults.  
-Custom packs: `policies/<id>.json`. Plugins: local ESM exporting `evaluate(changes, ctx)`.
-
-#### Declarative rule predicates
-
-Rules combine their top-level predicates with AND. In addition to `when`, regex
-`match.path`, `afterEquals`, and `numericJump`, packs can use:
-
-- `beforeEquals`, `afterIn`, and `beforeIn` for exact values or allowed value lists.
-- `beforeTruthy: true` and `afterTruthy: true` to require a truthy before/after value.
-- `afterMatches` to require a string after value that matches a regular expression.
-- `numericDelta: { "min": 10 }` to match an absolute numeric change of at least 10.
-- `match.pathEquals` and `match.pathPrefix` for exact or prefix path matching without regex.
-- `allOf` and `anyOf` arrays of simple match clauses. Every `allOf` clause and at least
-  one `anyOf` clause must match. Clauses support the same value, truthiness, numeric, and
-  `match` predicates, but cannot nest composition.
-
-```json
-{
-  "id": "risky-feature-enable",
-  "severity": "error",
-  "allOf": [
-    { "match": { "pathPrefix": "features." } },
-    { "afterTruthy": true }
-  ],
-  "anyOf": [
-    { "afterEquals": true },
-    { "afterIn": ["unsafe", "disabled"] }
-  ]
-}
-```
-
-Pack loading fails closed for unknown rule or `match` fields, invalid regexes, and invalid
-predicate shapes, so misspelled predicates cannot silently disable a rule.
-
-Use `severityRemap` in defaults or a profile to change pack rule severities without forking a pack:
-
-```json
-{
-  "profiles": {
-    "dev": {
-      "severityRemap": { "pool-size-jump": "off" }
-    },
-    "prod": {
-      "severityRemap": { "pool-size-jump": "error" }
-    }
-  }
-}
-```
-
-Each key is a rule id and each value must be `info`, `warn`, `error`, or `off`. The remap applies after all configured built-in and local packs load, before findings and CI `--fail-on` checks. When multiple packs provide the same rule id, the remap applies to every matching pack rule. Plugin findings are unchanged. Unknown rule ids print a warning instead of being ignored silently.
-
-Authoring guides: [policy packs](docs/policy-packs.md) · [plugins](docs/plugins.md) · [plugin cookbook](docs/plugin-cookbook.md).
-
-### Discover policy packs
-
-```bash
-flecto policies list
-flecto policies list --json
-```
-
-The command lists every bundled and local pack that resolves from the current
-working directory, including its source path and rule count. For a given pack
-id, Flecto resolves local files before bundled packs in this order:
-`policies/<id>.json`, `policies/<id>.yaml`, `policies/<id>.yml`, then the
-built-in pack. A local pack with the same id overrides its built-in counterpart.
-
-### Array identity matching
-
-```bash
-flecto watch config/services.yaml
-```
-
-Arrays of objects automatically match by a shared, unique `id` key, falling back
-to `name` when `id` is unavailable. This avoids false changes when named items
-are reordered. Use a custom identity field when needed:
-
-```bash
-flecto watch config/services.yaml --array-id-key serviceKey
-```
-
-To restore index-based diffs for every array, pass `--no-array-id`:
-
-```bash
-flecto watch config/services.yaml --no-array-id
-```
-
-In `.flectorc`, set `"arrayId": false` in `defaults` or a profile for the same
-escape hatch.
-
-### Command + webhook together
-
-```bash
-flecto watch .env \
-  --command "make reload" \
-  --webhook https://hooks.example.com/notify
-```
-
-### Retry on failure
-
-```bash
-flecto watch config/prod.yaml \
-  --webhook https://hooks.example.com/notify \
-  --delivery-mode at-least-once \
-  --on-alert-failure retry
-```
-
-| Flag | Options | What it does |
-|---|---|---|
-| `--delivery-mode` | `best-effort` (default), `at-least-once` | Persist and retry failed webhook events |
-| `--on-alert-failure` | `warn`, `exit`, `retry` | Behavior when command/webhook fails |
-
----
-
-## Snapshots & diffs
+**2. Save it as your baseline.**
 
 ```bash
 flecto watch config/prod.yaml --snapshot
-flecto watch config/prod.yaml --diff
-flecto history config/prod.yaml --limit 10
 ```
 
-Exit codes: `0` clean · `1` changes detected.
+```
+✓ Snapshot saved: /path/to/flecto-demo/.flecto-snapshots/4b8cbbd70d1832a2.json
+```
 
-`flecto history` stays local: it lists recent snapshots from `.flecto-snapshots/` with their timestamps and semantic change counts from the previous snapshot. Counts use the same ignore paths, array identity, and order settings as `flecto watch --diff` (CLI flags or `.flectorc`). Omit files to view all saved snapshot history.
+**3. Make the kind of edit that causes incidents.**
+
+```bash
+cat > config/prod.yaml <<'EOF'
+database:
+  host: db.internal
+  pool_size: 20
+  ssl: true
+logging:
+  level: info
+  debug: true
+EOF
+```
+
+**4. Ask what changed.**
+
+```bash
+flecto watch config/prod.yaml --diff
+```
+
+```
+/path/to/flecto-demo/config/prod.yaml — 2 changes from snapshot:
+  ~ database.pool_size: 5 → 20
+  ~ logging.debug: false → true
+```
+
+Two sentences instead of a diff you have to interpret. Now let Flecto judge it:
+
+```bash
+flecto ci config/prod.yaml --format github-annotations
+```
+
+```
+::warning title=flecto changed::database.pool_size
+::warning title=flecto changed::logging.debug
+::warning title=flecto policy pool-size-jump [default]::database.pool_size: Pool size increased from 5 to 20 (>=2x).
+::error title=flecto policy dangerous-toggle-enabled [default]::logging.debug: Potentially dangerous toggle enabled.
+```
+
+Exit code `1`. In CI, that's a failed build — before the change ships.
+
+**5. Watch it live.** Leave this running and edit the file in another window:
+
+```bash
+flecto watch config/prod.yaml
+```
+
+```
+flecto watching /path/to/flecto-demo/config/prod.yaml
+Press Ctrl+C to stop.
+
+[18:24:48] /path/to/flecto-demo/config/prod.yaml — 2 changes
+  ~ database.pool_size: 5 → 20
+  ~ logging.debug: false → true
+  ! policy(warn) [default] database.pool_size: Pool size increased from 5 to 20 (>=2x).
+  ! policy(error) [default] logging.debug: Potentially dangerous toggle enabled.
+```
+
+That's the whole product. Everything below is depth.
 
 ---
 
-## CI mode
+## What you can do with it
 
-```bash
-flecto ci "config/**/*.yaml" \
-  --snapshot-ref HEAD~1 \
-  --format github-annotations \
-  --fail-on "changed,policy,error"
-```
+### Catch risky changes before they merge
 
-**Formats:** `json`, `ndjson`, `github-annotations`  
-**Fail triggers:** `changed`, `added`, `removed`, `policy`, `error`, `warn`  
-Unresolved `--snapshot-ref` fails closed (no silent empty baseline).  
-If every target is missing or unsupported, `flecto ci` and `flecto watch --snapshot` exit non-zero (pass `--allow-empty` to opt out).
-
-### GitHub Action
-
-Use the [Flecto CI Action](.github/actions/flecto-ci/action.yml) to run `flecto ci` in a workflow with GitHub annotations enabled by default. A complete local-action workflow is available at [`examples/github-action/flecto-ci.yml`](examples/github-action/flecto-ci.yml).
+Add one step to your workflow and risky config edits show up as annotations on
+the pull request:
 
 ```yaml
 permissions:
@@ -346,72 +167,112 @@ steps:
       snapshot-ref: HEAD~1
 ```
 
-`contents: read` is required by `actions/checkout`. The Action emits workflow-command annotations and needs no write permissions. Keep `fetch-depth: 2` (or use `fetch-depth: 0`) when using the default `HEAD~1` baseline.
+Works on any CI runner — it's a plain CLI with meaningful exit codes.
+→ **[CI guide](docs/ci.md)**
 
-| Input | Default | Description |
-|---|---|---|
-| `targets` | `config/**/*.{yaml,yml,json,toml,ini}` | Whitespace-separated paths or glob patterns to check |
-| `fail-on` | `policy,error` | Comma-separated events that fail the job |
-| `policies` | _(empty)_ | Comma-separated policy pack IDs; omit to use `.flectorc` / Flecto defaults |
-| `profile` | _(empty)_ | Optional `.flectorc` profile |
-| `format` | `github-annotations` | Flecto output format |
-| `snapshot-ref` | `HEAD~1` | Git ref or snapshot file used as the baseline |
-| `node-version` | `20` | Node.js version used to run Flecto |
+### Trigger automation on change
 
-The Action runs `npx --yes flecto@2 ci`: the major version is pinned so compatible Flecto updates are received. For fully reproducible builds, pin the Action reference to a commit SHA and replace `@2` in a forked Action with an exact published Flecto version.
-
----
-
-## Built-in policy checks
-
-Built-in pack ids:
-
-- `default` — secrets, dangerous toggles, and pool-size jumps.
-- `strict-prod` — stricter severities and matching for production use.
-- `compose` — privileged services, host networking, Docker socket mounts, and sensitive host-directory bind mounts.
-- `node-runtime` — removed Node.js engine requirements, TLS verification bypasses, and enabled Node debugging or inspector options.
-
-Fail CI with `--fail-on policy`.
-
----
-
-## Migrating from envelope 1.1
-
-- `schema_version` is now `"2.0"`
-- Type name is `FlectoEnvelope` (docs/types)
-- New `policies` array on change envelopes
-- Webhook headers unchanged (`X-Flecto-*`)
-
----
-
-## Tuning for network drives / odd editors
+Restart a service, reload a process, or notify an endpoint whenever config moves:
 
 ```bash
-flecto watch config/prod.yaml --polling --interval 500
+flecto watch .env --command "docker-compose restart app"
+
+flecto watch config/prod.yaml \
+  --webhook https://hooks.example.com/notify \
+  --delivery-mode at-least-once
 ```
 
-Polling is off by default (interval default `100ms` when enabled).
+Changes arrive as a versioned JSON envelope, and `at-least-once` persists and
+retries failed deliveries. → **[Webhooks and commands](docs/webhooks.md)**
+
+### Track drift over time
+
+```bash
+flecto history config/prod.yaml --limit 10
+```
+
+Snapshots stay on your machine in `.flecto-snapshots/`. Nothing is uploaded and
+no account is required. → **[CLI reference](docs/cli-reference.md#flecto-history-files)**
+
+### Encode your own rules
+
+Beyond the built-in packs, write rules as declarative JSON or YAML — no code:
+
+```json
+{
+  "id": "risky-feature-enable",
+  "severity": "error",
+  "allOf": [
+    { "match": { "pathPrefix": "features." } },
+    { "afterTruthy": true }
+  ]
+}
+```
+
+For anything a predicate can't express, a local ESM plugin exporting
+`evaluate(changes, ctx)` gets the full change set.
+→ **[Writing policy packs](docs/policy-packs.md)** · **[Plugins](docs/plugins.md)**
+
+### Cut the noise
+
+```bash
+flecto watch config/prod.yaml --ignore "updated_at,**.meta.timestamp"
+```
+
+Arrays of objects are matched by `id` or `name`, so reordering a list of named
+services doesn't read as a wall of changes.
+→ **[Configuration](docs/configuration.md)**
 
 ---
 
-## Config file (`.flectorc`)
+## Built-in policy packs
+
+| Pack | Catches |
+|---|---|
+| `default` | Secret-like keys added or changed, dangerous toggles, pool-size jumps |
+| `strict-prod` | The same ground, with production-grade severities and matching |
+| `compose` | Privileged services, host networking, Docker socket mounts, sensitive bind mounts |
+| `node-runtime` | Dropped engine requirements, TLS verification bypasses, debug/inspector flags |
+
+```bash
+flecto policies list          # see what resolves here, built-in and local
+flecto ci "config/**/*.yaml" --policies "default,strict-prod" --fail-on policy
+```
+
+Pass files or glob patterns, quoted so your shell doesn't expand them first — a
+bare directory is not a valid target.
+
+A local `policies/<id>.json` overrides the built-in pack of the same id, and
+`severityRemap` raises or silences individual rules per profile without forking
+anything. → **[Policy packs](docs/policy-packs.md)**
+
+---
+
+## Supported formats
+
+| Format | Extensions |
+|---|---|
+| JSON | `.json` |
+| YAML | `.yaml`, `.yml` |
+| TOML | `.toml` |
+| INI | `.ini` |
+| dotenv | `.env`, `.env.*`, `*.env` |
+
+---
+
+## Configuration
+
+Most teams commit a `.flectorc` so local runs and CI agree:
 
 ```bash
 flecto init
 ```
 
-Looks for `.flectorc`, `.flectorc.json`, `.flectorc.yaml`, or `.flectorc.yml`.
-
 ```json
 {
   "defaults": {
-    "mode": "compact",
-    "interval": 100,
-    "ignore": ["**.updated_at"],
-    "deliveryMode": "best-effort",
-    "onAlertFailure": "warn",
     "policies": ["default"],
-    "arrayId": true
+    "ignore": ["**.updated_at"]
   },
   "profiles": {
     "dev": { "mode": "verbose" },
@@ -422,81 +283,73 @@ Looks for `.flectorc`, `.flectorc.json`, `.flectorc.yaml`, or `.flectorc.yml`.
       "maskSecrets": true
     }
   },
-  "files": ["config/**/*.{yaml,yml,json,toml,ini}", ".env", ".env.*", "*.env"],
-  "exclude": ["**/node_modules/**"]
+  "files": ["config/**/*.{yaml,yml,json,toml,ini}", ".env"]
 }
 ```
 
 ```bash
 flecto watch --profile dev
 flecto ci --profile ci
-flecto doctor
 ```
 
-CLI flags override profile/default values.
+Explicit CLI flags win over profiles, which win over `defaults`.
+→ **[Full configuration reference](docs/configuration.md)**
 
 ---
 
-## Output format reference
+## Commands
 
-### Compact (default)
-
-```
-[HH:MM:SS] <filepath> — N changes
-  ~ path: before → after     (yellow — value changed)
-  + path: value              (green  — key added)
-  - path: value              (red    — key removed)
-```
-
-### Verbose (`--mode verbose`)
-
-```
-[HH:MM:SS] <filepath> — N changes
-  ~ path
-    before: old_value
-    after:  new_value
-```
-
----
-
-## Error handling
-
-| Situation | Behavior |
+| Command | What it does |
 |---|---|
-| File not found | Error + exit 1 |
-| Unsupported format | Lists supported extensions + exit 1 |
-| Parse error while watching | Warning, last valid state kept |
-| Command / webhook fails | Warning (unless `--on-alert-failure exit`) |
-| Ctrl+C | Clean shutdown |
+| `flecto watch [files...]` | Watch for changes and print them as they happen |
+| `flecto watch --snapshot` | Save the current state as a baseline |
+| `flecto watch --diff` | Compare against the baseline and exit |
+| `flecto ci [files...]` | One-shot check with a gate-able exit code |
+| `flecto history [files...]` | Summarize drift across local snapshots |
+| `flecto policies list` | List available policy packs |
+| `flecto policies test <dir>` | Assert pack and plugin findings from fixtures |
+| `flecto init` | Create a starter `.flectorc` |
+| `flecto doctor` | Check setup, config, and environment |
+
+→ **[Every flag, every command](docs/cli-reference.md)**
+
+---
+
+## Documentation
+
+| Guide | Covers |
+|---|---|
+| **[CLI reference](docs/cli-reference.md)** | Every command, flag, and exit code |
+| **[Configuration](docs/configuration.md)** | `.flectorc`, profiles, ignore patterns, array identity, masking |
+| **[CI](docs/ci.md)** | Baselines, fail triggers, output formats, the GitHub Action |
+| **[Webhooks and commands](docs/webhooks.md)** | Envelope shape, delivery modes, command environment |
+| **[Policy packs](docs/policy-packs.md)** | Writing declarative rules |
+| **[Plugins](docs/plugins.md)** · **[Cookbook](docs/plugin-cookbook.md)** | Rules that need real code |
+| **[Troubleshooting](docs/troubleshooting.md)** | When something doesn't behave |
+| **[Changelog](CHANGELOG.md)** | Release history and migration notes |
 
 ---
 
 ## How it works
 
-1. **Parser** — format by extension / dotenv naming → structured values  
-2. **Watcher** — [chokidar](https://github.com/paulmillr/chokidar) + debounce  
-3. **Differ** — semantic tree diff (objects, arrays, ignore rules, automatic array ids)
-4. **Policy engine** — packs + plugins → severity findings  
-5. **Envelope** — versioned automation payload (`2.0`)  
-6. **Alerter** — command and/or webhook with retry modes  
+1. **Parse** — format detected by extension or dotenv naming → structured values
+2. **Watch** — [chokidar](https://github.com/paulmillr/chokidar) with debounce
+3. **Diff** — semantic tree comparison with ignore rules and array identity
+4. **Evaluate** — policy packs and plugins → severity-tagged findings
+5. **Emit** — a versioned envelope (`schema_version: "2.0"`)
+6. **Deliver** — terminal output, shell command, webhook, or CI annotations
+
+Flecto runs entirely on your machine. Snapshots are local files, and nothing
+leaves the process unless you configure a webhook or command.
 
 ---
 
-## Contributing
+## Project
 
-Flecto is open source. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, PR rules, and review expectations.  
-Please read the [Code of Conduct](CODE_OF_CONDUCT.md) and [Security policy](SECURITY.md).
+- **Questions and ideas** — [Discussions](https://github.com/myselfsiddharth/Flecto/discussions)
+- **Bugs and requests** — [Issues](https://github.com/myselfsiddharth/Flecto/issues)
+- **Contributing** — [CONTRIBUTING.md](CONTRIBUTING.md) · [Code of Conduct](CODE_OF_CONDUCT.md)
+- **Security** — [SECURITY.md](SECURITY.md), private disclosure only
+- **Roadmap** — [Milestones](https://github.com/myselfsiddharth/Flecto/milestones)
 
-Roadmap lives in [GitHub milestones](https://github.com/myselfsiddharth/Flecto/milestones).
-
----
-
-## Star the project
-
-If Flecto helps your team catch a risky config change — **[star the repo](https://github.com/myselfsiddharth/Flecto)** so more people can find it.
-
----
-
-## License
-
-MIT — see [LICENSE](./LICENSE).
+Released under the [MIT License](LICENSE).
