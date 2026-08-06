@@ -250,6 +250,19 @@ flecto history config/prod.yaml --limit 10
 Snapshots stay on your machine in `.flecto-snapshots/`. Nothing is uploaded and
 no account is required. → **[CLI reference](docs/cli-reference.md#flecto-history-files)**
 
+### Share what changed before the incident
+
+```bash
+flecto report --limit 20 --mask-secrets --output drift.html
+```
+
+One HTML file from that same local history: a timeline per file, every change
+with its UTC timestamp, and policy findings grouped by severity. Fully
+self-contained — inline styles, no fonts, no CDN scripts, no analytics — so you
+can attach it to an incident thread and it renders offline. No server and no
+account, same as everything else here.
+→ **[CLI reference](docs/cli-reference.md#flecto-report-files)**
+
 ### Encode your own rules
 
 Beyond the built-in packs, write rules as declarative JSON or YAML — no code:
@@ -381,6 +394,7 @@ Explicit CLI flags win over profiles, which win over `defaults`.
 | `flecto ci [files...]` | One-shot check with a gate-able exit code |
 | `flecto compare <fileA> <fileB>` | Diff two files against each other (`fileA` is the baseline) |
 | `flecto history [files...]` | Summarize drift across local snapshots |
+| `flecto report [files...]` | Render that history as a self-contained HTML file |
 | `flecto policies add <name>` | Install a pack from an `flecto-pack-*` npm package |
 | `flecto policies list` | List available policy packs |
 | `flecto policies test <dir>` | Assert pack and plugin findings from fixtures |
