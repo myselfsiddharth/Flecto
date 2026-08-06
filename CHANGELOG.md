@@ -294,6 +294,15 @@ The format is based on [Keep a Changelog], and this project adheres to
   webhook/CI payloads. Previously a change on a benign-looking path such as
   `database` printed its `password` / `api_key` children in the clear.
   ([#24])
+- A YAML file with a self-referential anchor (`a: &x\n  b: *x`) no longer
+  fails to parse. js-yaml resolves such an alias to the same object it
+  anchors, producing a genuinely cyclic tree; scalar normalization walked it
+  and overflowed the call stack (`Maximum call stack size exceeded`) before
+  the file could load at all — a bare `Parse error`, not a crash. Cyclic
+  back-references now normalize to a fixed `"<circular>"` sentinel, so the
+  rest of the file parses, snapshots, and diffs normally, two files with the
+  same cycle shape compare equal, and merge keys (`<<: *base`), which resolve
+  to an ordinary acyclic tree, are unaffected. ([#103])
 
 ## [2.1.0] - 2026-07-24
 
@@ -407,6 +416,7 @@ The format is based on [Keep a Changelog], and this project adheres to
 [#96]: https://github.com/myselfsiddharth/Flecto/issues/96
 [#97]: https://github.com/myselfsiddharth/Flecto/issues/97
 [#98]: https://github.com/myselfsiddharth/Flecto/issues/98
+[#103]: https://github.com/myselfsiddharth/Flecto/issues/103
 [#104]: https://github.com/myselfsiddharth/Flecto/issues/104
 [Keep a Changelog]: https://keepachangelog.com/en/1.1.0/
 [Semantic Versioning]: https://semver.org/spec/v2.0.0.html

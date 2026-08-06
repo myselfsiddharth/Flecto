@@ -383,11 +383,14 @@ test('expandChangeSubtrees mirrors removals and leaves other changes alone', () 
 
 test('expandChangeSubtrees terminates on a cyclic subtree', () => {
   // `loop: &anchor { self: *anchor }` is what a recursive YAML anchor parses
-  // to. The cycle is built here rather than parsed from a file: parseContent
-  // cannot currently load a recursive anchor at all (see #103), and the unit
-  // under test is the guard in the expansion walk, not the parser. The differ
-  // never recurses into an added subtree, so expansion is the first walk that
-  // can meet a cycle.
+  // to. The cycle is built here rather than parsed from a file because the
+  // unit under test is the guard in the expansion walk, not the parser: since
+  // #103, parseContent breaks a cycle like this itself (the back-reference
+  // normalizes to a `<circular>` sentinel), so it can no longer hand a
+  // genuinely cyclic object to anything downstream. This test keeps
+  // exercising the guard here directly in case a cyclic value ever reaches
+  // expansion by some other route. The differ never recurses into an added
+  // subtree, so expansion is the first walk that could meet one.
   const loop = { privileged: true };
   loop.self = loop;
   const parsed = { kind: 'Deployment', loop };

@@ -201,6 +201,29 @@ changes shape, and that diff reads as a rewrite rather than a single removal.
 
 ---
 
+## Recursive YAML anchors
+
+A YAML anchor can alias a container that (directly or through a nested value)
+contains itself:
+
+```yaml
+a: &x
+  b: *x
+```
+
+This parses to a genuinely cyclic object, which can't be written to a snapshot
+or diffed as-is. Flecto replaces the back-reference with the fixed string
+`"<circular>"` and normalizes the rest of the file normally, so the example
+above becomes `{"a": {"b": "<circular>"}}`. The sentinel is a fixed marker
+rather than a path back to the anchor, so two files with the same cycle shape
+always normalize to the same tree and diff clean against each other. Merge
+keys (`<<: *base`) are unrelated and unaffected — they resolve to a normal,
+non-cyclic tree at parse time. See the
+[troubleshooting entry](troubleshooting.md#a-yaml-anchor-that-points-back-at-itself-shows-up-as-circular)
+for the failure this replaces.
+
+---
+
 ## Secret masking
 
 ```bash
