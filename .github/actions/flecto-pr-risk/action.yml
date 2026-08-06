@@ -1,0 +1,254 @@
+name: Flecto PR risk
+description: >-
+  Post a sticky config-risk comment on a pull request, diffed against the PR's
+  base commit. Drop-in defaults; no baseline wiring required.
+
+inputs:
+  targets:
+    description: Whitespace-separated file paths or glob patterns to check.
+    required: false
+    default: config/**/*.{yaml,yml,json,toml,ini}
+  fail-on:
+    description: Comma-separated events that fail the check.
+    required: false
+    default: policy,error
+  policies:
+    description: >-
+      Comma-separated policy pack IDs. Omit to keep packs from .flectorc
+      (or Flecto's built-in default). Setting this overrides .flectorc packs.
+    required: false
+    default: ""
+  profile:
+    description: Optional .flectorc profile name.
+    required: false
+    default: ""
+  format:
+    description: >-
+      Flecto output format. Leave as pr-comment for the sticky comment; set
+      github-annotations to keep the PR-base baseline but report inline
+      instead. Posting is skipped for any other format.
+    required: false
+    default: pr-comment
+  pr-comment-post:
+    description: >-
+      Upsert a single sticky comment on the pull request. On when the format is
+      pr-comment; set to "false" to render the markdown to the log only.
+    required: false
+    default: "true"
+  mask-secrets:
+    description: >-
+      Redact secret-like values before they are rendered. Defaults to true here
+      (the CLI default is false) because a PR comment is as visible as the pull
+      request itself.
+    required: false
+    default: "true"
+  github-token:
+    description: >-
+      Token used to post the pull request comment. Defaults to the workflow's
+      GITHUB_TOKEN, which needs `permissions: pull-requests: write`. Posting is
+      skipped, with a warning, when this is empty.
+    required: false
+    default: ${{ github.token }}
+  snapshot-ref:
+    description: >-
+      Baseline override: a git ref or a snapshot file path. Leave empty to use
+      the pull request's base commit, which is what you want on a PR.
+    required: false
+    default: ""
+  flecto-version:
+    description: >-
+      npm version range for the Flecto CLI. Pin to an exact version for
+      reproducible builds.
+    required: false
+    default: "2"
+  node-version:
+    description: Node.js version used to run Flecto.
+    required: false
+    default: "20"
+
+outputs:
+  snapshot-ref:
+    description: The baseline ref this run actually diffed against.
+    value: ${{ steps.baseline.outputs.snapshot-ref }}
+  posting-enabled:
+    description: >-
+      "true" when the run asked Flecto to post the comment. Delivery can still
+      be refused by GitHub (see the job log); that never fails the job.
+    value: ${{ steps.posting.outputs.posting-enabled }}
+
+runs:
+  using: composite
+  steps:
+    # Resolve the baseline before installing anything: a missing base commit is
+    # a workflow misconfiguration, and it should fail fast and say so.
+    - name: Resolve pull request baseline
+      id: baseline
+      shell: bash
+      env:
+        INPUT_SNAPSHOT_REF: ${{ inputs.snapshot-ref }}
+        EVENT_NAME: ${{ github.event_name }}
+        PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+      run: |
+        set -euo pipefail
+
+        fail() {
+          echo "$1"
+          echo "::error title=Flecto PR risk::$1"
+          exit 1
+        }
+
+        if [[ -n "$INPUT_SNAPSHOT_REF" ]]; then
+          # An explicit baseline is taken as given — it may be a snapshot file
+          # rather than a git ref, and `flecto ci` already fails closed when it
+          # cannot resolve one.
+          echo "Baseline: $INPUT_SNAPSHOT_REF (from the snapshot-ref input)."
+          echo "snapshot-ref=$INPUT_SNAPSHOT_REF" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        if [[ -z "$PR_BASE_SHA" ]]; then
+          echo "Event '$EVENT_NAME' carries no pull_request.base.sha, so there is"
+          echo "no PR base commit to diff against."
+          echo "Fix: run this action on a 'pull_request' (or 'pull_request_target')"
+          echo "event, or pass an explicit baseline, e.g. snapshot-ref: origin/main."
+          fail "No pull request base commit available on event '$EVENT_NAME'. Run on pull_request, or set the snapshot-ref input."
+        fi
+
+        if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+          echo "The workspace is not a git checkout."
+          echo "Fix: run actions/checkout before this action."
+          fail "No git checkout found. Run actions/checkout with fetch-depth: 0 before this action."
+        fi
+
+        have_base() { git cat-file -e "${PR_BASE_SHA}^{commit}" 2>/dev/null; }
+
+        if ! have_base; then
+          # A shallow checkout (the actions/checkout default, fetch-depth: 1)
+          # has no base commit. Try to pull just that commit down before giving
+          # up; github.com serves fetch-by-SHA, but self-hosted mirrors may not.
+          echo "Base commit $PR_BASE_SHA is not in this clone; fetching it."
+          # --depth=1 against a clone that already has full history would
+          # truncate it, so ask for a shallow fetch only when it is already
+          # shallow. Deepening is always safe.
+          if [[ "$(git rev-parse --is-shallow-repository 2>/dev/null)" == "true" ]]; then
+            git fetch --no-tags --depth=1 origin "$PR_BASE_SHA" 2>/dev/null || true
+          else
+            git fetch --no-tags origin "$PR_BASE_SHA" 2>/dev/null || true
+          fi
+          if ! have_base && [[ -n "$PR_BASE_REF" ]]; then
+            git fetch --no-tags origin \
+              "+refs/heads/${PR_BASE_REF}:refs/remotes/origin/${PR_BASE_REF}" 2>/dev/null || true
+          fi
+        fi
+
+        if ! have_base; then
+          echo "Could not obtain the pull request base commit $PR_BASE_SHA."
+          echo "Fix: check out enough history for it —"
+          echo "  - uses: actions/checkout@v7"
+          echo "    with:"
+          echo "      fetch-depth: 0"
+          echo "Failing instead of passing: an unresolvable baseline would report"
+          echo "'no changes' and let a risky config edit through."
+          fail "Pull request base commit $PR_BASE_SHA is missing from the checkout. Set fetch-depth: 0 on actions/checkout (or pass snapshot-ref)."
+        fi
+
+        # The base commit itself is the right baseline for a pull_request run,
+        # whose HEAD is already the merge of base and head. Prefer the merge
+        # base when full history is available: it is also correct when the
+        # branch is checked out directly and the base has moved on since.
+        resolved="$(git merge-base "$PR_BASE_SHA" HEAD 2>/dev/null || true)"
+        if [[ -z "$resolved" ]]; then
+          resolved="$PR_BASE_SHA"
+          echo "Baseline: $resolved (pull request base commit)."
+        else
+          echo "Baseline: $resolved (merge base with ${PR_BASE_REF:-the base branch})."
+        fi
+        echo "snapshot-ref=$resolved" >> "$GITHUB_OUTPUT"
+
+    - name: Check pull request comment access
+      id: posting
+      shell: bash
+      env:
+        INPUT_FORMAT: ${{ inputs.format }}
+        INPUT_PR_COMMENT_POST: ${{ inputs.pr-comment-post }}
+        # Only whether a token exists — this step has no use for its value.
+        HAS_TOKEN: ${{ inputs.github-token != '' }}
+        EVENT_NAME: ${{ github.event_name }}
+        PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+      run: |
+        set -euo pipefail
+
+        warn() {
+          echo "::warning title=Flecto PR risk::$1"
+        }
+
+        enabled=false
+        if [[ "$INPUT_PR_COMMENT_POST" == "true" ]]; then
+          enabled=true
+        fi
+
+        if [[ "$enabled" == "true" && "$INPUT_FORMAT" != "pr-comment" ]]; then
+          enabled=false
+          echo "format is '$INPUT_FORMAT', not 'pr-comment' — nothing to post."
+        fi
+
+        if [[ "$enabled" == "true" && "$HAS_TOKEN" != "true" ]]; then
+          enabled=false
+          warn "github-token is empty, so the risk comment will not be posted. Leave the input at its default (the workflow token) and grant 'pull-requests: write'. The report is still printed in this log."
+        fi
+
+        # A pull_request run from a fork gets a read-only token unless the
+        # repository opted into write tokens for fork PRs, so posting usually
+        # fails there. Still attempt it — the opt-in exists, and Flecto only
+        # warns on refusal — but say up front why the comment may not appear.
+        if [[ "$enabled" == "true" && "$EVENT_NAME" == "pull_request" \
+              && -n "$PR_HEAD_REPO" && "$PR_HEAD_REPO" != "$GITHUB_REPOSITORY" ]]; then
+          warn "This pull request comes from a fork ($PR_HEAD_REPO), so GITHUB_TOKEN is normally read-only and posting will be skipped with a warning. The risk report is printed in this log, and the job still fails or passes on the config diff alone."
+        fi
+
+        echo "posting-enabled=$enabled" >> "$GITHUB_OUTPUT"
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v7
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - name: Run Flecto PR risk report
+      shell: bash
+      env:
+        INPUT_TARGETS: ${{ inputs.targets }}
+        INPUT_FAIL_ON: ${{ inputs.fail-on }}
+        INPUT_POLICIES: ${{ inputs.policies }}
+        INPUT_PROFILE: ${{ inputs.profile }}
+        INPUT_FORMAT: ${{ inputs.format }}
+        INPUT_MASK_SECRETS: ${{ inputs.mask-secrets }}
+        INPUT_SNAPSHOT_REF: ${{ steps.baseline.outputs.snapshot-ref }}
+        INPUT_PR_COMMENT_POST: ${{ steps.posting.outputs.posting-enabled }}
+        INPUT_FLECTO_VERSION: ${{ inputs.flecto-version }}
+        # Always set explicitly: an empty value makes Flecto skip posting rather
+        # than fall back to an ambient token.
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: |
+        set -euo pipefail
+
+        # `read` consumes a single line; flatten newlines so multiline workflow
+        # inputs (common YAML `|` / `>` blocks) still expand every pattern.
+        read -r -a targets <<< "${INPUT_TARGETS//$'\n'/ }"
+        args=(ci "${targets[@]}" --format "$INPUT_FORMAT" --fail-on "$INPUT_FAIL_ON")
+        args+=(--snapshot-ref "$INPUT_SNAPSHOT_REF")
+
+        if [[ -n "$INPUT_POLICIES" ]]; then
+          args+=(--policies "$INPUT_POLICIES")
+        fi
+        if [[ -n "$INPUT_PROFILE" ]]; then
+          args+=(--profile "$INPUT_PROFILE")
+        fi
+        if [[ "$INPUT_MASK_SECRETS" == "true" ]]; then
+          args+=(--mask-secrets)
+        fi
+        if [[ "$INPUT_PR_COMMENT_POST" == "true" ]]; then
+          args+=(--pr-comment-post)
+        fi
+
+        npx --yes "flecto@${INPUT_FLECTO_VERSION}" "${args[@]}"

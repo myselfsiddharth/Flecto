@@ -148,8 +148,11 @@ flecto ci "config/**/*.yaml" --snapshot-ref origin/main --format pr-comment > co
 gh pr comment "$PR" --body-file comment.md --edit-last
 ```
 
-In a GitHub Actions workflow, opt in with the `pr-comment-post` input and grant
-write access to pull requests:
+In a GitHub Actions workflow, reach for the
+[`flecto-pr-risk` Action](#flecto-pr-risk--the-pull-request-gate), which does
+this by default and resolves the baseline from the pull request for you. The
+general-purpose `flecto-ci` Action can do it too, with the `pr-comment-post`
+input and write access to pull requests:
 
 ```yaml
 permissions:
@@ -177,9 +180,19 @@ formally in
 
 ---
 
-## GitHub Action
+## GitHub Actions
 
-The bundled Action wraps `flecto ci` with annotations enabled by default.
+Two composite Actions ship with the repository. Both wrap `flecto ci`; they
+differ in what they assume about the run.
+
+| Action | Use it for | Baseline |
+|---|---|---|
+| [`flecto-ci`](#flecto-ci--the-general-purpose-step) | Any run — pull request, push, schedule | `HEAD~1`, or whatever you pass |
+| [`flecto-pr-risk`](#flecto-pr-risk--the-pull-request-gate) | Pull requests, with a sticky risk comment | The pull request's base commit |
+
+### `flecto-ci` — the general-purpose step
+
+Wraps `flecto ci` with annotations enabled by default.
 
 ```yaml
 permissions:
@@ -220,11 +233,94 @@ A complete workflow is in
 and the Action itself is at
 [`.github/actions/flecto-ci/action.yml`](../.github/actions/flecto-ci/action.yml).
 
+### `flecto-pr-risk` — the pull request gate
+
+Everything the sticky comment needs, already switched on. One `uses:` is a
+complete adoption; every input below has a working default.
+
+```yaml
+permissions:
+  contents: read
+  pull-requests: write
+
+steps:
+  - uses: actions/checkout@v7
+    with:
+      fetch-depth: 0
+  - uses: myselfsiddharth/Flecto/.github/actions/flecto-pr-risk@main
+```
+
+| Input | Default | Description |
+|---|---|---|
+| `targets` | `config/**/*.{yaml,yml,json,toml,ini}` | Whitespace-separated paths or globs |
+| `fail-on` | `policy,error` | Comma-separated events that fail the job |
+| `policies` | _(empty)_ | Comma-separated pack ids; omit to use `.flectorc` |
+| `profile` | _(empty)_ | Optional `.flectorc` profile |
+| `format` | `pr-comment` | Output format; `github-annotations` keeps the PR baseline and reports inline |
+| `pr-comment-post` | `true` | Upsert the sticky comment; `"false"` renders to the log only |
+| `mask-secrets` | `true` | Redact secret-like values before rendering |
+| `github-token` | `${{ github.token }}` | Token used to post the comment |
+| `snapshot-ref` | _(empty)_ | Baseline override; empty means "the pull request's base commit" |
+| `flecto-version` | `2` | npm version range for the CLI |
+| `node-version` | `20` | Node.js version used to run Flecto |
+
+Outputs: `snapshot-ref` (the baseline actually used) and `posting-enabled`.
+
+#### The baseline
+
+`HEAD~1` is the wrong baseline for a pull request: it is the previous commit on
+the branch, not the state the PR is proposing to change. `flecto-pr-risk`
+resolves it from the event instead, in this order:
+
+1. The `snapshot-ref` input, when you set one. It is used verbatim — a git ref
+   or a snapshot file — and `flecto ci` fails closed if it does not resolve.
+2. `github.event.pull_request.base.sha`, refined to `git merge-base <base> HEAD`
+   when the checkout has enough history for it. On a `pull_request` run the two
+   are the same commit; the merge base is also right when the branch is checked
+   out directly and the base has moved on since.
+
+**`fetch-depth: 0` on `actions/checkout` is required.** The default shallow
+checkout has one commit and no base to diff against. When the base commit is
+missing the Action tries to fetch just that commit, and if it still cannot get
+it the job **fails with an explicit message** naming `fetch-depth: 0` — an
+unresolvable baseline would otherwise report "no changes" and wave a risky edit
+through. Two other cases fail the same loud way: no `actions/checkout` ran, and
+a non-pull-request event with no `snapshot-ref` set.
+
+#### Permissions, and forks
+
+```yaml
+permissions:
+  contents: read        # actions/checkout
+  pull-requests: write  # upsert the sticky comment
+```
+
+Posting is the only thing that needs write access, and it is never load-bearing:
+the exit code comes from the config diff and the policy result alone.
+
+- **No `pull-requests: write`.** GitHub refuses the API call, Flecto warns on
+  stderr, the job still passes or fails on the diff.
+- **A pull request from a fork.** The `GITHUB_TOKEN` handed to a `pull_request`
+  run from a fork is read-only unless the repository opted into write tokens for
+  fork PRs, so posting is usually refused. The Action recognizes this before it
+  runs and posts a workflow warning explaining why no comment will appear; the
+  report is still printed in the job log in full. It does not fail, and it does
+  not pre-emptively give up either, so a repository that has opted in still gets
+  its comment.
+- **An empty `github-token`.** Posting is disabled up front with a warning
+  rather than attempted and refused.
+
+A complete workflow is in
+[`examples/github-action/flecto-pr-risk.yml`](../examples/github-action/flecto-pr-risk.yml),
+and the Action itself is at
+[`.github/actions/flecto-pr-risk/action.yml`](../.github/actions/flecto-pr-risk/action.yml).
+
 ### Pinning
 
-The Action runs `npx --yes flecto@2 ci`, so compatible updates are picked up
+Both Actions run `npx --yes flecto@2 ci`, so compatible updates are picked up
 automatically. For fully reproducible builds, pin the Action reference to a
-commit SHA and replace `@2` in a forked Action with an exact published version.
+commit SHA; `flecto-pr-risk` also takes an exact CLI version through
+`flecto-version`, so pinning it needs no fork.
 
 ---
 

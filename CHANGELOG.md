@@ -9,6 +9,22 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ### Added
 
+- A second bundled composite Action, `flecto-pr-risk`, that packages the pull
+  request risk comment as a one-line adoption: `uses:` it after
+  `actions/checkout` and the defaults do the rest (`format: pr-comment`,
+  posting on, `fail-on: policy,error`, secret masking on, the workflow token).
+  It resolves the baseline from the pull request instead of `HEAD~1`, which is
+  the wrong commit on a PR — `github.event.pull_request.base.sha`, refined to
+  the merge base with `HEAD` when the checkout carries enough history. A
+  missing base commit is fetched if it can be; when it still cannot be resolved
+  the job fails with a message naming `fetch-depth: 0`, rather than reporting
+  "no changes" and letting a risky edit through. Posting degrades instead of
+  breaking: a fork's read-only token, a missing `pull-requests: write`, or an
+  empty `github-token` produce a workflow warning and a report in the log,
+  never a failed check — the exit code stays with the diff and policy result.
+  `flecto-version` pins the CLI without forking the Action. The existing
+  `flecto-ci` Action is untouched, inputs and defaults included, and is now
+  covered by tests that parse both committed `action.yml` files. ([#74])
 - A convention for distributing policy packs, plus `flecto policies add <name>`
   to install one. A community pack is an npm package named `flecto-pack-<id>`
   (or `@scope/flecto-pack-<id>`) with a `flecto-pack.json`, `flecto-pack.yaml`,
@@ -220,6 +236,7 @@ The format is based on [Keep a Changelog], and this project adheres to
 [#70]: https://github.com/myselfsiddharth/Flecto/issues/70
 [#71]: https://github.com/myselfsiddharth/Flecto/issues/71
 [#72]: https://github.com/myselfsiddharth/Flecto/issues/72
+[#74]: https://github.com/myselfsiddharth/Flecto/issues/74
 [#79]: https://github.com/myselfsiddharth/Flecto/issues/79
 [Keep a Changelog]: https://keepachangelog.com/en/1.1.0/
 [Semantic Versioning]: https://semver.org/spec/v2.0.0.html
