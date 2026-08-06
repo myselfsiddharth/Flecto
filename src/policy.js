@@ -1,5 +1,6 @@
-import { existsSync, readFileSync, readdirSync } from 'fs';
-import { dirname, isAbsolute, join, resolve } from 'path';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'fs';
+import { dirname, isAbsolute, join, relative, resolve } from 'path';
+import { createRequire } from 'module';
 import { fileURLToPath, pathToFileURL } from 'url';
 import yaml from 'js-yaml';
 import { containsSecret } from './secrets.js';
@@ -54,6 +55,19 @@ import { containsSecret } from './secrets.js';
  * @typedef {{ id: string, rules: PolicyRule[] }} PolicyPack
  *
  * @typedef {{
+ *   id: string,
+ *   packageName: string,
+ *   packageVersion: string | null,
+ *   packFile: string,
+ *   targetPath: string,
+ *   ruleCount: number,
+ *   overwritten: boolean,
+ *   overridesBuiltin: boolean,
+ *   shadowed: string[],
+ *   shipsCode: boolean
+ * }} AddedPolicyPack
+ *
+ * @typedef {{
  *   cwd?: string,
  *   file?: string,
  *   profile?: string | null,
@@ -79,6 +93,13 @@ const CLAUSE_FIELDS = new Set([
   'afterMatches', 'numericJump', 'numericDelta',
 ]);
 const MATCH_FIELDS = new Set(['path', 'pathFlags', 'pathEquals', 'pathPrefix']);
+// Community distribution convention: an npm package named flecto-pack-<id>
+// carrying a declarative pack file. Nothing in such a package is ever imported.
+const PACK_PACKAGE_PREFIX = 'flecto-pack-';
+const PACK_FILE_CANDIDATES = ['flecto-pack.json', 'flecto-pack.yaml', 'flecto-pack.yml'];
+const PACK_EXTENSIONS = ['.json', '.yaml', '.yml'];
+const PACK_MANIFEST_FILE = '.flecto-packs.json';
+const PACK_ID_PATTERN = /^[a-z0-9][a-z0-9._-]*$/i;
 
 /**
  * @param {string} path
@@ -337,6 +358,24 @@ export function listBuiltinPackIds() {
 }
 
 /**
+ * Read the sidecar record of packs installed by `flecto policies add`. The
+ * record is provenance only: pack resolution never consults it.
+ * @param {string} cwd
+ * @returns {Record<string, { package: string, version: string | null, addedAt: string }>}
+ */
+function readPackManifest(cwd) {
+  const manifestPath = resolve(cwd, 'policies', PACK_MANIFEST_FILE);
+  if (!existsSync(manifestPath)) return {};
+  try {
+    const parsed = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    return isObject(parsed?.packs) ? parsed.packs : {};
+  } catch {
+    // Provenance is a nicety; a corrupt sidecar must never break listing.
+    return {};
+  }
+}
+
+/**
  * List every policy pack resolvable from a working directory. Local packs take
  * precedence over built-ins using the same order as loadPack().
  * @param {string} [cwd]
@@ -345,16 +384,19 @@ export function listBuiltinPackIds() {
  *   sourcePath: string,
  *   source: 'builtin' | 'local',
  *   ruleCount: number,
- *   overridesBuiltin: boolean
+ *   overridesBuiltin: boolean,
+ *   package?: string
  * }>}
  */
 export function listPolicyPacks(cwd = process.cwd()) {
   const localDir = resolve(cwd, 'policies');
   const localIds = existsSync(localDir)
     ? readdirSync(localDir)
-      .filter((file) => /\.(json|yaml|yml)$/.test(file))
+      // Hidden files are never pack ids — this is where the sidecar lives.
+      .filter((file) => !file.startsWith('.') && /\.(json|yaml|yml)$/.test(file))
       .map((file) => file.replace(/\.(json|yaml|yml)$/, ''))
     : [];
+  const manifest = readPackManifest(cwd);
   const builtinIds = listBuiltinPackIds();
   const builtinIdSet = new Set(builtinIds);
 
@@ -367,14 +409,236 @@ export function listPolicyPacks(cwd = process.cwd()) {
       }
       const pack = readPackFile(sourcePath, id);
       const isLocal = localIds.includes(id);
+      const packageName = isLocal && typeof manifest[id]?.package === 'string'
+        ? manifest[id].package
+        : null;
       return {
         id,
         sourcePath,
         source: isLocal ? 'local' : 'builtin',
         ruleCount: pack.rules.length,
         overridesBuiltin: isLocal && builtinIdSet.has(id),
+        // Present only for packs installed from npm, so hand-written local
+        // packs keep the exact shape they have always had.
+        ...(packageName ? { package: packageName } : {}),
       };
     });
+}
+
+/**
+ * Map either form of a pack name onto the other: the short pack id
+ * (`deployment-safety`) and the npm package name
+ * (`flecto-pack-deployment-safety`, optionally scoped).
+ * @param {string} name
+ * @returns {{ id: string, packageName: string }}
+ */
+export function normalizePackPackageName(name) {
+  const raw = String(name ?? '').trim();
+  if (!raw) throw new Error('Policy pack name is required');
+
+  const scopeMatch = /^(@[^/]+\/)(.+)$/.exec(raw);
+  const scope = scopeMatch ? scopeMatch[1] : '';
+  const rest = scopeMatch ? scopeMatch[2] : raw;
+  const id = rest.startsWith(PACK_PACKAGE_PREFIX) ? rest.slice(PACK_PACKAGE_PREFIX.length) : rest;
+
+  // The id becomes a filename under policies/, so it must be a plain segment.
+  if (!PACK_ID_PATTERN.test(id)) {
+    throw new Error(
+      `Invalid policy pack name "${raw}". Use a pack id such as "deployment-safety" or a package name such as "flecto-pack-deployment-safety".`,
+    );
+  }
+  return { id, packageName: `${scope}${PACK_PACKAGE_PREFIX}${id}` };
+}
+
+/**
+ * Locate an installed pack package without loading any of its code.
+ * @param {string} packageName
+ * @param {string} cwd
+ * @returns {string | null} Absolute package directory, or null when not installed.
+ */
+function resolvePackPackageDir(packageName, cwd) {
+  // resolve() only computes a path; it never evaluates the target.
+  const require = createRequire(join(resolve(cwd), 'package.json'));
+  try {
+    return dirname(require.resolve(`${packageName}/package.json`));
+  } catch {
+    // A package with an "exports" map that omits ./package.json still has one
+    // on disk, so fall back to the plain node_modules lookup.
+  }
+
+  let dir = resolve(cwd);
+  for (;;) {
+    const candidate = join(dir, 'node_modules', ...packageName.split('/'), 'package.json');
+    if (existsSync(candidate)) return dirname(candidate);
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
+/**
+ * @param {string} packageDir
+ * @param {string} packageName
+ * @returns {Record<string, unknown>}
+ */
+function readPackagePackageJson(packageDir, packageName) {
+  try {
+    const parsed = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8'));
+    return isObject(parsed) ? parsed : {};
+  } catch (error) {
+    throw new Error(`Could not read package.json for "${packageName}": ${error.message}`);
+  }
+}
+
+/**
+ * Find the declarative pack file inside a pack package: a `flecto-pack.*` file
+ * at the package root, or the path named by its package.json "flecto" field.
+ * @param {string} packageDir
+ * @param {Record<string, unknown>} packageJson
+ * @param {string} packageName
+ * @returns {string}
+ */
+function resolvePackFileInPackage(packageDir, packageJson, packageName) {
+  const declared = packageJson.flecto;
+  /** @type {string | null} */
+  let relPath = null;
+  if (typeof declared === 'string') {
+    relPath = declared;
+  } else if (isObject(declared)) {
+    if (typeof declared.pack !== 'string' || !declared.pack.trim()) {
+      throw new Error(
+        `Invalid "flecto" field in ${packageName}: expected { "pack": "<path to pack file>" }.`,
+      );
+    }
+    relPath = declared.pack;
+  } else if (declared !== undefined) {
+    throw new Error(
+      `Invalid "flecto" field in ${packageName}: expected a pack file path or { "pack": "<path>" }.`,
+    );
+  }
+
+  if (relPath) {
+    const abs = resolve(packageDir, relPath);
+    const inside = relative(packageDir, abs);
+    if (isAbsolute(relPath) || inside.startsWith('..') || isAbsolute(inside)) {
+      throw new Error(`Invalid "flecto" field in ${packageName}: "${relPath}" escapes the package directory.`);
+    }
+    if (!PACK_EXTENSIONS.some((ext) => abs.toLowerCase().endsWith(ext))) {
+      throw new Error(
+        `Invalid "flecto" field in ${packageName}: "${relPath}" must be a .json, .yaml, or .yml pack file. Flecto never loads JavaScript from a pack package.`,
+      );
+    }
+    if (!existsSync(abs)) {
+      throw new Error(`Pack file missing in ${packageName}: "${relPath}" does not exist.`);
+    }
+    return abs;
+  }
+
+  for (const candidate of PACK_FILE_CANDIDATES) {
+    const abs = join(packageDir, candidate);
+    if (existsSync(abs)) return abs;
+  }
+  throw new Error(
+    `"${packageName}" is not a Flecto policy pack: expected ${PACK_FILE_CANDIDATES.join(', ')} at the package root, or a "flecto" field in its package.json.`,
+  );
+}
+
+/**
+ * @param {string} packageDir
+ * @param {Record<string, unknown>} packageJson
+ * @returns {boolean}
+ */
+function packageShipsCode(packageDir, packageJson) {
+  if (packageJson.main || packageJson.exports || packageJson.bin) return true;
+  try {
+    return readdirSync(packageDir).some((file) => /\.(c|m)?js$/.test(file));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * @param {string} cwd
+ * @param {string} id
+ * @returns {string[]} Existing local pack files for this id, in resolution order.
+ */
+function localPackFilesForId(cwd, id) {
+  return PACK_EXTENSIONS
+    .map((ext) => resolve(cwd, 'policies', `${id}${ext}`))
+    .filter((path) => existsSync(path));
+}
+
+/**
+ * @param {string} cwd
+ * @param {string} id
+ * @param {{ package: string, version: string | null }} entry
+ */
+function writePackManifestEntry(cwd, id, entry) {
+  const manifestPath = resolve(cwd, 'policies', PACK_MANIFEST_FILE);
+  const packs = readPackManifest(cwd);
+  packs[id] = { ...entry, addedAt: new Date().toISOString() };
+  writeFileSync(manifestPath, `${JSON.stringify({ packs }, null, 2)}\n`, 'utf8');
+}
+
+/**
+ * Install a policy pack from an already-installed `flecto-pack-*` npm package
+ * into `policies/<id>.json`, so the normal resolution order picks it up.
+ *
+ * Only declarative JSON/YAML is read — no package code is imported or run.
+ * @param {string} name Pack id or npm package name.
+ * @param {{ cwd?: string, force?: boolean }} [options]
+ * @returns {AddedPolicyPack}
+ */
+export function addPolicyPackFromPackage(name, options = {}) {
+  const cwd = options.cwd ?? process.cwd();
+  const force = Boolean(options.force);
+  const { id, packageName } = normalizePackPackageName(name);
+
+  const packageDir = resolvePackPackageDir(packageName, cwd);
+  if (!packageDir) {
+    throw new Error(
+      `Policy pack package "${packageName}" is not installed. Install it first:\n\n  npm install --save-dev ${packageName}\n`,
+    );
+  }
+
+  const packageJson = readPackagePackageJson(packageDir, packageName);
+  const packFile = resolvePackFileInPackage(packageDir, packageJson, packageName);
+  // Full pack validation happens here, before anything is written: a malformed
+  // third-party pack fails at add time rather than during evaluation.
+  const pack = readPackFile(packFile, id);
+  if (pack.id !== id) {
+    throw new Error(
+      `Policy pack id mismatch: ${packageName} declares id "${pack.id}", but the package name implies "${id}". Rename the pack id or publish under "${PACK_PACKAGE_PREFIX}${pack.id}".`,
+    );
+  }
+
+  const existingLocal = localPackFilesForId(cwd, id);
+  if (existingLocal.length > 0 && !force) {
+    throw new Error(
+      `A local policy pack "${id}" already exists: ${existingLocal.join(', ')}. Re-run with --force to overwrite it.`,
+    );
+  }
+
+  const targetPath = resolve(cwd, 'policies', `${id}.json`);
+  mkdirSync(dirname(targetPath), { recursive: true });
+  writeFileSync(targetPath, `${JSON.stringify({ id, rules: pack.rules }, null, 2)}\n`, 'utf8');
+  writePackManifestEntry(cwd, id, {
+    package: packageName,
+    version: typeof packageJson.version === 'string' ? packageJson.version : null,
+  });
+
+  return {
+    id,
+    packageName,
+    packageVersion: typeof packageJson.version === 'string' ? packageJson.version : null,
+    packFile,
+    targetPath,
+    ruleCount: pack.rules.length,
+    overwritten: existingLocal.includes(targetPath),
+    overridesBuiltin: existsSync(join(PACKS_DIR, `${id}.json`)),
+    shadowed: existingLocal.filter((path) => path !== targetPath),
+    shipsCode: packageShipsCode(packageDir, packageJson),
+  };
 }
 
 /**

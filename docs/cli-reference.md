@@ -171,6 +171,43 @@ and sends nothing anywhere.
 
 ---
 
+## `flecto policies add <name>`
+
+Install a policy pack from an npm package that follows the `flecto-pack-*`
+convention. The package must already be installed; this command does not reach
+the network.
+
+```bash
+npm install --save-dev flecto-pack-deployment-safety
+flecto policies add deployment-safety
+flecto policies add flecto-pack-deployment-safety   # same thing
+flecto policies add deployment-safety --force       # after npm update
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--force` | off | Overwrite an existing local pack with the same id |
+
+`<name>` is either the pack id or the full package name; the two are normalized
+onto each other, and `@scope/flecto-pack-<id>` is supported. The pack is
+validated with the same validator used at evaluation time, then written to
+`policies/<id>.json`, where the normal resolution order finds it. Provenance is
+recorded in `policies/.flecto-packs.json` and shown by `flecto policies list`;
+resolution itself never consults that file.
+
+Only the package's declarative pack file is read — no JavaScript from the
+package is imported or run, and JS in a pack package is ignored. Plugins, which
+do execute code, are never installed by this command.
+
+**Exit codes:** `0` when the pack is written, `1` when the package is not
+installed, carries no valid pack, or would overwrite a local pack without
+`--force`.
+
+See [installing community packs](policy-packs.md#installing-a-community-pack)
+and [distributing a pack](policy-packs.md#distributing-a-pack).
+
+---
+
 ## `flecto policies list`
 
 List every bundled and local policy pack that resolves from the current
@@ -188,6 +225,10 @@ flecto policies list --json
 Resolution order for a given pack id: `policies/<id>.json`, then
 `policies/<id>.yaml`, then `policies/<id>.yml`, then the built-in pack. A local
 pack with the same id overrides its built-in counterpart.
+
+Packs installed with `flecto policies add` carry a `package` field naming the
+npm package they came from (`-` in the text output when a pack was written by
+hand).
 
 ---
 

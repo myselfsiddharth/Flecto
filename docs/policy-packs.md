@@ -132,3 +132,98 @@ Flecto records the rule id, severity, changed path, message, and pack id. When m
 Use `--fail-on policy` to fail CI for any finding, or `--fail-on error` / `--fail-on warn` to set a severity threshold.
 
 The [plugin cookbook](plugin-cookbook.md) demonstrates how pack findings merge with async plugins using shared policy fixtures.
+
+## Installing a community pack
+
+Any npm package named `flecto-pack-<id>` — or `@scope/flecto-pack-<id>` — that
+carries a declarative pack file is installable. npm is the registry; Flecto
+hosts nothing.
+
+```bash
+npm install --save-dev flecto-pack-deployment-safety
+flecto policies add deployment-safety   # the full package name works too
+flecto ci config/prod.yaml --policies default,deployment-safety
+```
+
+`flecto policies add` writes the pack to `policies/<id>.json`, so the ordinary
+resolution order picks it up with no new mechanism and nothing to configure. The
+copy is yours: a plain file, reviewable in a pull request and diffable when you
+upgrade. After `npm update`, re-run the command with `--force` to pull the newer
+version in.
+
+What the command does:
+
+- Resolves the package from `node_modules`, walking up from the working
+  directory exactly like `require` does. When it is not installed, the error
+  names the `npm install` to run and the command exits `1`.
+- Validates the pack with the same validator used at evaluation time (see the
+  [pack schema](../schemas/flecto-policy-pack-2.0.json)). A malformed
+  third-party pack is rejected at add time and nothing is written.
+- Refuses to overwrite an existing local `policies/<id>.json`, `.yaml`, or
+  `.yml` unless `--force` is passed, and warns when the id shadows a built-in
+  pack.
+- Records provenance in `policies/.flecto-packs.json`, which `flecto policies
+  list` surfaces as the pack's `package`. Pack resolution never reads that file.
+
+**No third-party code is executed.** The command reads exactly one declarative
+JSON or YAML file and nothing else — it never imports, requires, or evaluates
+JavaScript from the package. A `flecto-pack-*` package that also ships JS has
+that JS ignored, and the command says so; a `"flecto"` field pointing at a `.js`
+file is rejected outright.
+
+Policy *plugins* are a different thing: they are JavaScript, they run inside
+your Flecto process, and `flecto policies add` never installs them. Point
+`--plugins` at a path you have read yourself. See [plugins](plugins.md).
+
+Normal supply-chain care still applies. A pack is a small JSON file — read it
+before trusting it, and pin the version in `package.json`.
+
+## Distributing a pack
+
+Publishing a pack means publishing a JSON (or YAML) file to npm. Two rules:
+
+1. **Name the package `flecto-pack-<id>`.** Whatever follows the prefix is the
+   pack id users pass to `--policies` and the filename written into `policies/`.
+   Scopes are supported: `@acme/flecto-pack-edge` installs as `edge`.
+2. **Put the pack file at the package root**, named `flecto-pack.json`,
+   `flecto-pack.yaml`, or `flecto-pack.yml`.
+
+```
+flecto-pack-deployment-safety/
+├── package.json
+├── flecto-pack.json
+└── README.md
+```
+
+```json
+{
+  "name": "flecto-pack-deployment-safety",
+  "version": "1.0.0",
+  "files": ["flecto-pack.json"],
+  "keywords": ["flecto", "flecto-pack", "policy-pack"]
+}
+```
+
+The convention is filename-based on purpose: a valid pack needs no build step,
+no entry point, and no code — `npm publish` on a directory with two files is the
+whole workflow, and anyone can read what they are installing.
+
+When the pack file has to live elsewhere, such as a build output, point at it
+from `package.json`:
+
+```json
+{ "flecto": { "pack": "dist/pack.json" } }
+```
+
+A bare string (`"flecto": "dist/pack.json"`) means the same thing. The path must
+stay inside the package and end in `.json`, `.yaml`, or `.yml`; a JavaScript
+entry point is rejected, because Flecto will not run pack code.
+
+The file's contents are exactly the [pack schema](#pack-schema) documented
+above. The top-level `id` is optional: omit it, or set it to the short id. An
+`id` that disagrees with the package name is an error, so what a user types
+after `--policies` always matches what they installed.
+
+Two conventions worth following, neither enforced: publish with the
+`flecto-pack` keyword so packs are findable on npm, and ship a fixture
+directory so `flecto policies test` can act as the pack's test suite in CI.

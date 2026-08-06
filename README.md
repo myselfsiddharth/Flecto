@@ -284,6 +284,18 @@ A local `policies/<id>.json` overrides the built-in pack of the same id, and
 `severityRemap` raises or silences individual rules per profile without forking
 anything. → **[Policy packs](docs/policy-packs.md)**
 
+Community packs ship on npm as `flecto-pack-<id>` packages — a package name and
+one declarative JSON file, nothing else:
+
+```bash
+npm install --save-dev flecto-pack-deployment-safety
+flecto policies add deployment-safety
+```
+
+`policies add` validates the pack, writes it to `policies/deployment-safety.json`,
+and runs no code from the package. →
+**[Installing community packs](docs/policy-packs.md#installing-a-community-pack)**
+
 ---
 
 ## Supported formats
@@ -351,6 +363,7 @@ Explicit CLI flags win over profiles, which win over `defaults`.
 | `flecto ci [files...]` | One-shot check with a gate-able exit code |
 | `flecto compare <fileA> <fileB>` | Diff two files against each other (`fileA` is the baseline) |
 | `flecto history [files...]` | Summarize drift across local snapshots |
+| `flecto policies add <name>` | Install a pack from an `flecto-pack-*` npm package |
 | `flecto policies list` | List available policy packs |
 | `flecto policies test <dir>` | Assert pack and plugin findings from fixtures |
 | `flecto init` | Create a `.flectorc` from detected stack signals |
