@@ -43,6 +43,7 @@
   "scripts": {
     "test": "node --test test/*.test.js",
     "test:watch": "node --test --watch test/*.test.js",
+    "bench": "node bench/run.js",
     "pack:check": "npm pack --dry-run"
   },
   "dependencies": {
