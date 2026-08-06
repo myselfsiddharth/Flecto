@@ -1,9 +1,14 @@
-import { existsSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, readFileSync, readdirSync, writeFileSync } from 'fs';
 import { resolve } from 'path';
 import fg from 'fast-glob';
 import yaml from 'js-yaml';
+import { isEnvFilename } from './parser.js';
 
 const RC_CANDIDATES = ['.flectorc', '.flectorc.json', '.flectorc.yaml', '.flectorc.yml'];
+const COMPOSE_FILENAMES = ['docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml'];
+const CONFIG_DIR_PATTERN = 'config/**/*.{yaml,yml,json,toml,ini}';
+const ENV_FILE_PATTERNS = ['.env', '.env.*', '*.env'];
+const GENERIC_FILE_PATTERNS = [CONFIG_DIR_PATTERN, ...ENV_FILE_PATTERNS];
 
 /**
  * @typedef {{
@@ -13,6 +18,15 @@ const RC_CANDIDATES = ['.flectorc', '.flectorc.json', '.flectorc.yaml', '.flecto
  *  include?: string[],
  *  exclude?: string[]
  * }} FlectoRc
+ *
+ * @typedef {{
+ *  id: string,
+ *  evidence: string[],
+ *  pack: string | null,
+ *  summary: string
+ * }} StackSignal
+ *
+ * @typedef {{ signals: StackSignal[], packs: string[], files: string[] }} StackDetection
  */
 
 /**
@@ -126,13 +140,103 @@ export async function resolveFiles(input) {
 }
 
 /**
- * Scaffold a starter rc file if missing.
+ * Detect stack signals in a directory and map them to policy packs and file
+ * patterns. Only built-in pack ids and patterns Flecto can actually parse are
+ * ever returned, so a config built from this stays loadable by every command.
+ * Terraform files are reported as context only: no `terraform` pack ships yet,
+ * and `.tf` is not a supported parse format.
  * @param {string} cwd
- * @returns {string}
+ * @returns {StackDetection}
+ */
+export function detectStack(cwd = process.cwd()) {
+  /** @type {StackSignal[]} */
+  const signals = [];
+  const packs = ['default'];
+  /** @type {string[]} */
+  const files = [];
+
+  let entries = [];
+  try {
+    entries = readdirSync(cwd, { withFileTypes: true });
+  } catch {
+    return { signals, packs, files };
+  }
+  const fileNames = entries.filter((entry) => entry.isFile()).map((entry) => entry.name);
+  const dirNames = new Set(entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name));
+  const fileNameSet = new Set(fileNames);
+
+  const composeFiles = COMPOSE_FILENAMES.filter((name) => fileNameSet.has(name));
+  if (composeFiles.length > 0) {
+    packs.push('compose');
+    files.push(...composeFiles);
+    signals.push({
+      id: 'compose',
+      evidence: composeFiles,
+      pack: 'compose',
+      summary: `Detected ${composeFiles.join(', ')} → enabled the \`compose\` policy pack and watched ${composeFiles.length === 1 ? 'it' : 'them'}`,
+    });
+  }
+
+  if (fileNameSet.has('package.json')) {
+    packs.push('node-runtime');
+    files.push('package.json');
+    signals.push({
+      id: 'node',
+      evidence: ['package.json'],
+      pack: 'node-runtime',
+      summary: 'Detected package.json → enabled the `node-runtime` policy pack and watched it',
+    });
+  }
+
+  const terraformFiles = fileNames.filter((name) => name.toLowerCase().endsWith('.tf')).sort();
+  if (terraformFiles.length > 0) {
+    signals.push({
+      id: 'terraform',
+      evidence: terraformFiles,
+      pack: null,
+      summary: `Detected Terraform files (${terraformFiles.join(', ')}) → no terraform pack ships yet and .tf is not a parseable format, so nothing was enabled`,
+    });
+  }
+
+  if (dirNames.has('config')) {
+    files.push(CONFIG_DIR_PATTERN);
+    signals.push({
+      id: 'config-dir',
+      evidence: ['config/'],
+      pack: null,
+      summary: `Detected config/ → watched ${CONFIG_DIR_PATTERN}`,
+    });
+  }
+
+  const envFiles = fileNames.filter((name) => isEnvFilename(name)).sort();
+  if (envFiles.length > 0) {
+    files.push(...ENV_FILE_PATTERNS);
+    signals.push({
+      id: 'dotenv',
+      evidence: envFiles,
+      pack: null,
+      summary: `Detected ${envFiles.join(', ')} → watched ${ENV_FILE_PATTERNS.join(', ')}`,
+    });
+  }
+
+  return { signals, packs, files: [...new Set(files)] };
+}
+
+/**
+ * Scaffold a starter rc file if missing, pre-selecting policy packs and file
+ * patterns from the stack signals found in `cwd`. Never overwrites an existing
+ * config: any of the four `.flectorc` candidates is reported back untouched.
+ * @param {string} cwd
+ * @returns {{ path: string, created: boolean, detection: StackDetection }}
  */
 export function initRcFile(cwd = process.cwd()) {
+  const detection = detectStack(cwd);
+  const existingPath = RC_CANDIDATES
+    .map((candidate) => resolve(cwd, candidate))
+    .find((candidate) => existsSync(candidate));
+  if (existingPath) return { path: existingPath, created: false, detection };
+
   const path = resolve(cwd, '.flectorc.json');
-  if (existsSync(path)) return path;
   const starter = {
     defaults: {
       mode: 'compact',
@@ -140,7 +244,7 @@ export function initRcFile(cwd = process.cwd()) {
       ignore: ['**.updated_at'],
       deliveryMode: 'best-effort',
       onAlertFailure: 'warn',
-      policies: ['default'],
+      policies: detection.packs,
       plugins: [],
       arrayIdKey: null,
       arrayId: true,
@@ -151,14 +255,14 @@ export function initRcFile(cwd = process.cwd()) {
       dev: { mode: 'verbose' },
       ci: { failOn: 'policy,error' },
       prod: {
-        policies: ['default', 'strict-prod'],
+        policies: [...detection.packs, 'strict-prod'],
         severityRemap: { 'pool-size-jump': 'error' },
         maskSecrets: true,
       },
     },
-    files: ['config/**/*.{yaml,yml,json,toml,ini}', '.env', '.env.*', '*.env'],
+    files: detection.files.length > 0 ? detection.files : [...GENERIC_FILE_PATTERNS],
     exclude: ['**/node_modules/**'],
   };
   writeFileSync(path, JSON.stringify(starter, null, 2), 'utf8');
-  return path;
+  return { path, created: true, detection };
 }
