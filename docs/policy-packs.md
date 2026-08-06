@@ -133,6 +133,29 @@ The built-in `default` and `strict-prod` packs ship this as
 *and* value both look secret produces both findings. Silence either one per
 profile with `severityRemap`.
 
+## Encrypted files
+
+Rules can match encrypted files too, because Flecto reports their structure
+without ever decrypting them. Two synthetic paths carry the signals a
+key-by-key walk cannot express — `<encryption>` when a file gains or loses
+encryption, and `<encryption.mac>` when a SOPS MAC moves on its own — and
+recipient key groups are re-keyed by recipient identity so a key gaining access
+is a single `added` event at a path that names it:
+
+```json
+{
+  "id": "recipient-added",
+  "severity": "error",
+  "when": ["added"],
+  "match": { "path": "^sops\\.(kms|gcp_kms|azure_kv|hc_vault|age|pgp)(?:$|[.\\[])" },
+  "messageTemplate": "A key that can decrypt this file was added at {path}."
+}
+```
+
+The built-in `sops` pack ships this and five more; `default` carries the two
+that catch a secret committed in the clear. →
+**[Encrypted files](encrypted-files.md#policy-rules)**
+
 ## Exact values, truthiness, and coercion
 
 Flecto currently provides `afterEquals`, not `afterTruthy`. `afterEquals` uses JavaScript strict equality (`===`); it does not coerce strings, numbers, or booleans.

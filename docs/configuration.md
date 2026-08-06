@@ -243,6 +243,20 @@ step.
 
 ---
 
+## Encrypted files
+
+A SOPS- or age-encrypted file is detected from its **contents** and diffed
+structurally: keys added and removed, which encrypted values changed, and who
+can decrypt the file. This needs no configuration and no flag.
+
+**Flecto never decrypts.** It never shells out to `sops` or `age`, never reads a
+key file or agent socket, and never prints ciphertext — masking is irrelevant
+here, because ciphertext is replaced with an opaque sentinel in the parser and
+no code path downstream ever holds it. →
+**[Encrypted files](encrypted-files.md)**
+
+---
+
 ## Watching on network drives
 
 Native filesystem events are used by default. Some network drives and editors

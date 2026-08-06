@@ -1,0 +1,9 @@
+# The nearest thing to a false positive: an ordinary config with a top-level
+# `sops` key. It pins a tool version and a couple of settings, but carries no
+# MAC, no modification stamp, and no key group — so it is not a metadata block
+# and this file must diff exactly like any other YAML.
+service: billing-api
+sops:
+    version: 3.9.0
+    enabled: true
+    config_path: .sops.yaml

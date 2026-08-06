@@ -326,6 +326,7 @@ services doesn't read as a wall of changes.
 | `kubernetes` | Privileged containers, host namespaces, weakened `runAsNonRoot`, added `SYS_ADMIN`, unpinned images, replica jumps, dropped limits, `LoadBalancer`/`NodePort` exposure |
 | `node-runtime` | Dropped engine requirements, TLS verification bypasses, debug/inspector flags |
 | `terraform` | Replaced and destroyed stateful resources, ingress opened to `0.0.0.0/0`, IAM wildcards, public S3, capacity jumps |
+| `sops` | Decryption recipients added or removed, a MAC that moved on its own, a file that stopped being encrypted |
 
 ```bash
 flecto policies list          # see what resolves here, built-in and local
@@ -362,12 +363,36 @@ and runs no code from the package. →
 | TOML | `.toml` |
 | INI | `.ini` |
 | dotenv | `.env`, `.env.*`, `*.env` |
+| age (armored) | `.age`, or any file whose contents are one armored blob |
 
 Multi-document YAML (`---`-separated, the usual shape of a Kubernetes manifest)
 is supported. Each document is diffed under its own key — `kind/name` for
 Kubernetes-shaped documents, so a document inserted at the top of the file does
 not renumber every other path. →
 **[Multi-document YAML](docs/configuration.md#multi-document-yaml)**
+
+---
+
+## Encrypted files
+
+A `sops`- or age-encrypted file is detected from its **contents**, and diffed
+structurally:
+
+```
+  + cache: {"ttl_seconds":300}
+  ~ database.password: <encrypted value changed>
+  + sops.age.age1exampleexample…: {"recipient":"age1exampleexample…","enc":"<encrypted value>"}
+```
+
+You get keys added and removed, which encrypted values moved, and — the useful
+part — who can decrypt the file. A recipient added is a genuine security event
+and the `sops` pack raises it as one.
+
+**Flecto never decrypts.** It never shells out to `sops` or `age`, never reads a
+key file or agent socket, and never prints ciphertext — not even without
+`--mask-secrets`. Ciphertext is replaced with an opaque sentinel in the parser,
+so no diff, snapshot, webhook, or report can carry it. →
+**[Encrypted files](docs/encrypted-files.md)**
 
 ---
 
@@ -436,6 +461,7 @@ Explicit CLI flags win over profiles, which win over `defaults`.
 |---|---|
 | **[CLI reference](docs/cli-reference.md)** | Every command, flag, and exit code |
 | **[Configuration](docs/configuration.md)** | `.flectorc`, profiles, ignore patterns, array identity, masking |
+| **[Encrypted files](docs/encrypted-files.md)** | SOPS and age: what is detected, what is reported, why nothing is decrypted |
 | **[CI](docs/ci.md)** | Baselines, fail triggers, output formats, the bundled GitHub Actions |
 | **[Kubernetes](docs/kubernetes.md)** | Diffing rendered Helm/Kustomize manifests before they reach a cluster |
 | **[Terraform plans](docs/terraform.md)** | Reviewing `terraform show -json` output and the `terraform` pack |

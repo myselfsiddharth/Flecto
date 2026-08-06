@@ -19,6 +19,21 @@
       "message": "Value looks like a credential (known token format or high-entropy string) regardless of its key name. Move it to a secret store and rotate it."
     },
     {
+      "id": "sops-file-decrypted",
+      "severity": "error",
+      "when": ["changed"],
+      "match": { "pathEquals": "<encryption>" },
+      "afterEquals": "plaintext",
+      "message": "This file was encrypted and is now plaintext. Treat every value in it as exposed: rotate the secrets, then restore encryption before merging."
+    },
+    {
+      "id": "sops-value-decrypted",
+      "severity": "error",
+      "when": ["changed"],
+      "afterEquals": "<no longer encrypted>",
+      "messageTemplate": "{path} was an encrypted value and is now stored in the clear. Rotate it and re-encrypt the file."
+    },
+    {
       "id": "dangerous-toggle-enabled",
       "severity": "error",
       "when": ["changed"],
