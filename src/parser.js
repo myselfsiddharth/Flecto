@@ -65,7 +65,38 @@ export function parseIni(raw) {
 }
 
 function isPlainObject(v) {
-  return v !== null && typeof v === 'object' && !Array.isArray(v);
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) return false;
+  const prototype = Object.getPrototypeOf(v);
+  return prototype === Object.prototype || prototype === null;
+}
+
+/**
+ * Convert parser-specific scalar objects into a stable JSON-safe tree before
+ * they reach snapshots, the differ, or output renderers.
+ * @param {unknown} value
+ * @returns {unknown}
+ */
+function normalizeParsedValue(value) {
+  if (typeof value === 'bigint') return String(value);
+  if (typeof value === 'number' && !Number.isFinite(value)) return String(value);
+  if (value instanceof Date) return value.toJSON();
+  if (Array.isArray(value)) return value.map(normalizeParsedValue);
+  if (
+    value !== null
+    && typeof value === 'object'
+    && typeof value.toJSON === 'function'
+  ) {
+    const serialized = value.toJSON();
+    if (serialized !== value && (serialized === null || typeof serialized !== 'object')) {
+      return normalizeParsedValue(serialized);
+    }
+  }
+  if (isPlainObject(value)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, child]) => [key, normalizeParsedValue(child)]),
+    );
+  }
+  return value;
 }
 
 /**
@@ -171,25 +202,19 @@ export function parseContent(filepath, raw) {
     );
   }
   try {
+    let parsed;
     if (envLike || ext === '.env') {
-      return dotenv.parse(raw);
+      parsed = dotenv.parse(raw);
+    } else if (iniLike) {
+      parsed = parseIni(raw);
+    } else if (ext === '.json') {
+      parsed = JSON.parse(raw);
+    } else if (ext === '.yaml' || ext === '.yml') {
+      parsed = parseYamlStream(raw);
+    } else if (ext === '.toml') {
+      parsed = TOML.parse(raw);
     }
-
-    if (iniLike) {
-      return parseIni(raw);
-    }
-
-    if (ext === '.json') {
-      return JSON.parse(raw);
-    }
-
-    if (ext === '.yaml' || ext === '.yml') {
-      return parseYamlStream(raw);
-    }
-
-    if (ext === '.toml') {
-      return TOML.parse(raw);
-    }
+    return normalizeParsedValue(parsed);
   } catch (err) {
     const lineMatch = err.message?.match(/line (\d+)/i);
     const lineInfo = lineMatch ? ` (line ${lineMatch[1]})` : '';

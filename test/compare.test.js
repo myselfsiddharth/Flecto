@@ -184,6 +184,24 @@ test('compare runs the policy engine and gates on --fail-on', () => {
   }
 });
 
+test('compare rejects unknown fail-on triggers', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-compare-fail-on-'));
+  const prod = join(dir, 'prod.json');
+  const staging = join(dir, 'staging.json');
+
+  try {
+    writeFileSync(prod, JSON.stringify({ version: 1 }), 'utf8');
+    writeFileSync(staging, JSON.stringify({ version: 2 }), 'utf8');
+
+    const result = runCompare(dir, [prod, staging, '--fail-on', 'changeed']);
+
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /unknown trigger: changeed/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('compare honors --ignore and array identity flags', () => {
   const dir = mkdtempSync(join(tmpdir(), 'flecto-compare-diffopts-'));
   const prod = join(dir, 'prod.json');

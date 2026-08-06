@@ -8,7 +8,9 @@
  * @returns {v is Record<string, unknown>}
  */
 function isPlainObject(v) {
-  return v !== null && typeof v === 'object' && !Array.isArray(v);
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) return false;
+  const prototype = Object.getPrototypeOf(v);
+  return prototype === Object.prototype || prototype === null;
 }
 
 /**

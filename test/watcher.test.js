@@ -57,3 +57,57 @@ test('watcher reports rejected async event handlers', async () => {
   }
 });
 
+test('watcher treats an initial JSON null root as a valid baseline', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-watcher-null-'));
+  const file = join(dir, 'config.json');
+  writeFileSync(file, 'null\n', 'utf8');
+  const events = [];
+
+  try {
+    const watcher = startWatcher(file, { polling: true, interval: 25 }, (event) => {
+      events.push(event);
+    });
+    await new Promise((r) => setTimeout(r, 250));
+    writeFileSync(file, 'true\n', 'utf8');
+    await new Promise((r) => setTimeout(r, 600));
+    await watcher.close();
+
+    const changeEvent = events.find((event) => event.kind === 'changes');
+    assert.ok(changeEvent, 'Expected null to be retained as the initial baseline');
+    assert.deepEqual(changeEvent.events[0], {
+      type: 'changed',
+      path: '<root>',
+      before: null,
+      after: true,
+      note: 'type changed from object to boolean',
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('watcher keeps a successful null root between later changes', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-watcher-null-update-'));
+  const file = join(dir, 'config.json');
+  writeFileSync(file, JSON.stringify({ enabled: false }), 'utf8');
+  const events = [];
+
+  try {
+    const watcher = startWatcher(file, { polling: true, interval: 25 }, (event) => {
+      if (event.kind === 'changes') events.push(event);
+    });
+    await new Promise((r) => setTimeout(r, 250));
+    writeFileSync(file, 'null\n', 'utf8');
+    await new Promise((r) => setTimeout(r, 600));
+    writeFileSync(file, 'true\n', 'utf8');
+    await new Promise((r) => setTimeout(r, 600));
+    await watcher.close();
+
+    assert.equal(events.length, 2);
+    assert.equal(events[0].events[0].after, null);
+    assert.equal(events[1].events[0].before, null);
+    assert.equal(events[1].events[0].after, true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
