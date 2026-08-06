@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'path';
 import { createRequire } from 'module';
 import { fileURLToPath, pathToFileURL } from 'url';
@@ -334,7 +334,48 @@ function validateComposition(clauses, name, location) {
 }
 
 /**
+ * Loaded, validated, and regex-compiled packs, keyed by cwd + resolved file
+ * path + that file's mtime. `evaluatePolicies()` calls loadPack() once per
+ * file in `ci` and once per change event in `watch`; this cache turns every
+ * repeat call for an unchanged pack file into a Map lookup instead of a
+ * `readFileSync` + `JSON.parse` + full schema walk.
+ *
+ * The key deliberately does *not* memoize on packId alone:
+ * - Including the resolved path means a local `policies/<id>.json` that
+ *   starts shadowing a built-in (or stops shadowing it) after this process
+ *   started is picked up on the very next call, because resolvePackPath()
+ *   runs fresh every time and produces a different path.
+ * - Including cwd keeps two different working directories (e.g. two
+ *   in-process callers, or tests) from ever sharing a cache slot merely
+ *   because they happened to load the same-named local pack.
+ * - Including mtimeMs means editing policies/<id>.json mid-`watch` changes
+ *   the key, so the very next change event re-reads and re-validates the
+ *   file rather than serving the stale in-memory pack. A pack that fails to
+ *   parse or validate throws exactly as before — nothing here catches or
+ *   downgrades that error into "serve the last cached pack", which would
+ *   quietly defeat watch mode's fail-closed behavior on a bad edit.
+ * @type {Map<string, PolicyPack>}
+ */
+const packCache = new Map();
+
+/**
+ * @param {string} cwd
+ * @param {string} path
+ * @param {number} mtimeMs
+ * @returns {string}
+ */
+function packCacheKey(cwd, path, mtimeMs) {
+  return `${resolve(cwd)} ${path} ${mtimeMs}`;
+}
+
+/**
  * Load a pack by id from policies/ then built-ins.
+ *
+ * severityRemap is intentionally not part of this function or its cache: it
+ * is applied per profile, downstream, in evaluatePack(). Caching happens at
+ * this layer — below any remapping — so the object returned here is the same
+ * regardless of which profile asked for it, and one profile's remap can
+ * never leak into another's findings.
  * @param {string} packId
  * @param {string} [cwd]
  * @returns {PolicyPack}
@@ -346,7 +387,16 @@ export function loadPack(packId, cwd = process.cwd()) {
   if (!path) {
     throw new Error(`Unknown policy pack "${id}". Add policies/${id}.json or use a built-in pack.`);
   }
-  return readPackFile(path, id);
+
+  const mtimeMs = statSync(path).mtimeMs;
+  const cacheKey = packCacheKey(cwd, path, mtimeMs);
+  const cached = packCache.get(cacheKey);
+  if (cached) return cached;
+
+  const pack = readPackFile(path, id);
+  compilePackRegexes(pack);
+  packCache.set(cacheKey, pack);
+  return pack;
 }
 
 /**
@@ -650,6 +700,61 @@ export function addPolicyPackFromPackage(name, options = {}) {
 }
 
 /**
+ * Compile each rule's `match.path` and `afterMatches` regular expressions
+ * once, at pack-load time, storing them as non-enumerable properties on the
+ * loaded rule/clause objects. matchClause() runs per change event — for a
+ * rule with a path match, once per event per rule — so compiling here instead
+ * of inside that loop turns a `new RegExp(...)` call into a property read.
+ *
+ * validatePack() has already proven, by this point, that every `match.path`
+ * and `afterMatches` string constructs a valid RegExp, so construction here
+ * cannot throw a new error the caller hasn't already seen.
+ * @param {PolicyPack} pack
+ */
+function compilePackRegexes(pack) {
+  for (const rule of pack.rules ?? []) {
+    compileClauseRegexes(rule);
+    for (const clause of rule.allOf ?? []) compileClauseRegexes(clause);
+    for (const clause of rule.anyOf ?? []) compileClauseRegexes(clause);
+  }
+}
+
+/** @param {PolicyRule | PolicyMatchClause} clause */
+function compileClauseRegexes(clause) {
+  if (clause.match?.path !== undefined) {
+    Object.defineProperty(clause.match, '_pathRegex', {
+      value: new RegExp(clause.match.path, clause.match.pathFlags ?? ''),
+      enumerable: false,
+    });
+  }
+  if (clause.afterMatches !== undefined) {
+    Object.defineProperty(clause, '_afterMatchesRegex', {
+      value: new RegExp(clause.afterMatches),
+      enumerable: false,
+    });
+  }
+}
+
+/**
+ * @param {{ path?: string, pathFlags?: string, _pathRegex?: RegExp }} match
+ * @returns {RegExp}
+ */
+function pathRegexFor(match) {
+  // Packs loaded via loadPack() always carry a pre-compiled regex here; the
+  // fallback exists only so a pack built some other way (bypassing loadPack)
+  // still behaves exactly as it did before regex compilation was hoisted.
+  return match._pathRegex ?? new RegExp(match.path, match.pathFlags ?? '');
+}
+
+/**
+ * @param {{ afterMatches?: string, _afterMatchesRegex?: RegExp }} clause
+ * @returns {RegExp}
+ */
+function afterMatchesRegexFor(clause) {
+  return clause._afterMatchesRegex ?? new RegExp(clause.afterMatches);
+}
+
+/**
  * @param {PolicyRule} rule
  * @param {import('./differ.js').ChangeEvent} change
  * @returns {boolean}
@@ -671,7 +776,7 @@ function ruleMatches(rule, change) {
 function matchClause(clause, change) {
   const path = change.path ?? '';
   const match = clause.match;
-  if (match?.path && !new RegExp(match.path, match.pathFlags ?? '').test(path)) return false;
+  if (match?.path && !pathRegexFor(match).test(path)) return false;
   if (match?.pathEquals !== undefined && path !== match.pathEquals) return false;
   if (match?.pathPrefix !== undefined && !path.startsWith(match.pathPrefix)) return false;
 
@@ -685,7 +790,7 @@ function matchClause(clause, change) {
   // the redaction it triggers never disagree.
   if (clause.beforeLooksSecret && !containsSecret(change.before)) return false;
   if (clause.afterLooksSecret && !containsSecret(change.after)) return false;
-  if (clause.afterMatches && (typeof change.after !== 'string' || !new RegExp(clause.afterMatches).test(change.after))) return false;
+  if (clause.afterMatches && (typeof change.after !== 'string' || !afterMatchesRegexFor(clause).test(change.after))) return false;
 
   if (clause.numericJump) {
     const before = change.before;

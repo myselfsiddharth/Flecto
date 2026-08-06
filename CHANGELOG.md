@@ -248,6 +248,21 @@ The format is based on [Keep a Changelog], and this project adheres to
   exists. It now checks every `.flectorc` candidate — not just
   `.flectorc.json` — and warns that the existing file was left unchanged instead
   of writing a second config that `loadRcConfig` would shadow. ([#72])
+- Policy packs are now cached across a run instead of being re-resolved,
+  re-parsed, and re-validated on every file (`ci`) or every change event
+  (`watch`). The cache key is the working directory, the resolved pack path,
+  and that file's mtime, so a `policies/<id>.json` edited mid-`watch` is picked
+  up on the very next change event rather than served stale — watch mode's
+  fail-closed behavior on a bad pack edit is unchanged, and per-profile
+  `severityRemap` still applies after the cache, so one profile's remap can
+  never leak into another's findings. `matchClause()` also compiles each
+  rule's `match.path` and `afterMatches` regular expressions once at pack-load
+  time instead of once per change event. Measured with `npm run bench`: the
+  policy phase of the in-process pipeline at 1,000 files drops by roughly 60%
+  (median across two 15-run sessions: ~38 ms to ~15 ms); end-to-end `flecto ci`
+  wall time improves more modestly and closer to the harness's documented ±10%
+  run-to-run noise. See [docs/performance.md](docs/performance.md).
+  ([#92], [#93])
 
 ### Fixed
 
@@ -411,6 +426,8 @@ The format is based on [Keep a Changelog], and this project adheres to
 [#78]: https://github.com/myselfsiddharth/Flecto/issues/78
 [#79]: https://github.com/myselfsiddharth/Flecto/issues/79
 [#88]: https://github.com/myselfsiddharth/Flecto/issues/88
+[#92]: https://github.com/myselfsiddharth/Flecto/issues/92
+[#93]: https://github.com/myselfsiddharth/Flecto/issues/93
 [#94]: https://github.com/myselfsiddharth/Flecto/issues/94
 [#95]: https://github.com/myselfsiddharth/Flecto/issues/95
 [#96]: https://github.com/myselfsiddharth/Flecto/issues/96
