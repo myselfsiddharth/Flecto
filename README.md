@@ -258,6 +258,12 @@ anything. → **[Policy packs](docs/policy-packs.md)**
 | INI | `.ini` |
 | dotenv | `.env`, `.env.*`, `*.env` |
 
+Multi-document YAML (`---`-separated, the usual shape of a Kubernetes manifest)
+is supported. Each document is diffed under its own key — `kind/name` for
+Kubernetes-shaped documents, so a document inserted at the top of the file does
+not renumber every other path. →
+**[Multi-document YAML](docs/configuration.md#multi-document-yaml)**
+
 ---
 
 ## Configuration

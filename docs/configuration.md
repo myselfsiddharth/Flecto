@@ -139,6 +139,40 @@ position carries no meaning — use `--array-ignore-order`.
 
 ---
 
+## Multi-document YAML
+
+A YAML file may hold several `---`-separated documents — the usual shape of a
+Kubernetes manifest. Flecto diffs each document under its own key, chosen the
+same way arrays pick an identity: something stable if one exists, position if
+not.
+
+| Document shape | Key |
+|---|---|
+| `kind` + `metadata.name` | `Deployment/api` |
+| `kind` + `metadata.namespace` + `metadata.name` | `Deployment/prod/api` |
+| Top-level `id`, else top-level `name` | `api` |
+| Anything else | `0`, `1`, `2`, … |
+
+```
+Deployment/api.spec.replicas changed from 2 to 5
+```
+
+Identity keys are all-or-nothing per file: if any document lacks one, or two
+documents resolve to the same key, the whole file falls back to index keys. That
+keeps the keys in one file consistent, at the cost of shifting every path when a
+document is inserted ahead of others — so give documents a `kind`/`name` if you
+want paths that survive edits.
+
+Empty documents are dropped, so a leading `---`, a trailing `---`, or a template
+that rendered nothing does not create a phantom entry.
+
+A file with exactly one document is diffed as that document, unchanged — paths
+in ordinary single-document YAML are identical to earlier versions. The
+corollary is that a file going from two documents to one (or the reverse)
+changes shape, and that diff reads as a rewrite rather than a single removal.
+
+---
+
 ## Secret masking
 
 ```bash
