@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -453,6 +453,111 @@ describe('policy engine', () => {
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }
+  });
+
+  describe('pack caching across a run', () => {
+    // The cache key is (cwd, resolved path, mtime). Editing the file and then
+    // forcing its mtime forward — rather than relying on wall-clock time to
+    // pass between the two writes — is what makes this deterministic instead
+    // of occasionally flaky on filesystems with coarse mtime resolution.
+    function writePack(path, pack, { bumpMtimeMs } = {}) {
+      writeFileSync(path, JSON.stringify(pack), 'utf8');
+      if (bumpMtimeMs !== undefined) {
+        const bumped = new Date(statSync(path).mtimeMs + bumpMtimeMs);
+        utimesSync(path, bumped, bumped);
+      }
+    }
+
+    // This is the regression #92 explicitly warns against: a long-running
+    // `flecto watch` process must never keep serving a pack that no longer
+    // matches what is on disk.
+    test('a pack edited mid-watch is picked up on the very next evaluation, not served stale', async () => {
+      const cwd = mkdtempSync(join(tmpdir(), 'flecto-watch-cache-'));
+      try {
+        const policiesDir = join(cwd, 'policies');
+        mkdirSync(policiesDir);
+        const packPath = join(policiesDir, 'live.json');
+        const change = { type: 'changed', path: 'x', before: 1, after: 2 };
+        const evalOpts = { cwd, policies: ['live'], source: 'watch' };
+
+        writePack(packPath, {
+          id: 'live',
+          rules: [{ id: 'r', severity: 'warn', message: 'v1', match: { path: 'x' } }],
+        });
+        const before = await evaluatePolicies([change], evalOpts);
+        assert.equal(before.length, 1);
+        assert.equal(before[0].severity, 'warn');
+        assert.equal(before[0].message, 'v1');
+
+        // Simulate a user editing policies/live.json while `flecto watch` is
+        // still running against this same cwd.
+        writePack(packPath, {
+          id: 'live',
+          rules: [{ id: 'r', severity: 'error', message: 'v2', match: { path: 'x' } }],
+        }, { bumpMtimeMs: 5000 });
+
+        const after = await evaluatePolicies([change], evalOpts);
+        assert.equal(after.length, 1);
+        assert.equal(after[0].severity, 'error', 'stale cached pack was served instead of the edit');
+        assert.equal(after[0].message, 'v2', 'stale cached pack was served instead of the edit');
+      } finally {
+        rmSync(cwd, { recursive: true, force: true });
+      }
+    });
+
+    test('a pack edited mid-watch into invalid JSON fails closed rather than serving the last-good cache', async () => {
+      const cwd = mkdtempSync(join(tmpdir(), 'flecto-watch-cache-invalid-'));
+      try {
+        const policiesDir = join(cwd, 'policies');
+        mkdirSync(policiesDir);
+        const packPath = join(policiesDir, 'live.json');
+        const evalOpts = { cwd, policies: ['live'], source: 'watch' };
+
+        writePack(packPath, {
+          id: 'live',
+          rules: [{ id: 'r', severity: 'warn', match: { path: 'x' } }],
+        });
+        await evaluatePolicies([{ type: 'changed', path: 'x', before: 1, after: 2 }], evalOpts);
+
+        // An editor mid-save, or a genuine typo, leaves the file briefly
+        // invalid. Watch mode's contract is to fail closed here, never to
+        // fall back to whatever was last cached.
+        const bumped = new Date(statSync(packPath).mtimeMs + 5000);
+        writeFileSync(packPath, '{ not valid json', 'utf8');
+        utimesSync(packPath, bumped, bumped);
+
+        await assert.rejects(
+          () => evaluatePolicies([{ type: 'changed', path: 'x', before: 1, after: 2 }], evalOpts),
+          /could not parse file/,
+        );
+      } finally {
+        rmSync(cwd, { recursive: true, force: true });
+      }
+    });
+
+    test('severityRemap never persists onto the cached pack across calls with different remaps', async () => {
+      const cwd = mkdtempSync(join(tmpdir(), 'flecto-remap-cache-'));
+      try {
+        const policiesDir = join(cwd, 'policies');
+        mkdirSync(policiesDir);
+        writePack(join(policiesDir, 'shared.json'), {
+          id: 'shared',
+          rules: [{ id: 'r', severity: 'warn', match: { path: 'x' } }],
+        });
+        const change = { type: 'changed', path: 'x', before: 1, after: 2 };
+
+        // Same cwd, same pack id, same file — same cache entry both times.
+        const remapped = await evaluatePolicies([change], {
+          cwd, policies: ['shared'], severityRemap: { r: 'error' },
+        });
+        const plain = await evaluatePolicies([change], { cwd, policies: ['shared'] });
+
+        assert.equal(remapped[0].severity, 'error');
+        assert.equal(plain[0].severity, 'warn', 'a previous call\'s severityRemap leaked into the cached pack');
+      } finally {
+        rmSync(cwd, { recursive: true, force: true });
+      }
+    });
   });
 });
 

@@ -139,6 +139,11 @@ extra, and correctly produces no change events for the reordering itself.
 
 ### Policy evaluation
 
+This table is the original spike measurement — the state before the fix
+described in
+[Policy pack caching and regex hoisting](#policy-pack-caching-and-regex-hoisting-fixed)
+below. It is kept as the historical baseline that motivated that fix.
+
 | measurement | median |
 | --- | --- |
 | `evaluatePack` over 20,000 events, 4-rule `default` pack | 10.8 ms |
@@ -149,29 +154,28 @@ extra, and correctly produces no change events for the reordering itself.
 | 20,000 path tests, regex built once | 0.67 ms |
 | — per-event cost of building the regex inside the loop | 115 ns |
 
-Two things fall out of this, both answering questions the spike was asked to
-check:
+Two things fell out of this, both answering questions the spike was asked to
+check — and both are now fixed:
 
-**Policy pack regexes are recompiled per change event, not once per rule.**
-[`matchClause()`](../src/policy.js) builds `new RegExp(match.path, …)` inside
-the per-change loop. It is measurably wasteful — the same test is 4.4x slower
-than with a hoisted regex — but the absolute cost is 115 ns per event per rule.
-At the largest measured scale (1,060 change events, two path-matching rules in
-the `default` pack) that is about **0.2 ms out of 397 ms**. Real, and not worth
-changing behavior for.
+**Policy pack regexes were recompiled per change event, not once per rule.**
+[`matchClause()`](../src/policy.js) built `new RegExp(match.path, …)` inside
+the per-change loop. It was measurably wasteful — the same test is 4.4x slower
+than with a hoisted regex — but the absolute cost was 115 ns per event per
+rule: at the largest measured scale (1,060 change events, two path-matching
+rules in the `default` pack) about **0.2 ms out of 397 ms**. Real, but not
+worth a standalone behavior change on its own — it was folded into the
+pack-loading refactor below instead, per its issue's own recommendation.
 
-**The policy pack is re-resolved and re-validated once per file.** `ci` calls
+**The policy pack was re-resolved and re-validated once per file.** `ci` calls
 `evaluatePolicies()` per file, and that entry point calls `loadPack()`, which
-does three `existsSync` probes, a `readFileSync`, a `JSON.parse`, and a full
-schema validation — every time. At 1,000 files that is **~28 ms of the 35.3 ms
-policy phase**: about 79% of policy time, 7% of the pipeline, 5% of end-to-end
-wall time. This is the largest remaining piece of avoidable work, and it is
-*not* in the differ.
+did three `existsSync` probes, a `readFileSync`, a `JSON.parse`, and a full
+schema validation — every time. At 1,000 files that was **~28 ms of the
+35.3 ms policy phase**: about 79% of policy time, 7% of the pipeline, 5% of
+end-to-end wall time — the largest remaining piece of avoidable work outside
+the differ.
 
-It is left unfixed deliberately. The obvious fix is caching packs by resolved
-path, which introduces a staleness question in a long-lived `watch` process that
-this spike is not the right place to answer. See
-[What was not changed](#what-was-not-changed).
+Both are fixed by caching loaded packs across a run. See
+[Policy pack caching and regex hoisting](#policy-pack-caching-and-regex-hoisting-fixed).
 
 ---
 
@@ -211,22 +215,110 @@ baseline file exists) and is unchanged. `flecto ci` never took this path at all.
 
 ---
 
+## Policy pack caching and regex hoisting (fixed)
+
+Addresses [#92](https://github.com/myselfsiddharth/Flecto/issues/92) and
+[#93](https://github.com/myselfsiddharth/Flecto/issues/93) together, in one
+change — #93 explicitly recommended folding the regex hoisting into whichever
+refactor next touched rule compilation, rather than doing it standalone, and
+#92 is exactly that refactor.
+
+**The fix.** `loadPack()` now caches the loaded, validated, regex-compiled
+pack object across a run. The cache key is `(cwd, resolvedPath, mtimeMs)`:
+
+- `resolvedPath` comes from `resolvePackPath()`, which still runs on *every*
+  call — it is a handful of `existsSync` probes, not the expensive part — so a
+  local `policies/<id>.json` that starts or stops shadowing a built-in pack
+  mid-run changes the resolved path and is picked up immediately, cache or no
+  cache.
+- `mtimeMs` is `statSync(resolvedPath).mtimeMs`. Editing the pack file changes
+  the key, so the very next `loadPack()` call — the next file in `ci`, or the
+  next change event in `watch` — re-reads and re-validates it. A pack that
+  fails to parse or fails schema validation still throws exactly as before;
+  nothing in the cache catches that and falls back to serving the last-good
+  pack, which is precisely the silent-staleness regression #92 warned against.
+- `cwd` is included so two different working directories never share a slot
+  merely because they resolved a same-named local pack.
+- `severityRemap` is **not** part of the key. It is applied downstream, per
+  profile, inside `evaluatePack()` — a plain lookup against the cached pack's
+  rules that never mutates the cached object. Caching sits below remapping,
+  so two calls with different `severityRemap` values against the same cached
+  pack get independently correct severities, and one profile's remap can never
+  leak into another's findings.
+
+`matchClause()`'s regex construction (#93) moves to the same place: a new
+`compilePackRegexes()` step, run once per pack load (cache miss only), walks
+every rule — including `allOf`/`anyOf` clauses — and attaches a pre-compiled
+`RegExp` for `match.path` and `afterMatches` as a non-enumerable property on
+the rule/clause object. `matchClause()` reads it instead of constructing a new
+one per change event. `pathFlags` still applies (it is part of what gets
+compiled), and because compilation only runs after `validatePack()` has
+already proven the pattern constructs a valid `RegExp`, an invalid
+`match.path` or `afterMatches` still fails at load time with the same message
+as before — nothing about *when* the regex is built changes what makes it
+invalid.
+
+**Measured, honestly.** Two independent `npm run bench -- --runs 15` sessions
+were run back-to-back on this machine, each alternating a `git stash` to the
+pre-change code (before) and the change applied (after), so both states were
+measured under the same ambient load. Numbers below are the average of the
+two sessions' medians (30 samples total per state at each scale). This
+session's absolute milliseconds run higher than the rest of this document —
+same reported CPU, different ambient load in this environment — so read the
+ratios here, not the absolute numbers, against the rest of the page.
+
+| files | policy phase, before | policy phase, after | change |
+| --- | --- | --- | --- |
+| 50 | 2.45 ms | 1.00 ms | ~59% faster |
+| 250 | 9.70 ms | 4.05 ms | ~58% faster |
+| 1000 | 37.85 ms | 14.80 ms | ~61% faster |
+
+| measurement | before | after | change |
+| --- | --- | --- | --- |
+| `evaluatePolicies()` with 12 events | 0.0425 ms | 0.016 ms | ~62% faster |
+| — of which `loadPack()` | 0.0295 ms | 0.008 ms | ~73% faster |
+
+The policy-phase and `loadPack()` numbers are large, consistent in direction
+across both sessions, and land exactly where the mechanism predicts — a cache
+hit skips a `readFileSync`, a `JSON.parse`, and a full schema walk, keeping
+only a `statSync` and a Map lookup. That part is a real, reproducible win.
+
+End-to-end `flecto ci` wall time also improved, but more modestly and closer
+to this document's own documented ±10% run-to-run noise band for full
+subprocess runs:
+
+| files | `ci` median, before | `ci` median, after | change |
+| --- | --- | --- | --- |
+| 50 | 136.5 ms | 130.5 ms | ~4% faster |
+| 250 | 278 ms | 275 ms | ~1% faster, within noise (one session alone showed 273→287 ms, i.e. slower) |
+| 1000 | 712 ms | 660 ms | ~7% faster |
+
+At 1,000 files — where the pipeline does the most real work relative to
+process-startup overhead — both sessions agreed the change is faster, never
+reversed. At 250 files the two sessions disagreed on direction, which is
+exactly what "within noise" looks like. Policy evaluation was ~5% of
+end-to-end wall time before this fix (per the original spike, above), so an
+end-to-end improvement in the low single digits to high single digits,
+rather than a dramatic one, is what the mechanism predicts — this fix removes
+avoidable work from a phase that was never the bottleneck.
+
+---
+
 ## What was not changed
 
-Reported, deliberately not acted on in this spike:
+Reported in the original spike as deliberately not acted on at the time — the
+first two have since been fixed; see
+[Policy pack caching and regex hoisting](#policy-pack-caching-and-regex-hoisting-fixed):
 
-- **Per-file policy pack reload** (~28 µs per file, ~5% of end-to-end at 1,000
-  files). Fixing it means either caching pack loads — which needs an invalidation
-  story for long-running `watch` sessions — or hoisting pack loading out of the
-  per-file loop in `ci`, which changes the `evaluatePolicies()` signature. Both
-  are real changes needing their own tests and their own issue.
-- **Regex construction inside `matchClause()`** (~0.2 ms at the largest measured
-  scale). Worth tidying if that code is touched for another reason; not worth a
-  behavior change on its own.
+- ~~**Per-file policy pack reload**~~ Fixed: `loadPack()` now caches by
+  `(cwd, resolvedPath, mtime)` across a run.
+- ~~**Regex construction inside `matchClause()`**~~ Fixed, folded into the same
+  change: compiled once per rule at pack-load time instead of once per change
+  event.
 - **Baseline snapshot format.** Snapshots are pretty-printed JSON and re-reading
   them is 25% of the pipeline. A more compact encoding would help, but it is a
   file-format change with migration cost, and it is I/O and `JSON.parse` — both
-  already native.
+  already native. Still the next-largest piece of avoidable work.
 
 ---
 
@@ -255,10 +347,11 @@ it:
    multi-document YAML keys — that currently exist once and are covered by the
    test suite.
 
-If large-repo performance becomes a complaint, the measured order of attack is:
-the per-file policy pack reload (5%), then the snapshot format (25% of the
-pipeline, unchanged since it is already native I/O), then parser choice — not a
-differ rewrite.
+If large-repo performance becomes a complaint, the measured order of attack was
+the per-file policy pack reload (5%, now fixed — see
+[Policy pack caching and regex hoisting](#policy-pack-caching-and-regex-hoisting-fixed)),
+then the snapshot format (25% of the pipeline, unchanged since it is already
+native I/O), then parser choice — not a differ rewrite.
 
 ---
 
