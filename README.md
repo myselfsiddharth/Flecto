@@ -183,7 +183,19 @@ flecto watch config/prod.yaml \
 ```
 
 Changes arrive as a versioned JSON envelope, and `at-least-once` persists and
-retries failed deliveries. → **[Webhooks and commands](docs/webhooks.md)**
+retries failed deliveries.
+
+Posting straight to chat needs no receiver of your own — `--webhook-format`
+shapes the body for Slack, Discord, or Teams, colored by the highest policy
+severity:
+
+```bash
+flecto watch config/prod.yaml \
+  --webhook "https://hooks.slack.com/services/T000/B000/XXXX" \
+  --webhook-format slack
+```
+
+→ **[Webhooks and commands](docs/webhooks.md)**
 
 ### Compare two environments
 

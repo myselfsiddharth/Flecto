@@ -21,6 +21,7 @@ import {
   maskChangeEvent,
 } from './src/renderer.js';
 import { fireAlerts } from './src/alerter.js';
+import { resolveWebhookFormat, WEBHOOK_FORMAT_CHOICES } from './src/notifiers.js';
 import { createEnvelope } from './src/envelope.js';
 import { evaluatePolicies, highestSeverity, listPolicyPacks } from './src/policy.js';
 import { testPolicyFixture } from './src/policy-test.js';
@@ -341,6 +342,7 @@ program
     acc.push(v);
     return acc;
   }, [])
+  .option('--webhook-format <service>', `Webhook payload format: ${WEBHOOK_FORMAT_CHOICES.join(' | ')}`)
   .option('--delivery-mode <mode>', 'Alert delivery mode: best-effort | at-least-once', 'best-effort')
   .option('--on-alert-failure <mode>', 'Alert failure behavior: warn | exit | retry', 'warn')
   .option('--webhook-timeout <ms>', 'Webhook timeout in ms', '5000')
@@ -375,6 +377,7 @@ program
       validateMode(mode);
       const maskSecrets = Boolean(effective.maskSecrets);
       const maskSecretsWebhooks = Boolean(effective.maskSecretsWebhooks);
+      const webhookFormat = resolveWebhookFormat(effective.webhookFormat, effective.webhook);
       const dOpts = diffOptionsFromEffective(effective, ignorePaths);
 
       if (effective.snapshot) {
@@ -472,6 +475,7 @@ program
                   webhookHeaders,
                   webhookTimeoutMs: parseInt(String(effective.webhookTimeout ?? '5000'), 10),
                   webhookRetries: parseInt(String(effective.webhookRetries ?? '2'), 10),
+                  webhookFormat,
                   deliveryMode: effective.deliveryMode,
                   onAlertFailure: effective.onAlertFailure,
                 }, envelope);
@@ -490,6 +494,7 @@ program
                   webhookHeaders,
                   webhookTimeoutMs: parseInt(String(effective.webhookTimeout ?? '5000'), 10),
                   webhookRetries: parseInt(String(effective.webhookRetries ?? '2'), 10),
+                  webhookFormat,
                   deliveryMode: effective.deliveryMode,
                   onAlertFailure: effective.onAlertFailure,
                 }, envelope);

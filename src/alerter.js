@@ -2,6 +2,7 @@ import { spawn } from 'child_process';
 import { mkdirSync, writeFileSync, readFileSync, readdirSync, unlinkSync } from 'fs';
 import { resolve } from 'path';
 import { renderWarn } from './renderer.js';
+import { formatWebhookPayload } from './notifiers.js';
 
 const ALERT_TMP_DIR = '.flecto-tmp';
 const ALERT_QUEUE_DIR = '.flecto-queue';
@@ -135,11 +136,19 @@ async function flushPersistentQueue(deliver) {
 /**
  * @param {string} url
  * @param {import('./envelope.js').FlectoEnvelope} envelope
- * @param {{ headers?: Record<string, string>, timeoutMs?: number, retries?: number }} [options]
+ * @param {{
+ *  headers?: Record<string, string>,
+ *  timeoutMs?: number,
+ *  retries?: number,
+ *  format?: import('./notifiers.js').WebhookFormat
+ * }} [options]
  * @returns {Promise<boolean>}
  */
 export async function postWebhook(url, envelope, options = {}) {
-  const body = JSON.stringify(envelope);
+  // `flecto` (the default) returns the envelope untouched, so the body is
+  // byte-identical to what has always been posted. Chat formats reshape only
+  // the body: headers, retries, and delivery modes are unchanged.
+  const body = JSON.stringify(formatWebhookPayload(envelope, options.format ?? 'flecto'));
   const timeoutMs = options.timeoutMs ?? 5_000;
   const retries = options.retries ?? 2;
   const headers = {
@@ -186,7 +195,13 @@ export async function postWebhook(url, envelope, options = {}) {
 }
 
 /**
- * @param {{ webhook?: string, webhookHeaders?: Record<string, string>, webhookTimeoutMs?: number, webhookRetries?: number }} options
+ * @param {{
+ *  webhook?: string,
+ *  webhookHeaders?: Record<string, string>,
+ *  webhookTimeoutMs?: number,
+ *  webhookRetries?: number,
+ *  webhookFormat?: import('./notifiers.js').WebhookFormat
+ * }} options
  * @param {import('./envelope.js').FlectoEnvelope} envelope
  */
 async function deliverWebhook(options, envelope) {
@@ -195,6 +210,7 @@ async function deliverWebhook(options, envelope) {
     headers: options.webhookHeaders,
     timeoutMs: options.webhookTimeoutMs,
     retries: options.webhookRetries,
+    format: options.webhookFormat,
   });
 }
 
@@ -217,6 +233,7 @@ function applyFailurePolicy(options, ok) {
  *  webhookHeaders?: Record<string, string>,
  *  webhookTimeoutMs?: number,
  *  webhookRetries?: number,
+ *  webhookFormat?: import('./notifiers.js').WebhookFormat,
  *  deliveryMode?: 'best-effort' | 'at-least-once',
  *  onAlertFailure?: 'warn' | 'exit' | 'retry'
  * }} options

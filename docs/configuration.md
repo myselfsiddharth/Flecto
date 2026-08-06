@@ -86,7 +86,8 @@ flecto doctor
 
 Any flag from the [CLI reference](cli-reference.md) can appear in `defaults` or a
 profile, in camelCase — `--mask-secrets` becomes `maskSecrets`,
-`--fail-on` becomes `failOn`, `--delivery-mode` becomes `deliveryMode`.
+`--fail-on` becomes `failOn`, `--delivery-mode` becomes `deliveryMode`,
+`--webhook-format` becomes `webhookFormat`.
 
 ---
 
