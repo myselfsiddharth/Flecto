@@ -212,11 +212,33 @@ flecto watch .env --mask-secrets --mask-secrets-webhooks
 recurses, so a secret nested under a benign-looking parent key is redacted along
 with its parent.
 
-Detection is based on the *key name* — paths matching `secret`, `token`,
-`password`, `api_key`, `private_key`, or `credential`. A secret stored under a key
-name that gives no hint is not currently detected;
-[#66](https://github.com/myselfsiddharth/Flecto/issues/66) tracks value-based
-detection.
+Detection runs on two independent paths:
+
+**Key name.** Paths matching `secret`, `token`, `password`, `api_key`,
+`private_key`, or `credential` are redacted whole, whatever the value is.
+
+**Value shape.** The value is redacted even under a name that gives no hint —
+`db.connstr`, a bare `value` — when it matches a known token format (AWS
+`AKIA…`/`ASIA…`, GitHub `ghp_…`/`gho_…`/`ghu_…`/`ghs_…`/`ghr_…`, Slack
+`xox[abprs]-…`, Google `AIza…`, Stripe `sk_live_…`/`rk_live_…`, a JWT, a PEM
+private-key block, or credentials embedded in a `scheme://user:password@host`
+URL), or when it is an opaque high-entropy string. Only the secret part of a
+value is replaced, so `postgres://app:hunter2@db.internal:5432/appdb` prints as
+`postgres://app:***@db.internal:5432/appdb`.
+
+The entropy fallback is deliberately conservative: it requires 24+ characters
+drawn only from `[A-Za-z0-9+=_-]`, a mix of upper, lower, and digits with
+25–85% of the letters uppercase, no run of 8+ same-case letters, and Shannon
+entropy of at least 4.0 bits per character. Hostnames, URLs, file paths, UUIDs,
+git SHAs, version strings, `sha512-…` integrity hashes, and base64 of ordinary
+text all fail those gates and are never masked. The trade is real: an
+all-lowercase or standard-base64 secret containing `/` is missed unless it
+matches one of the known formats above. Values that only *reference* a secret
+(`${DB_PASSWORD}`, `$TOKEN`, `<your-key>`) are left alone.
+
+The same detection drives the `secret-value-detected` policy rule in the
+built-in `default` pack, so what gets flagged and what gets redacted stay in
+step.
 
 ---
 

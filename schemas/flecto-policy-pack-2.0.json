@@ -41,6 +41,8 @@
         "afterIn": { "type": "array" },
         "beforeTruthy": { "const": true },
         "afterTruthy": { "const": true },
+        "beforeLooksSecret": { "const": true },
+        "afterLooksSecret": { "const": true },
         "afterMatches": { "type": "string" },
         "numericJump": {
           "type": "object",
@@ -89,6 +91,8 @@
         "afterIn": { "type": "array" },
         "beforeTruthy": { "const": true },
         "afterTruthy": { "const": true },
+        "beforeLooksSecret": { "const": true },
+        "afterLooksSecret": { "const": true },
         "afterMatches": { "type": "string" },
         "numericJump": { "$ref": "#/$defs/numericJump" },
         "numericDelta": { "$ref": "#/$defs/numericDelta" }

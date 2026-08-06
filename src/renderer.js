@@ -1,4 +1,5 @@
 import chalk from 'chalk';
+import { redactSecretString } from './secrets.js';
 
 const SECRET_PATH_RE = /(secret|token|password|api[_-]?key|private[_-]?key|credential)/i;
 
@@ -151,7 +152,9 @@ export function renderPolicyFindings(findings) {
 }
 
 /**
- * Mask secret-like values in a plain object tree for CI output.
+ * Mask secret-like values in a plain object tree for CI output. A value is
+ * masked when its path looks secret, or — see secrets.js — when the value
+ * itself does, which covers credentials stored under innocuous key names.
  * @param {unknown} value
  * @param {string} [path]
  * @returns {unknown}
@@ -174,6 +177,7 @@ export function maskSensitiveValue(value, path = '') {
     }
     return out;
   }
+  if (typeof value === 'string') return redactSecretString(value);
   return value;
 }
 

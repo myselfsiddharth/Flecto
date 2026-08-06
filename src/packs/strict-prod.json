@@ -12,6 +12,16 @@
       "message": "Sensitive-looking key changed in production profile. Confirm rotation and access controls."
     },
     {
+      "id": "secret-value-detected",
+      "severity": "error",
+      "when": ["added", "changed", "removed"],
+      "anyOf": [
+        { "afterLooksSecret": true },
+        { "beforeLooksSecret": true }
+      ],
+      "message": "Value looks like a credential (known token format or high-entropy string) regardless of its key name. Treat it as exposed: move it to a secret store and rotate it."
+    },
+    {
       "id": "dangerous-toggle-enabled",
       "severity": "error",
       "when": ["added", "changed"],
