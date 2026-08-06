@@ -7,6 +7,18 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- Multi-document YAML support (`---`-separated), the usual shape of a Kubernetes
+  manifest. Previously such a file failed to parse. Each document is diffed
+  under its own key: `kind/name` for Kubernetes-shaped documents (namespaced
+  resources include the namespace), then a top-level `id` or `name`, falling
+  back to the document index when no stable identity is available — so a
+  document inserted at the top of a file no longer renumbers every other path.
+  Empty documents (a leading or trailing `---`, or a template that rendered
+  nothing) are dropped. Single-document files are unchanged: they still parse to
+  the document itself, with identical diff paths. ([#69])
+
 ### Fixed
 
 - `flecto ci --snapshot-ref <git-ref>` now resolves the baseline correctly when
@@ -113,6 +125,7 @@ The format is based on [Keep a Changelog], and this project adheres to
 [#38]: https://github.com/myselfsiddharth/Flecto/issues/38
 [#39]: https://github.com/myselfsiddharth/Flecto/issues/39
 [#40]: https://github.com/myselfsiddharth/Flecto/pull/40
+[#69]: https://github.com/myselfsiddharth/Flecto/issues/69
 [#79]: https://github.com/myselfsiddharth/Flecto/issues/79
 [Keep a Changelog]: https://keepachangelog.com/en/1.1.0/
 [Semantic Versioning]: https://semver.org/spec/v2.0.0.html
