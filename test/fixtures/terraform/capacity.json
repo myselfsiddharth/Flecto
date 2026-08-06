@@ -1,0 +1,52 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.5",
+  "resource_changes": [
+    {
+      "address": "aws_autoscaling_group.web",
+      "mode": "managed",
+      "type": "aws_autoscaling_group",
+      "name": "web",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["update"],
+        "before": { "name": "web", "desired_capacity": 2, "max_size": 10, "min_size": 2 },
+        "after": { "name": "web", "desired_capacity": 8, "max_size": 12, "min_size": 2 },
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "aws_instance.worker[0]",
+      "mode": "managed",
+      "type": "aws_instance",
+      "name": "worker",
+      "index": 0,
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["update"],
+        "before": { "instance_type": "t3.micro", "monitoring": false },
+        "after": { "instance_type": "m5.4xlarge", "monitoring": false },
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "aws_ecs_service.api",
+      "mode": "managed",
+      "type": "aws_ecs_service",
+      "name": "api",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["update"],
+        "before": { "name": "api", "desired_count": 4 },
+        "after": { "name": "api", "desired_count": 5 },
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    }
+  ]
+}

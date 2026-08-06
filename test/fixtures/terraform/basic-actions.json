@@ -1,0 +1,98 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.5",
+  "resource_changes": [
+    {
+      "address": "aws_sqs_queue.jobs",
+      "mode": "managed",
+      "type": "aws_sqs_queue",
+      "name": "jobs",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "name": "jobs",
+          "visibility_timeout_seconds": 30,
+          "delay_seconds": null
+        },
+        "after_unknown": {
+          "id": true,
+          "arn": true,
+          "url": true
+        },
+        "before_sensitive": false,
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "aws_cloudwatch_log_group.app",
+      "mode": "managed",
+      "type": "aws_cloudwatch_log_group",
+      "name": "app",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["update"],
+        "before": {
+          "name": "/aws/app",
+          "retention_in_days": 7
+        },
+        "after": {
+          "name": "/aws/app",
+          "retention_in_days": 30
+        },
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "aws_sqs_queue.old",
+      "mode": "managed",
+      "type": "aws_sqs_queue",
+      "name": "old",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["delete"],
+        "before": {
+          "name": "old",
+          "visibility_timeout_seconds": 30
+        },
+        "after": null,
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": false
+      }
+    },
+    {
+      "address": "aws_sns_topic.alerts",
+      "mode": "managed",
+      "type": "aws_sns_topic",
+      "name": "alerts",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["no-op"],
+        "before": { "name": "alerts" },
+        "after": { "name": "alerts" },
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "data.aws_caller_identity.current",
+      "mode": "data",
+      "type": "aws_caller_identity",
+      "name": "current",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["read"],
+        "before": null,
+        "after": {},
+        "after_unknown": { "account_id": true, "arn": true },
+        "before_sensitive": false,
+        "after_sensitive": {}
+      }
+    }
+  ]
+}

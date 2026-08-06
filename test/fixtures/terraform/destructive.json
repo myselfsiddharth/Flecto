@@ -1,0 +1,78 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.5",
+  "resource_changes": [
+    {
+      "address": "aws_db_instance.main",
+      "mode": "managed",
+      "type": "aws_db_instance",
+      "name": "main",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["delete", "create"],
+        "before": {
+          "identifier": "main",
+          "engine": "postgres",
+          "engine_version": "13.4",
+          "instance_class": "db.t3.medium"
+        },
+        "after": {
+          "identifier": "main",
+          "engine": "postgres",
+          "engine_version": "14.1",
+          "instance_class": "db.t3.medium"
+        },
+        "after_unknown": { "id": true, "endpoint": true },
+        "before_sensitive": {},
+        "after_sensitive": {},
+        "replace_paths": [["engine_version"]]
+      }
+    },
+    {
+      "address": "aws_instance.api",
+      "mode": "managed",
+      "type": "aws_instance",
+      "name": "api",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["create", "delete"],
+        "before": { "ami": "ami-0aaaa", "instance_type": "t3.micro" },
+        "after": { "ami": "ami-0bbbb", "instance_type": "t3.micro" },
+        "after_unknown": { "id": true },
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "module.storage.aws_ebs_volume.data",
+      "mode": "managed",
+      "type": "aws_ebs_volume",
+      "name": "data",
+      "module_address": "module.storage",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["delete"],
+        "before": { "availability_zone": "eu-west-1a", "size": 500 },
+        "after": null,
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": false
+      }
+    },
+    {
+      "address": "aws_sqs_queue.temp",
+      "mode": "managed",
+      "type": "aws_sqs_queue",
+      "name": "temp",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["delete"],
+        "before": { "name": "temp" },
+        "after": null,
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": false
+      }
+    }
+  ]
+}

@@ -167,6 +167,34 @@ The format is based on [Keep a Changelog], and this project adheres to
   `node:perf_hooks` only, adds no dependency, never runs during `npm test`, and
   is excluded from the published package. Developer tooling: nothing in `src/`
   or the CLI depends on it. ([#78])
+- `flecto plan <planFiles...>`: diff Terraform plan JSON (`terraform show
+  -json`) with the same differ, envelope, and policy engine every other command
+  uses. Flecto never runs the `terraform` binary — it only reads the JSON you
+  hand it. Paths are keyed by the resource address
+  (`aws_security_group.web.ingress[0].cidr_blocks[0]`), and every resource also
+  gets a synthetic `#action` attribute so resource-level rules can match one
+  event instead of one per attribute: `create` reports as `added`, `delete` as
+  `removed`, `update` as `changed`, and — deliberately — a `replace`
+  (destroy-and-recreate, in either action ordering) also reports as `removed`
+  carrying the value `"replace"`, so `--fail-on removed` catches every replace
+  with no policy pack loaded, and the note names the attribute that forced it
+  (`(forced by: engine_version)`). Values Terraform cannot resolve until apply
+  (`after_unknown`) render as `(known after apply)`, never `null`, except on a
+  pure create, where an all-computed attribute is dropped rather than listed.
+  Values Terraform marks sensitive are replaced with `(sensitive value)`
+  unconditionally — before the policy engine, the envelope, or any formatter
+  sees them — independent of `--mask-secrets`; that flag adds Flecto's own
+  value-shaped detection on top, for credentials Terraform did not mark.
+  `--format human|json|ndjson|github-annotations|pr-comment`, `--ignore`,
+  `--policies` (default `terraform`), `--plugins`, and `--fail-on` (default
+  `error`, not `changed` — a plan is supposed to contain changes) all work as
+  they do elsewhere. Ships with a new `terraform` policy pack, loaded by
+  default: a resource replaced or a stateful resource destroyed, security-group
+  ingress opened to `0.0.0.0/0` / `::/0`, an IAM policy granting a wildcard
+  `Action`/`Resource`, an S3 public-access-block disabled or a public ACL, an
+  instance-size change, a capacity setting jumping 2x or more, any
+  Terraform-sensitive value changing, and a credential-shaped value Terraform
+  did not mark sensitive. See [docs/terraform.md](docs/terraform.md). ([#73])
 
 ### Changed
 
@@ -296,6 +324,7 @@ The format is based on [Keep a Changelog], and this project adheres to
 [#70]: https://github.com/myselfsiddharth/Flecto/issues/70
 [#71]: https://github.com/myselfsiddharth/Flecto/issues/71
 [#72]: https://github.com/myselfsiddharth/Flecto/issues/72
+[#73]: https://github.com/myselfsiddharth/Flecto/issues/73
 [#74]: https://github.com/myselfsiddharth/Flecto/issues/74
 [#75]: https://github.com/myselfsiddharth/Flecto/issues/75
 [#76]: https://github.com/myselfsiddharth/Flecto/issues/76

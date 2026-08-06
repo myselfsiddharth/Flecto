@@ -106,7 +106,8 @@ describe('stack detection', () => {
       assert.deepEqual(detection.signals.map((signal) => signal.id), ['terraform']);
       assert.equal(detection.signals[0].pack, null);
       assert.deepEqual(detection.signals[0].evidence, ['main.tf', 'variables.tf']);
-      assert.match(detection.signals[0].summary, /no terraform pack ships yet/);
+      assert.match(detection.signals[0].summary, /\.tf is not a parseable format/);
+      assert.match(detection.signals[0].summary, /run "flecto plan"/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

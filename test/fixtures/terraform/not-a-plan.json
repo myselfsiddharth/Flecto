@@ -1,0 +1,9 @@
+{
+  "database": {
+    "host": "db.internal",
+    "pool_size": 5
+  },
+  "logging": {
+    "level": "info"
+  }
+}

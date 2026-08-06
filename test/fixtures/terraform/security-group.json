@@ -1,0 +1,80 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.5",
+  "resource_changes": [
+    {
+      "address": "aws_security_group.web",
+      "mode": "managed",
+      "type": "aws_security_group",
+      "name": "web",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["update"],
+        "before": {
+          "name": "web",
+          "ingress": [
+            { "from_port": 443, "to_port": 443, "protocol": "tcp", "cidr_blocks": ["10.0.0.0/8"] }
+          ],
+          "egress": [
+            { "from_port": 0, "to_port": 0, "protocol": "-1", "cidr_blocks": ["10.0.0.0/8"] }
+          ]
+        },
+        "after": {
+          "name": "web",
+          "ingress": [
+            { "from_port": 443, "to_port": 443, "protocol": "tcp", "cidr_blocks": ["0.0.0.0/0"] }
+          ],
+          "egress": [
+            { "from_port": 0, "to_port": 0, "protocol": "-1", "cidr_blocks": ["0.0.0.0/0"] }
+          ]
+        },
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "aws_security_group.internal",
+      "mode": "managed",
+      "type": "aws_security_group",
+      "name": "internal",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "name": "internal",
+          "ingress": [
+            { "from_port": 5432, "to_port": 5432, "protocol": "tcp", "cidr_blocks": ["10.0.0.0/8"] }
+          ],
+          "egress": [
+            { "from_port": 0, "to_port": 0, "protocol": "-1", "cidr_blocks": ["0.0.0.0/0"] }
+          ]
+        },
+        "after_unknown": { "id": true, "arn": true },
+        "before_sensitive": false,
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "aws_vpc_security_group_ingress_rule.open_ssh",
+      "mode": "managed",
+      "type": "aws_vpc_security_group_ingress_rule",
+      "name": "open_ssh",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": {
+          "from_port": 22,
+          "to_port": 22,
+          "ip_protocol": "tcp",
+          "cidr_ipv4": "0.0.0.0/0"
+        },
+        "after_unknown": { "id": true },
+        "before_sensitive": false,
+        "after_sensitive": {}
+      }
+    }
+  ]
+}

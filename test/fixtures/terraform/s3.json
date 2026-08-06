@@ -1,0 +1,84 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.5",
+  "resource_changes": [
+    {
+      "address": "aws_s3_bucket_public_access_block.data",
+      "mode": "managed",
+      "type": "aws_s3_bucket_public_access_block",
+      "name": "data",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["update"],
+        "before": {
+          "bucket": "acme-data",
+          "block_public_acls": true,
+          "block_public_policy": true,
+          "ignore_public_acls": true,
+          "restrict_public_buckets": true
+        },
+        "after": {
+          "bucket": "acme-data",
+          "block_public_acls": false,
+          "block_public_policy": true,
+          "ignore_public_acls": true,
+          "restrict_public_buckets": true
+        },
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "aws_s3_bucket_public_access_block.legacy",
+      "mode": "managed",
+      "type": "aws_s3_bucket_public_access_block",
+      "name": "legacy",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["delete"],
+        "before": {
+          "bucket": "acme-legacy",
+          "block_public_acls": true,
+          "block_public_policy": true,
+          "ignore_public_acls": true,
+          "restrict_public_buckets": true
+        },
+        "after": null,
+        "after_unknown": {},
+        "before_sensitive": {},
+        "after_sensitive": false
+      }
+    },
+    {
+      "address": "aws_s3_bucket_acl.site",
+      "mode": "managed",
+      "type": "aws_s3_bucket_acl",
+      "name": "site",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": { "bucket": "acme-site", "acl": "public-read" },
+        "after_unknown": { "id": true },
+        "before_sensitive": false,
+        "after_sensitive": {}
+      }
+    },
+    {
+      "address": "aws_s3_bucket_acl.reports",
+      "mode": "managed",
+      "type": "aws_s3_bucket_acl",
+      "name": "reports",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["create"],
+        "before": null,
+        "after": { "bucket": "acme-reports", "acl": "private" },
+        "after_unknown": { "id": true },
+        "before_sensitive": false,
+        "after_sensitive": {}
+      }
+    }
+  ]
+}
