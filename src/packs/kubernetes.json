@@ -1,0 +1,112 @@
+{
+  "id": "kubernetes",
+  "expandSubtrees": true,
+  "rules": [
+    {
+      "id": "k8s-privileged-container",
+      "severity": "error",
+      "when": ["added", "changed"],
+      "match": {
+        "path": "(^|\\.)securityContext\\.privileged$"
+      },
+      "afterTruthy": true,
+      "message": "Container runs privileged. A privileged container has effectively full access to the host. Drop privileged and grant only the specific capabilities the workload needs."
+    },
+    {
+      "id": "k8s-host-namespace-shared",
+      "severity": "error",
+      "when": ["added", "changed"],
+      "match": {
+        "path": "(^|\\.)(hostNetwork|hostPID|hostIPC)$"
+      },
+      "afterTruthy": true,
+      "messageTemplate": "Pod shares a host namespace ({path} = {after}). This removes the isolation boundary between the pod and the node. Confirm the workload genuinely needs host-level access."
+    },
+    {
+      "id": "k8s-run-as-non-root-weakened",
+      "severity": "error",
+      "when": ["added", "changed", "removed"],
+      "match": {
+        "path": "(^|\\.)runAsNonRoot$"
+      },
+      "anyOf": [
+        { "afterEquals": false },
+        { "beforeTruthy": true }
+      ],
+      "message": "runAsNonRoot was disabled or dropped, so the container may run as UID 0. Set runAsNonRoot: true and give the image a non-root user."
+    },
+    {
+      "id": "k8s-allow-privilege-escalation",
+      "severity": "error",
+      "when": ["added", "changed", "removed"],
+      "match": {
+        "path": "(^|\\.)allowPrivilegeEscalation$"
+      },
+      "anyOf": [
+        { "afterTruthy": true },
+        { "beforeEquals": false }
+      ],
+      "message": "allowPrivilegeEscalation was enabled or its explicit false was removed. A process can then gain more privileges than its parent (setuid binaries, file capabilities). Pin it back to false."
+    },
+    {
+      "id": "k8s-dangerous-capability-added",
+      "severity": "error",
+      "when": ["added", "changed"],
+      "match": {
+        "path": "(^|\\.)capabilities\\.add\\[[^\\]]*\\]$"
+      },
+      "afterIn": ["SYS_ADMIN", "NET_ADMIN", "ALL"],
+      "messageTemplate": "Container adds the {after} Linux capability, which is close to full host privilege. Add only the narrow capability the workload needs, or drop the change."
+    },
+    {
+      "id": "k8s-image-tag-unpinned",
+      "severity": "error",
+      "when": ["added", "changed"],
+      "match": {
+        "path": "containers\\[[^\\]]*\\]\\.image$"
+      },
+      "afterMatches": "(?::latest$)|(?:^[^:@]*$)|(?:^[^@]*/[^/:@]*$)",
+      "messageTemplate": "Container image \"{after}\" is not pinned: it resolves to :latest, so what actually runs can change without a manifest change. Pin an immutable tag or a @sha256 digest."
+    },
+    {
+      "id": "k8s-image-pull-policy-always",
+      "severity": "warn",
+      "when": ["changed"],
+      "match": {
+        "path": "containers\\[[^\\]]*\\]\\.imagePullPolicy$"
+      },
+      "afterEquals": "Always",
+      "messageTemplate": "imagePullPolicy moved from {before} to Always, so a restart can silently pull different bits behind the same tag. Keep IfNotPresent with a pinned tag or digest."
+    },
+    {
+      "id": "k8s-replica-count-jump",
+      "severity": "warn",
+      "when": ["changed"],
+      "match": {
+        "path": "(^|\\.)spec\\.replicas$"
+      },
+      "numericJump": { "minMultiple": 3 },
+      "numericDelta": { "min": 3 },
+      "messageTemplate": "Replica count jumped from {before} to {after} (>=3x). Confirm the cluster has the capacity and that the cost is intended."
+    },
+    {
+      "id": "k8s-resource-limits-removed",
+      "severity": "warn",
+      "when": ["removed"],
+      "match": {
+        "path": "containers\\[[^\\]]*\\]\\.resources\\.limits\\.[^.]+$"
+      },
+      "messageTemplate": "Resource limit {path} was removed. An unbounded container can starve everything else scheduled on the node."
+    },
+    {
+      "id": "k8s-service-externally-exposed",
+      "severity": "error",
+      "when": ["added", "changed"],
+      "match": {
+        "path": "(^|\\.)spec\\.type$"
+      },
+      "afterIn": ["LoadBalancer", "NodePort"],
+      "messageTemplate": "Service type is {after}, which exposes the workload outside the cluster (a public load balancer, or a port open on every node). Confirm the exposure is intended and covered by network policy."
+    }
+  ]
+}

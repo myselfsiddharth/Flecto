@@ -52,7 +52,7 @@ import { containsSecret } from './secrets.js';
  *   numericDelta?: { min: number }
  * }} PolicyMatchClause
  *
- * @typedef {{ id: string, rules: PolicyRule[] }} PolicyPack
+ * @typedef {{ id: string, expandSubtrees?: boolean, rules: PolicyRule[] }} PolicyPack
  *
  * @typedef {{
  *   id: string,
@@ -137,12 +137,15 @@ function isTruthyToggle(value) {
 function validatePack(pack, path) {
   if (!isObject(pack)) invalidPack(path, 'pack must be an object');
 
-  const packFields = new Set(['id', 'rules']);
+  const packFields = new Set(['id', 'expandSubtrees', 'rules']);
   for (const field of Object.keys(pack)) {
     if (!packFields.has(field)) invalidPack(path, `pack.${field} is not allowed`);
   }
   if (Object.hasOwn(pack, 'id') && (typeof pack.id !== 'string' || !pack.id.trim())) {
     invalidPack(path, 'pack.id must be a non-empty string');
+  }
+  if (Object.hasOwn(pack, 'expandSubtrees') && typeof pack.expandSubtrees !== 'boolean') {
+    invalidPack(path, 'pack.expandSubtrees must be a boolean');
   }
   if (!Array.isArray(pack.rules)) invalidPack(path, 'pack.rules must be an array');
 
@@ -621,7 +624,12 @@ export function addPolicyPackFromPackage(name, options = {}) {
 
   const targetPath = resolve(cwd, 'policies', `${id}.json`);
   mkdirSync(dirname(targetPath), { recursive: true });
-  writeFileSync(targetPath, `${JSON.stringify({ id, rules: pack.rules }, null, 2)}\n`, 'utf8');
+  // Only written when the source pack opts in, so packs that never set it keep
+  // byte-identical output.
+  const payload = pack.expandSubtrees
+    ? { id, expandSubtrees: true, rules: pack.rules }
+    : { id, rules: pack.rules };
+  writeFileSync(targetPath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
   writePackManifestEntry(cwd, id, {
     package: packageName,
     version: typeof packageJson.version === 'string' ? packageJson.version : null,
@@ -712,6 +720,100 @@ function formatMessage(rule, change) {
 }
 
 /**
+ * Bracket segment for one array element, mirroring the differ so a synthesized
+ * path is spelled the same way the differ would have spelled it: a quoted
+ * identity key when every element carries a unique `id` (then `name`), an index
+ * otherwise.
+ * @param {unknown[]} items
+ * @returns {string[]}
+ */
+function subtreeArraySegments(items) {
+  for (const idKey of ['id', 'name']) {
+    /** @type {string[]} */
+    const keys = [];
+    let usable = items.length > 0;
+    for (const item of items) {
+      if (!isObject(item) || !Object.hasOwn(item, idKey)) { usable = false; break; }
+      const value = item[idKey];
+      if (value == null || typeof value === 'object') { usable = false; break; }
+      keys.push(JSON.stringify(String(value)));
+    }
+    if (usable && new Set(keys).size === keys.length) return keys;
+  }
+  return items.map((_, index) => String(index));
+}
+
+/**
+ * Walk a value, collecting every scalar leaf with its full path.
+ *
+ * `ancestors` holds the containers on the path currently being walked. A
+ * recursive YAML anchor (`a: &x\n  b: *x`) parses to a genuinely cyclic object,
+ * and the differ never recurses into an added or removed subtree, so this walk
+ * is the first thing to enter one. Revisiting an ancestor stops the descent;
+ * a value merely referenced twice on separate branches is still walked twice.
+ * @param {unknown} value
+ * @param {string} basePath
+ * @param {Array<{ path: string, value: unknown }>} out
+ * @param {Set<object>} ancestors
+ */
+function collectLeaves(value, basePath, out, ancestors) {
+  const isContainer = Array.isArray(value) || isObject(value);
+  if (isContainer) {
+    if (ancestors.has(/** @type {object} */ (value))) return;
+    ancestors.add(/** @type {object} */ (value));
+  }
+
+  if (Array.isArray(value)) {
+    const segments = subtreeArraySegments(value);
+    value.forEach((item, index) => collectLeaves(item, `${basePath}[${segments[index]}]`, out, ancestors));
+  } else if (isObject(value)) {
+    for (const key of Object.keys(value)) {
+      collectLeaves(value[key], basePath ? `${basePath}.${key}` : key, out, ancestors);
+    }
+  } else {
+    out.push({ path: basePath, value });
+  }
+
+  if (isContainer) ancestors.delete(/** @type {object} */ (value));
+}
+
+/**
+ * Expand whole-subtree additions and removals into the leaf-level changes they
+ * imply, keeping the original event alongside them.
+ *
+ * The differ reports an added or removed key once, carrying the entire subtree
+ * as the value — adding a Kubernetes `Service` document, or a container's whole
+ * `securityContext` block, is a single change at the parent path. Path-anchored
+ * rules cannot see inside such a value, so a pack that must reason about leaves
+ * (`…securityContext.privileged`) would silently miss the exact case that
+ * matters most. Expanding restores one uniform shape: a rule anchored at the
+ * leaf fires whether the leaf changed in place or arrived with its parent.
+ *
+ * Subtrees never overlap, so the total work is linear in the size of the input.
+ * @param {import('./differ.js').ChangeEvent[]} changes
+ * @returns {import('./differ.js').ChangeEvent[]}
+ */
+export function expandChangeSubtrees(changes) {
+  /** @type {import('./differ.js').ChangeEvent[]} */
+  const expanded = [];
+  for (const change of changes) {
+    expanded.push(change);
+    if (change.type !== 'added' && change.type !== 'removed') continue;
+    const side = change.type === 'added' ? 'after' : 'before';
+    const value = change[side];
+    if (!isObject(value) && !Array.isArray(value)) continue;
+
+    /** @type {Array<{ path: string, value: unknown }>} */
+    const leaves = [];
+    collectLeaves(value, change.path ?? '', leaves, new Set());
+    for (const leaf of leaves) {
+      expanded.push({ type: change.type, path: leaf.path, [side]: leaf.value });
+    }
+  }
+  return expanded;
+}
+
+/**
  * @param {PolicyPack} pack
  * @param {import('./differ.js').ChangeEvent[]} changes
  * @param {Record<string, PolicySeverity | 'off'>} [severityRemap]
@@ -720,7 +822,10 @@ function formatMessage(rule, change) {
 export function evaluatePack(pack, changes, severityRemap = {}) {
   /** @type {PolicyFinding[]} */
   const findings = [];
-  for (const change of changes) {
+  // Opt-in per pack, so every existing pack sees exactly the events it always
+  // saw and only packs written against leaf paths pay for the expansion.
+  const effectiveChanges = pack.expandSubtrees ? expandChangeSubtrees(changes) : changes;
+  for (const change of effectiveChanges) {
     for (const rule of pack.rules ?? []) {
       if (!ruleMatches(rule, change)) continue;
       const severity = severityRemap[String(rule.id)] ?? rule.severity ?? 'warn';

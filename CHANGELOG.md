@@ -9,6 +9,30 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ### Added
 
+- Pre-merge review of rendered Kubernetes manifests, and a `kubernetes` policy
+  pack to gate it. ArgoCD, Flux, and `helm diff` compare a cluster to the
+  repository; this compares the manifests a pull request *would* produce against
+  the ones the merge target produces, before `helm upgrade` runs. The workflow
+  needs no new command and no new dependency: render both sides to plain
+  multi-document YAML with whatever you already use — `helm template`,
+  `kustomize build`, `kubectl kustomize`, `jsonnet`, `cdk8s` — and diff them with
+  `flecto compare base.yaml head.yaml --policies kubernetes`. Repositories that
+  commit their rendered output can use `flecto ci manifests/prod.yaml
+  --snapshot-ref origin/main` instead and render once. **Flecto never invokes
+  `helm` or `kustomize`**; neither is a dependency and neither has to exist on
+  the runner, which is what keeps the renderer your choice. The pack carries ten
+  rules for changes that are risky at review time: `privileged`, host
+  namespaces, weakened `runAsNonRoot`, `allowPrivilegeEscalation`, `SYS_ADMIN` /
+  `NET_ADMIN` / `ALL` capabilities, images that resolve to `:latest`,
+  `imagePullPolicy` moving to `Always`, replica jumps, removed resource limits,
+  and Services becoming `LoadBalancer` or `NodePort`. Thresholds are tuned so
+  routine work stays quiet — a replica jump needs both a 3× multiple and an
+  increase of at least 3, so `1 → 2` does not fire. Policy packs also gained an
+  optional pack-level `expandSubtrees`, which expands added and removed subtrees
+  into the leaf changes they imply before rules run; without it a brand-new
+  `Service` document is a single change carrying the whole manifest, and a rule
+  anchored at `spec.type` never sees inside it. It is opt-in per pack and off by
+  default, so every existing pack behaves exactly as before. ([#76])
 - A second bundled composite Action, `flecto-pr-risk`, that packages the pull
   request risk comment as a one-line adoption: `uses:` it after
   `actions/checkout` and the defaults do the rest (`format: pr-comment`,
@@ -274,6 +298,7 @@ The format is based on [Keep a Changelog], and this project adheres to
 [#72]: https://github.com/myselfsiddharth/Flecto/issues/72
 [#74]: https://github.com/myselfsiddharth/Flecto/issues/74
 [#75]: https://github.com/myselfsiddharth/Flecto/issues/75
+[#76]: https://github.com/myselfsiddharth/Flecto/issues/76
 [#78]: https://github.com/myselfsiddharth/Flecto/issues/78
 [#79]: https://github.com/myselfsiddharth/Flecto/issues/79
 [Keep a Changelog]: https://keepachangelog.com/en/1.1.0/
