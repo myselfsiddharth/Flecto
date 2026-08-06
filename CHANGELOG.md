@@ -251,6 +251,30 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ### Fixed
 
+- Policy finding messages no longer bypass secret masking. `evaluatePolicies`
+  runs on unmasked events, so a pack rule whose `messageTemplate` interpolates
+  `{before}` / `{after}` could print a credential that `--mask-secrets` had
+  redacted from `changes` — across the terminal, webhooks, CI JSON, GitHub
+  annotations, and the PR comment. Interpolated values are now masked with the
+  same path-aware logic as change events. ([#88])
+- **Unknown `--fail-on` triggers are rejected instead of silently ignored.** A
+  typo such as `--fail-on polciy,eror` previously matched nothing, so the run
+  exited `0` with a real diff present and the CI gate was effectively absent.
+  Unknown triggers now fail with the list of valid ones. ([#97])
+- YAML and TOML scalars are normalized to a JSON-safe tree before they reach
+  snapshots, the differ, or renderers — dates, BigInts, non-finite numbers, and
+  objects carrying a `toJSON()`. Previously these could diff or serialize
+  inconsistently depending on which parser produced them. Existing snapshots
+  are unaffected: `JSON.stringify` already wrote these as strings, so this makes
+  the in-memory tree match what was always on disk. ([#94])
+- Top-level `include` patterns are merged with `files` instead of being dropped
+  whenever `files` was also present in `.flectorc`. ([#95])
+- `--on-alert-failure exit` now terminates watch mode. It reported the failure
+  but left the watcher running, so a build depending on it to stop never did.
+  ([#96])
+- `flecto watch` no longer misses changes when a file's valid JSON root is
+  `null`. The baseline was treated as absent rather than as the value `null`,
+  so the first real change after it went unreported. ([#98])
 - `flecto watch --snapshot` no longer degrades quadratically with the number of
   tracked files. Deciding whether a file already had snapshot history listed the
   whole `.flecto-snapshots/` directory once per file — and compiled a regular
@@ -377,6 +401,12 @@ The format is based on [Keep a Changelog], and this project adheres to
 [#77]: https://github.com/myselfsiddharth/Flecto/issues/77
 [#78]: https://github.com/myselfsiddharth/Flecto/issues/78
 [#79]: https://github.com/myselfsiddharth/Flecto/issues/79
+[#88]: https://github.com/myselfsiddharth/Flecto/issues/88
+[#94]: https://github.com/myselfsiddharth/Flecto/issues/94
+[#95]: https://github.com/myselfsiddharth/Flecto/issues/95
+[#96]: https://github.com/myselfsiddharth/Flecto/issues/96
+[#97]: https://github.com/myselfsiddharth/Flecto/issues/97
+[#98]: https://github.com/myselfsiddharth/Flecto/issues/98
 [#104]: https://github.com/myselfsiddharth/Flecto/issues/104
 [Keep a Changelog]: https://keepachangelog.com/en/1.1.0/
 [Semantic Versioning]: https://semver.org/spec/v2.0.0.html
