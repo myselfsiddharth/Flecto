@@ -160,6 +160,26 @@ npx --yes flecto@2 ci "config/**/*.yaml" --snapshot-ref HEAD --fail-on "policy,e
 
 ---
 
+## Gating environment skew
+
+`flecto ci` asks "did this file change?". `flecto compare` asks "do these two
+files agree?" — the same differ, policy engine, fail triggers, and output
+formats, with another file as the baseline instead of an earlier version of the
+same one.
+
+```bash
+flecto compare config/prod.yaml config/staging.yaml \
+  --format github-annotations \
+  --fail-on "policy,error"
+```
+
+The first argument is the baseline; annotations and JSON results are attributed
+to the second file, with `baseline` recorded alongside. Exit codes work the same
+way, so it drops into a pipeline wherever `flecto ci` does. Flags:
+[cli-reference.md](cli-reference.md#flecto-compare-filea-fileb).
+
+---
+
 ## Empty runs
 
 If every target is missing or unsupported, `flecto ci` and

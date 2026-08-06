@@ -95,6 +95,51 @@ Full CI guide, including the GitHub Action: [ci.md](ci.md).
 
 ---
 
+## `flecto compare <fileA> <fileB>`
+
+Diff two *different* files against each other — the same differ and policy engine
+`watch` and `ci` use, pointed at environment skew instead of drift over time.
+
+```bash
+flecto compare config/prod.yaml config/staging.yaml
+flecto compare config/prod.yaml config/prod.json --format json
+```
+
+**`fileA` is the baseline.** Changes are reported as what `fileB` does to it:
+`+` exists only in `fileB`, `-` exists only in `fileA`, `~` is a value that
+differs. Swap the arguments to flip the direction.
+
+Both arguments are single file paths, not globs, and both are required — a
+missing one is an error rather than a skipped target. The two files do not have
+to share a format, since every supported format parses to a plain tree.
+
+| Flag | Default | Description |
+|---|---|---|
+| `-p, --profile <name>` | — | Use a profile from `.flectorc` (else `FLECTO_PROFILE`) |
+| `--format <type>` | `human` | `human`, `json`, `ndjson`, or `github-annotations` |
+| `--fail-on <rules>` | `changed,added,removed,policy,error` | Comma-separated fail triggers |
+| `--ignore <keys>` | — | Comma-separated key paths to ignore |
+| `--policies <ids>` | `default` | Comma-separated policy pack ids |
+| `--plugins <paths>` | — | Comma-separated local ESM plugin paths |
+| `--array-id-key <key>` | auto | Diff arrays by this identity key |
+| `--no-array-id` | — | Diff arrays by index instead of identity |
+| `--array-ignore-order` | off | Treat array order as insignificant |
+| `--mask-secrets` | off | Mask secret-like values in output |
+
+**Fail triggers:** the same set `ci` uses — `changed`, `added`, `removed`,
+`policy`, `error`, `warn`. The default differs from `ci`: two environments that
+are meant to match should also match on added and removed keys, so all three
+change kinds gate by default.
+
+**Exit codes:** `0` when the two files match under the active fail triggers, `1`
+when they differ, a policy trigger fires, or the run errored.
+
+The non-`human` formats emit exactly what `ci` emits — an array of per-file
+results, each with a `2.0` envelope — plus a `baseline` field naming `fileA`.
+Envelopes carry `source: "diff"`.
+
+---
+
 ## `flecto history [files...]`
 
 Summarize drift across local snapshots in `.flecto-snapshots/`. Omit `files` to

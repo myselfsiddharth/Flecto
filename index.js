@@ -669,6 +669,93 @@ program
     }
   });
 
+program
+  .command('compare <fileA> <fileB>')
+  .description('Diff two config files against each other (fileA is the baseline)')
+  .option('-p, --profile <name>', 'Use profile from .flectorc (else FLECTO_PROFILE)')
+  .option('--format <type>', 'Output format: human | json | ndjson | github-annotations', 'human')
+  .option('--fail-on <rules>', 'Comma-separated fail rules: changed,added,removed,policy,error,warn', 'changed,added,removed,policy,error')
+  .option('--ignore <keys>', 'Comma-separated key paths to ignore')
+  .option('--policies <ids>', 'Comma-separated policy pack ids')
+  .option('--plugins <paths>', 'Comma-separated local ESM plugin paths')
+  .option('--array-id-key <key>', 'Diff arrays by this object identity key')
+  .option('--no-array-id', 'Diff arrays by index instead of object identity')
+  .option('--array-ignore-order', 'Treat array order as insignificant', false)
+  .option('--mask-secrets', 'Mask secret-like values in output', false)
+  .action(async (fileA, fileB, opts, command) => {
+    try {
+      const { config } = loadRcConfig(process.cwd());
+      const profile = resolveProfileName(opts.profile);
+      const effective = resolveEffectiveOptions(config, profile, stripUnsetCliOverrides(opts, command));
+      const { policies: packIds, plugins, severityRemap } = resolvePolicyOptions(effective);
+
+      const ignorePaths = parseCsv(effective.ignore);
+      const failOn = new Set(parseCsv(effective.failOn ?? 'changed,added,removed,policy,error'));
+      const format = String(effective.format ?? 'human');
+      if (!['human', 'json', 'ndjson', 'github-annotations'].includes(format)) {
+        throw new Error('--format must be human, json, ndjson, or github-annotations');
+      }
+      const maskSecrets = Boolean(effective.maskSecrets);
+      const dOpts = diffOptionsFromEffective(effective, ignorePaths);
+
+      const baselinePath = resolve(fileA);
+      const targetPath = resolve(fileB);
+      // Both sides are named explicitly, so a missing one is an error rather
+      // than the skip-and-warn `ci` applies to expanded globs.
+      for (const filepath of [baselinePath, targetPath]) {
+        if (!existsSync(filepath)) {
+          throw new Error(`File not found: ${filepath}`);
+        }
+      }
+
+      // fileA is the baseline: "removed" is present only in fileA, "added" only
+      // in fileB. Every format parses to a plain tree, so the two sides need not
+      // share one — parseFile rejects unsupported extensions with the same
+      // message every other command uses.
+      const before = parseFile(baselinePath);
+      const after = parseFile(targetPath);
+      const events = diffTrees(before, after, dOpts);
+      const policyFindings = await evaluatePolicies(events, {
+        cwd: process.cwd(),
+        file: targetPath,
+        profile: profile ?? null,
+        source: 'diff',
+        policies: packIds,
+        plugins,
+        severityRemap,
+      });
+
+      if (format === 'human') {
+        if (events.length > 0) {
+          renderInfo('"+" exists only in the compared file, "-" only in the baseline, "~" differs');
+        }
+        renderDiff(targetPath, events, { maskSecrets, baseline: baselinePath });
+        renderPolicyFindings(policyFindings);
+      } else {
+        const envelope = createEnvelope({
+          source: 'diff',
+          file: targetPath,
+          changes: maybeMaskChanges(events, maskSecrets),
+          policies: policyFindings,
+        });
+        // Same envelope and printer as `ci`, so machine consumers see one shape.
+        // `baseline` rides on the result wrapper rather than the envelope, which
+        // is closed by schemas/flecto-envelope-2.0.json.
+        printCiOutput(
+          [{ file: targetPath, baseline: baselinePath, envelope, policies: policyFindings }],
+          format,
+        );
+      }
+
+      const shouldFail = shouldFailFromChanges(events, failOn)
+        || shouldFailFromPolicy(policyFindings, failOn);
+      process.exit(shouldFail ? 1 : 0);
+    } catch (err) {
+      renderError(err.message);
+      process.exit(1);
+    }
+  });
+
 {
   const policies = program
     .command('policies')
