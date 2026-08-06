@@ -25,7 +25,12 @@ import { deliverPrComment, renderPrComment } from './src/pr-comment.js';
 import { fireAlerts } from './src/alerter.js';
 import { resolveWebhookFormat, WEBHOOK_FORMAT_CHOICES } from './src/notifiers.js';
 import { createEnvelope } from './src/envelope.js';
-import { evaluatePolicies, highestSeverity, listPolicyPacks } from './src/policy.js';
+import {
+  evaluatePolicies,
+  highestSeverity,
+  listPolicyPacks,
+  addPolicyPackFromPackage,
+} from './src/policy.js';
 import { testPolicyFixture } from './src/policy-test.js';
 import {
   loadRcConfig,
@@ -828,12 +833,48 @@ program
         }
 
         console.log('Resolution order: policies/<id>.json, .yaml, .yml, then built-in packs.');
-        console.log('id\tsource path\trules\toverrides builtin');
+        console.log('id\tsource path\trules\toverrides builtin\tpackage');
         for (const pack of packs) {
           console.log(
-            `${pack.id}\t${pack.sourcePath}\t${pack.ruleCount}\t${pack.overridesBuiltin ? 'yes' : 'no'}`,
+            `${pack.id}\t${pack.sourcePath}\t${pack.ruleCount}\t${pack.overridesBuiltin ? 'yes' : 'no'}\t${pack.package ?? '-'}`,
           );
         }
+      } catch (err) {
+        renderError(err.message);
+        process.exit(1);
+      }
+    });
+
+  policies
+    .command('add <name>')
+    .description('Install a policy pack from an installed flecto-pack-* npm package')
+    .option('--force', 'Overwrite an existing local pack with the same id')
+    .action((name, opts) => {
+      try {
+        const added = addPolicyPackFromPackage(name, {
+          cwd: process.cwd(),
+          force: Boolean(opts.force),
+        });
+        const version = added.packageVersion ? `@${added.packageVersion}` : '';
+        const verb = added.overwritten ? 'Updated' : 'Added';
+        renderInfo(
+          `${verb} policy pack "${added.id}" from ${added.packageName}${version} `
+          + `→ ${relative(process.cwd(), added.targetPath)} `
+          + `(${added.ruleCount} rule${added.ruleCount === 1 ? '' : 's'})`,
+        );
+        if (added.overridesBuiltin) {
+          renderWarn(`Pack "${added.id}" now overrides the built-in pack of the same id.`);
+        }
+        for (const path of added.shadowed) {
+          renderWarn(`${relative(process.cwd(), path)} is no longer used: ${added.id}.json wins.`);
+        }
+        if (added.shipsCode) {
+          renderInfo(
+            `${added.packageName} also ships JavaScript. It was ignored: only the declarative `
+            + 'pack file is read, and no package code is ever imported or run.',
+          );
+        }
+        renderInfo(`Activate it with: flecto ci <files> --policies ${added.id}`);
       } catch (err) {
         renderError(err.message);
         process.exit(1);

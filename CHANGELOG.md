@@ -9,6 +9,25 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ### Added
 
+- A convention for distributing policy packs, plus `flecto policies add <name>`
+  to install one. A community pack is an npm package named `flecto-pack-<id>`
+  (or `@scope/flecto-pack-<id>`) with a `flecto-pack.json`, `flecto-pack.yaml`,
+  or `flecto-pack.yml` at its root — no build step, no entry point, no code. A
+  package that builds its pack elsewhere can point at it with a `"flecto"` field
+  in its package.json (`{ "pack": "dist/pack.json" }`, or the bare path).
+  `flecto policies add` takes either the pack id or the full package name,
+  resolves the already-installed package from `node_modules`, validates it with
+  the same validator that runs at evaluation time, and writes it to
+  `policies/<id>.json` so the existing resolution order picks it up unchanged. A
+  malformed third-party pack is rejected at add time rather than failing later
+  during evaluation, and an existing local pack is never overwritten without
+  `--force`. Nothing from the package is imported or executed: only the
+  declarative pack file is read, JavaScript shipped in a pack package is ignored
+  (and reported), and a `"flecto"` field pointing at a `.js` file is rejected.
+  Plugins, which do run code, are deliberately out of scope for this command.
+  `flecto policies list` now reports the originating npm package for packs
+  installed this way, tracked in `policies/.flecto-packs.json`; hand-written
+  local packs list exactly as before. ([#71])
 - Value-pattern secret detection. Secrets are now found by what the value looks
   like, not only by the key name: known token formats (AWS `AKIA…`/`ASIA…`,
   GitHub `ghp_…`/`gho_…`/`ghu_…`/`ghs_…`/`ghr_…`, Slack `xox[abprs]-…`, Google
@@ -199,6 +218,7 @@ The format is based on [Keep a Changelog], and this project adheres to
 [#68]: https://github.com/myselfsiddharth/Flecto/issues/68
 [#69]: https://github.com/myselfsiddharth/Flecto/issues/69
 [#70]: https://github.com/myselfsiddharth/Flecto/issues/70
+[#71]: https://github.com/myselfsiddharth/Flecto/issues/71
 [#72]: https://github.com/myselfsiddharth/Flecto/issues/72
 [#79]: https://github.com/myselfsiddharth/Flecto/issues/79
 [Keep a Changelog]: https://keepachangelog.com/en/1.1.0/
