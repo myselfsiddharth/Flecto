@@ -171,6 +171,55 @@ and sends nothing anywhere.
 
 ---
 
+## `flecto report [files...]`
+
+Render the same snapshot history `flecto history` summarizes as a single
+self-contained HTML file you can share. Omit `files` to report on all saved
+history.
+
+```bash
+flecto report
+flecto report config/prod.yaml --limit 20 --output drift.html
+flecto report --profile prod --mask-secrets
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `-o, --output <path>` | `flecto-report.html` | Where to write the report |
+| `-l, --limit <n>` | `10` | Number of recent snapshots to include |
+| `-p, --profile <name>` | — | Use a profile from `.flectorc` (else `FLECTO_PROFILE`) |
+| `--ignore <keys>` | — | Comma-separated key paths to ignore |
+| `--policies <ids>` | `default` | Comma-separated policy pack ids |
+| `--plugins <paths>` | — | Comma-separated local ESM plugin paths |
+| `--array-id-key <key>` | auto | Diff arrays by this identity key |
+| `--no-array-id` | — | Diff arrays by index instead of identity |
+| `--array-ignore-order` | off | Treat array order as insignificant |
+| `--mask-secrets` | off | Mask secret-like values in the report |
+
+The page holds a per-file timeline of snapshots — each with its UTC timestamp,
+the snapshot it is measured against, every semantic change, and the policy
+findings that change produced — plus a summary and all findings grouped by
+severity. Missing directories in `--output` are created.
+
+**The file is self-contained.** Inline CSS, one small inline script for
+filtering and collapsing, and nothing else: no fonts, no images, no CDN scripts,
+no analytics, no network access when it is opened. It reads the same
+`.flecto-snapshots/` history `flecto history` reads, so nothing new is
+collected and nothing leaves your machine. It follows the viewer's light or dark
+theme and prints reasonably.
+
+Every config value, path, and message is HTML-escaped, so a value containing
+markup renders as text. Values that reach the page are the *only* place a secret
+could leak from a report, so pass `--mask-secrets` (or set `maskSecrets` in a
+profile) whenever you plan to share one: masking uses the same key-name and
+value-pattern detection as everywhere else, and it also redacts policy messages
+that interpolate values.
+
+**Exit codes:** `0` when a report was written, `1` when no snapshots matched —
+the same message `flecto history` gives, and no file is written.
+
+---
+
 ## `flecto policies add <name>`
 
 Install a policy pack from an npm package that follows the `flecto-pack-*`

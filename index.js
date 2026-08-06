@@ -22,6 +22,8 @@ import {
   maskChangeEvent,
 } from './src/renderer.js';
 import { deliverPrComment, renderPrComment } from './src/pr-comment.js';
+import { renderReportHtml } from './src/report.js';
+import { redactSecretString } from './src/secrets.js';
 import { fireAlerts } from './src/alerter.js';
 import { resolveWebhookFormat, WEBHOOK_FORMAT_CHOICES } from './src/notifiers.js';
 import { createEnvelope } from './src/envelope.js';
@@ -127,11 +129,18 @@ function summarizeSnapshotHistory(snapshots, limit, diffOpts = {}) {
   for (const records of byFile.values()) {
     records.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
     for (let index = 0; index < records.length; index += 1) {
+      // The previous snapshot of the *same file* is the baseline, and it may
+      // fall outside the limit window — so carry it here rather than letting
+      // callers infer it from the truncated result.
+      const previous = index === 0 ? null : records[index - 1];
+      const changes = previous
+        ? diffTrees(previous.state, records[index].state, diffOpts)
+        : [];
       summaries.push({
         ...records[index],
-        changeCount: index === 0
-          ? 0
-          : diffTrees(records[index - 1].state, records[index].state, diffOpts).length,
+        previousCreatedAt: previous ? previous.createdAt : null,
+        changes,
+        changeCount: changes.length,
       });
     }
   }
@@ -194,6 +203,23 @@ function diffOptionsFromEffective(effective, ignorePaths) {
 function maybeMaskChanges(events, maskSecrets) {
   if (!maskSecrets) return events;
   return events.map(maskChangeEvent);
+}
+
+/**
+ * Redact secret-shaped text from policy messages. A rule using
+ * `messageTemplate` can interpolate `{before}` / `{after}`, so a finding can
+ * carry a credential even when the change events beside it are masked. Uses the
+ * same value-based detection as `--mask-secrets` everywhere else.
+ * @param {import('./src/policy.js').PolicyFinding[]} findings
+ * @param {boolean} maskSecrets
+ * @returns {import('./src/policy.js').PolicyFinding[]}
+ */
+function maybeMaskFindings(findings, maskSecrets) {
+  if (!maskSecrets) return findings;
+  return findings.map((finding) => ({
+    ...finding,
+    message: redactSecretString(String(finding.message ?? '')),
+  }));
 }
 
 async function resolveTargetFiles(cliFiles, rcConfig) {
@@ -596,6 +622,97 @@ program
         const changes = `${snapshot.changeCount} change${snapshot.changeCount === 1 ? '' : 's'}`;
         console.log(`${snapshot.createdAt}  ${file} — ${changes}`);
       }
+    } catch (err) {
+      renderError(err.message);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('report [files...]')
+  .description('Render local snapshot history as a self-contained HTML report')
+  .option('-o, --output <path>', 'Write the report to this path', 'flecto-report.html')
+  .option('-l, --limit <n>', 'Number of recent snapshots to include', '10')
+  .option('-p, --profile <name>', 'Use profile from .flectorc (else FLECTO_PROFILE)')
+  .option('--ignore <keys>', 'Comma-separated key paths to ignore (e.g. "updated_at,meta.ts")')
+  .option('--policies <ids>', 'Comma-separated policy pack ids (default: default)')
+  .option('--plugins <paths>', 'Comma-separated local ESM plugin paths')
+  .option('--array-id-key <key>', 'Diff arrays by this object identity key')
+  .option('--no-array-id', 'Diff arrays by index instead of object identity')
+  .option('--array-ignore-order', 'Treat array order as insignificant', false)
+  .option('--mask-secrets', 'Mask secret-like values in the report', false)
+  .action(async (files, opts, command) => {
+    try {
+      const { config } = loadRcConfig(process.cwd());
+      const profile = resolveProfileName(opts.profile);
+      const effective = resolveEffectiveOptions(config, profile, stripUnsetCliOverrides(opts, command));
+      const { policies: packIds, plugins, severityRemap } = resolvePolicyOptions(effective);
+
+      const limit = Number.parseInt(String(effective.limit ?? '10'), 10);
+      if (!Number.isInteger(limit) || limit < 1) {
+        throw new Error('--limit must be a positive integer');
+      }
+      const ignorePaths = parseCsv(effective.ignore);
+      const dOpts = diffOptionsFromEffective(effective, ignorePaths);
+      const maskSecrets = Boolean(effective.maskSecrets);
+      const outputPath = resolve(String(effective.output ?? 'flecto-report.html'));
+
+      // Same snapshot source, filtering, and errors as `flecto history` — this
+      // command only changes how that history is rendered.
+      const allSnapshots = readLocalSnapshotHistory();
+      let snapshots = allSnapshots;
+      if (files.length > 0) {
+        const targets = new Set((await resolveTargetFiles(files, config)).map((file) => resolve(file)));
+        snapshots = snapshots.filter((snapshot) => targets.has(resolve(snapshot.file)));
+      }
+
+      const summaries = summarizeSnapshotHistory(snapshots, limit, dOpts);
+      if (summaries.length === 0) {
+        if (files.length > 0 && allSnapshots.length > 0) {
+          throw new Error(
+            'No local snapshots matched the given files. Omit files to report on all saved snapshot history.',
+          );
+        }
+        throw new Error('No local snapshots found. Run "flecto watch <file> --snapshot" first.');
+      }
+
+      const reportSnapshots = [];
+      for (const summary of summaries) {
+        // Policies run on the unmasked events: masking first would hide the
+        // very values the secret rules match on. Redaction happens after, on
+        // everything that reaches the page.
+        const findings = await evaluatePolicies(summary.changes, {
+          cwd: process.cwd(),
+          file: summary.file,
+          profile: profile ?? null,
+          source: 'diff',
+          policies: packIds,
+          plugins,
+          severityRemap,
+        });
+        reportSnapshots.push({
+          file: summary.file,
+          createdAt: summary.createdAt,
+          previousCreatedAt: summary.previousCreatedAt,
+          changeCount: summary.changeCount,
+          changes: maybeMaskChanges(summary.changes, maskSecrets),
+          policies: maybeMaskFindings(findings, maskSecrets),
+        });
+      }
+
+      const html = renderReportHtml({
+        snapshots: reportSnapshots,
+        generatedAt: new Date().toISOString(),
+        cwd: process.cwd(),
+        version: PKG.version,
+        limit,
+        maskSecrets,
+      });
+      mkdirSync(dirname(outputPath), { recursive: true });
+      writeFileSync(outputPath, html, 'utf8');
+      console.log(chalk.green(
+        `✓ Report written: ${outputPath} (${summaries.length} snapshot${summaries.length === 1 ? '' : 's'})`,
+      ));
     } catch (err) {
       renderError(err.message);
       process.exit(1);

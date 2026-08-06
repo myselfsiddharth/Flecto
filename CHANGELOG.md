@@ -25,6 +25,25 @@ The format is based on [Keep a Changelog], and this project adheres to
   `flecto-version` pins the CLI without forking the Action. The existing
   `flecto-ci` Action is untouched, inputs and defaults included, and is now
   covered by tests that parse both committed `action.yml` files. ([#74])
+- `flecto report [files...]`: a static HTML drift report rendered from the local
+  snapshot history `flecto history` already reads, written to
+  `--output` (default `flecto-report.html`). The page carries a per-file
+  timeline — each snapshot with its UTC timestamp, the snapshot it is measured
+  against, its semantic changes, and the policy findings those changes produced
+  — plus a summary and every finding grouped by severity. `--limit`,
+  `--profile`, `--ignore`, `--policies`, `--plugins`, and the array-identity
+  flags resolve through the same effective-options path as every other command,
+  so a report matches what `flecto history` and `flecto watch --diff` report.
+  The file is **fully self-contained**: inline CSS, one small inline script for
+  filtering and collapsing, and nothing else — no fonts, no images, no CDN
+  scripts, no analytics, and no network access when it is opened. It follows the
+  viewer's light or dark theme, is responsive, and prints. Every config value,
+  path, and message is HTML-escaped, so a value containing markup renders as
+  text rather than as part of the page. `--mask-secrets` (flag or profile)
+  applies the same key-name and value-pattern redaction used elsewhere, and also
+  redacts policy messages that interpolate values — a report is a shareable
+  artifact, so a leak there is worse than one in a terminal. With no snapshots
+  it prints the same guidance `flecto history` does and writes no file. ([#75])
 - A convention for distributing policy packs, plus `flecto policies add <name>`
   to install one. A community pack is an npm package named `flecto-pack-<id>`
   (or `@scope/flecto-pack-<id>`) with a `flecto-pack.json`, `flecto-pack.yaml`,
@@ -237,6 +256,7 @@ The format is based on [Keep a Changelog], and this project adheres to
 [#71]: https://github.com/myselfsiddharth/Flecto/issues/71
 [#72]: https://github.com/myselfsiddharth/Flecto/issues/72
 [#74]: https://github.com/myselfsiddharth/Flecto/issues/74
+[#75]: https://github.com/myselfsiddharth/Flecto/issues/75
 [#79]: https://github.com/myselfsiddharth/Flecto/issues/79
 [Keep a Changelog]: https://keepachangelog.com/en/1.1.0/
 [Semantic Versioning]: https://semver.org/spec/v2.0.0.html
