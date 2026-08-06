@@ -12,7 +12,34 @@ flecto init
 ```
 
 Flecto looks for `.flectorc`, `.flectorc.json`, `.flectorc.yaml`, or
-`.flectorc.yml` in the working directory.
+`.flectorc.yml` in the working directory. `flecto init` writes
+`.flectorc.json` and **never overwrites** an existing config — if any of the four
+names is already there, it is reported and left untouched.
+
+`init` reads the signals already present in the directory and pre-selects the
+policy packs and file patterns that match, printing what it found and why:
+
+| Detected | Effect |
+|---|---|
+| `docker-compose.yml`, `docker-compose.yaml`, `compose.yml`, `compose.yaml` | Enables the [`compose`](policy-packs.md) pack and watches the compose file |
+| `package.json` | Enables the `node-runtime` pack and watches `package.json` |
+| `config/` | Adds `config/**/*.{yaml,yml,json,toml,ini}` to `files` |
+| `.env`, `.env.*`, `*.env` | Adds `.env`, `.env.*`, `*.env` to `files` |
+| `*.tf` | Reported only — no `terraform` pack ships yet, and `.tf` is not a parseable format, so nothing is enabled |
+
+Detected packs also land in the `prod` profile, alongside `strict-prod`. Only
+built-in pack ids and formats Flecto can parse are ever written, so the generated
+config always loads.
+
+```console
+$ flecto init
+Initialized config: /srv/app/.flectorc.json
+Detected docker-compose.yml → enabled the `compose` policy pack and watched it
+Detected package.json → enabled the `node-runtime` policy pack and watched it
+Policy packs: default, compose, node-runtime
+```
+
+When nothing is detected, you get the generic starter config:
 
 ```json
 {

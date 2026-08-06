@@ -718,10 +718,22 @@ program
 
 program
   .command('init')
-  .description('Create starter .flectorc configuration')
+  .description('Create starter .flectorc configuration from detected stack signals')
   .action(() => {
-    const path = initRcFile(process.cwd());
+    const { path, created, detection } = initRcFile(process.cwd());
+    if (!created) {
+      renderWarn(`Config already exists: ${path} (left unchanged)`);
+      return;
+    }
     renderInfo(`Initialized config: ${path}`);
+    if (detection.signals.length === 0) {
+      renderInfo('No stack signals detected — wrote the generic starter config.');
+      return;
+    }
+    for (const signal of detection.signals) {
+      renderInfo(signal.summary);
+    }
+    renderInfo(`Policy packs: ${detection.packs.join(', ')}`);
   });
 
 program

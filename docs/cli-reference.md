@@ -161,11 +161,32 @@ A worked example lives in
 
 ## `flecto init`
 
-Write a starter `.flectorc` in the current directory.
+Write a starter `.flectorc.json` in the current directory, pre-selecting policy
+packs and file patterns from the stack signals it finds there.
 
 ```bash
 flecto init
 ```
+
+| Detected | Effect |
+|---|---|
+| `docker-compose.yml` / `.yaml`, `compose.yml` / `.yaml` | `compose` pack + the compose file in `files` |
+| `package.json` | `node-runtime` pack + `package.json` in `files` |
+| `config/` | `config/**/*.{yaml,yml,json,toml,ini}` in `files` |
+| `.env`, `.env.*`, `*.env` | `.env`, `.env.*`, `*.env` in `files` |
+| `*.tf` | Reported only — no `terraform` pack exists yet, and `.tf` is not parseable |
+
+The `default` pack is always enabled, and detected packs are added to the `prod`
+profile alongside `strict-prod`. With no signals, the generic starter config is
+written instead.
+
+An existing `.flectorc`, `.flectorc.json`, `.flectorc.yaml`, or `.flectorc.yml`
+is never overwritten: `init` reports the file it found and leaves it alone.
+
+**Exit codes:** `0` whether a config was written or an existing one was kept.
+
+See [configuration](configuration.md#creating-a-config-file) for the generated
+keys.
 
 ---
 

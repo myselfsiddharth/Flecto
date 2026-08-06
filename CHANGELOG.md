@@ -18,6 +18,21 @@ The format is based on [Keep a Changelog], and this project adheres to
   Empty documents (a leading or trailing `---`, or a template that rendered
   nothing) are dropped. Single-document files are unchanged: they still parse to
   the document itself, with identical diff paths. ([#69])
+- Stack-aware `flecto init`: the generated `.flectorc.json` now pre-selects
+  policy packs and file patterns from signals in the working directory —
+  `docker-compose.yml` / `compose.yaml` enables the `compose` pack and watches
+  the compose file, `package.json` enables `node-runtime`, and `config/` plus
+  `.env` files shape the `files` patterns. Terraform files are reported as
+  context only, since no `terraform` pack ships yet and `.tf` is not a parseable
+  format. `init` prints what it detected and why, and falls back to the previous
+  generic starter config when nothing is found. ([#72])
+
+### Changed
+
+- `flecto init` no longer claims to have initialized a config when one already
+  exists. It now checks every `.flectorc` candidate — not just
+  `.flectorc.json` — and warns that the existing file was left unchanged instead
+  of writing a second config that `loadRcConfig` would shadow. ([#72])
 
 ### Fixed
 
@@ -126,6 +141,7 @@ The format is based on [Keep a Changelog], and this project adheres to
 [#39]: https://github.com/myselfsiddharth/Flecto/issues/39
 [#40]: https://github.com/myselfsiddharth/Flecto/pull/40
 [#69]: https://github.com/myselfsiddharth/Flecto/issues/69
+[#72]: https://github.com/myselfsiddharth/Flecto/issues/72
 [#79]: https://github.com/myselfsiddharth/Flecto/issues/79
 [Keep a Changelog]: https://keepachangelog.com/en/1.1.0/
 [Semantic Versioning]: https://semver.org/spec/v2.0.0.html

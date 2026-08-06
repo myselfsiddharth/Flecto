@@ -314,7 +314,7 @@ Explicit CLI flags win over profiles, which win over `defaults`.
 | `flecto history [files...]` | Summarize drift across local snapshots |
 | `flecto policies list` | List available policy packs |
 | `flecto policies test <dir>` | Assert pack and plugin findings from fixtures |
-| `flecto init` | Create a starter `.flectorc` |
+| `flecto init` | Create a `.flectorc` from detected stack signals |
 | `flecto doctor` | Check setup, config, and environment |
 
 → **[Every flag, every command](docs/cli-reference.md)**
