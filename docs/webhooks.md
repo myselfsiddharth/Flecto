@@ -20,6 +20,7 @@ flecto watch config/prod.yaml \
 |---|---|---|
 | `--webhook-timeout <ms>` | `5000` | Request timeout |
 | `--webhook-retries <n>` | `2` | Retry attempts per event |
+| `--webhook-format <service>` | `flecto` | Payload shape: `flecto`, `slack`, `discord`, `teams`, `auto` — see [Sending to chat](#sending-to-chat) |
 
 Each request carries identifying headers:
 
@@ -134,11 +135,87 @@ flecto watch .env \
 
 ## Sending to chat
 
-There is no built-in Slack or Discord formatter yet — the webhook posts Flecto's
-own envelope, which chat services won't render directly. Today that means a small
-receiver that reshapes the payload.
-[#68](https://github.com/myselfsiddharth/Flecto/issues/68) tracks native
-formatters.
+`--webhook-format` posts a payload the chat service renders natively, so no
+receiver of your own is needed. Everything else — headers, timeout, retries,
+delivery modes, `--on-alert-failure` — works exactly as above; only the request
+body changes.
+
+```bash
+flecto watch config/prod.yaml \
+  --webhook "https://hooks.slack.com/services/T000/B000/XXXX" \
+  --webhook-format slack
+```
+
+| Value | Body posted |
+|---|---|
+| `flecto` (default) | The raw envelope, unchanged |
+| `slack` | [Block Kit](https://api.slack.com/block-kit) `blocks`, plus a `text` fallback for notifications |
+| `discord` | One `embeds[]` entry, colored by severity |
+| `teams` | A [MessageCard](https://learn.microsoft.com/en-us/outlook/actionable-messages/message-card-reference) for Office 365 connector webhooks |
+| `auto` | Detected from the webhook host (see below) |
+
+The default stays `flecto`: without the flag, the posted bytes are exactly what
+earlier versions sent, so existing receivers are unaffected.
+
+In `.flectorc` the key is `webhookFormat`:
+
+```json
+{
+  "profiles": {
+    "prod": { "webhookFormat": "slack" }
+  }
+}
+```
+
+The `X-Flecto-Event-Id`, `X-Flecto-Batch-Id`, and `X-Flecto-Schema` headers are
+still sent with chat payloads — chat services ignore unknown headers, and they
+make deliveries traceable.
+
+### Auto-detection
+
+`--webhook-format auto` picks a format from the webhook host:
+
+| Host | Format |
+|---|---|
+| `hooks.slack.com` (any `*.slack.com`) | `slack` |
+| `discord.com` / `discordapp.com` with an `/api/webhooks` path | `discord` |
+| `*.office.com`, `*.office365.com` (e.g. `*.webhook.office.com`) | `teams` |
+| anything else | `flecto` |
+
+Detection is opt-in rather than automatic, so upgrading never changes what an
+existing webhook receives. An explicit `--webhook-format slack` always wins over
+detection. Power Automate endpoints (`*.logic.azure.com`) are not detected — set
+`--webhook-format teams` for those.
+
+### Severity and truncation
+
+The highest policy severity in the event drives the color and emoji:
+
+| Severity | Emoji | Color |
+|---|---|---|
+| `error` | 🔴 | `#D92D20` |
+| `warn` | 🟡 | `#F79009` |
+| `info` | 🔵 | `#2E90FA` |
+| none (no findings) | 🟢 | `#12B76A` |
+
+Large change sets are truncated rather than posted as a wall of text: at most 20
+change lines and 20 policy findings per message, individual values cut at 80
+characters, with a trailing `… +N more changes` / `… +N more findings`. Text is
+then fitted to each service's documented maximum:
+
+| Service | Limit coded against |
+|---|---|
+| Slack | 3000 chars per section `text`, 150 per `header`, 50 blocks per message |
+| Discord | 4096 chars per embed `description`, 256 per `title` |
+| Teams | 28 KB per incoming-webhook message |
+
+The full change set is always in the envelope — use `--webhook-format flecto`
+(or a second webhook) when a downstream system needs every change.
+
+Note that policy finding messages are rendered verbatim, exactly as they appear
+in the raw envelope. A pack whose `messageTemplate` interpolates `{before}` /
+`{after}` can therefore surface a value that `--mask-secrets-webhooks` redacted
+from `changes`. Keep secret-bearing paths out of message templates.
 
 ---
 
@@ -150,6 +227,10 @@ in the webhook payload too:
 ```bash
 flecto watch .env --mask-secrets --mask-secrets-webhooks
 ```
+
+Masking happens before the envelope is built, so it applies to every
+`--webhook-format` — a Slack, Discord, or Teams message renders the same `***`
+placeholders the raw envelope carries.
 
 See [configuration](configuration.md#secret-masking) for what counts as
 secret-like.

@@ -5,6 +5,7 @@ import { join, resolve } from 'path';
 import { tmpdir } from 'os';
 import { spawn, spawnSync } from 'child_process';
 import { createHash } from 'crypto';
+import { createServer } from 'http';
 
 test('ci mode returns non-zero when fail-on changed', () => {
   const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-'));
@@ -767,6 +768,113 @@ test('watch --diff --mask-secrets redacts nested secrets in terminal output', ()
     assert.doesNotMatch(diff.stdout, /hunter2/);
     assert.match(diff.stdout, /"password":"\*\*\*"/);
     assert.match(diff.stdout, /db\.internal\.test/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('watch --webhook-format slack posts a masked Block Kit payload', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-webhook-format-'));
+  const file = join(dir, 'config.json');
+  const rootIndex = resolve(process.cwd(), 'index.js');
+  writeFileSync(file, JSON.stringify({ database: { password: 'old-pw' } }), 'utf8');
+
+  /** @type {string[]} */
+  const bodies = [];
+  const server = createServer((req, res) => {
+    let body = '';
+    req.on('data', (chunk) => { body += chunk; });
+    req.on('end', () => {
+      bodies.push(body);
+      res.statusCode = 200;
+      res.end('ok');
+    });
+  });
+  await new Promise((ready) => server.listen(0, '127.0.0.1', ready));
+  const url = `http://127.0.0.1:${server.address().port}/hook`;
+
+  let child;
+  try {
+    const body = await new Promise((resolveBody, reject) => {
+      child = spawn(
+        process.execPath,
+        [
+          rootIndex, 'watch', file,
+          '--polling', '--interval', '25',
+          '--webhook', url,
+          '--webhook-format', 'slack',
+          '--webhook-retries', '0',
+          '--mask-secrets-webhooks',
+        ],
+        { cwd: dir },
+      );
+
+      let stdout = '';
+      let changed = false;
+      const timeout = setTimeout(() => reject(new Error('no webhook delivery within 10s')), 10_000);
+      const poll = setInterval(() => {
+        if (bodies.length === 0) return;
+        clearInterval(poll);
+        clearTimeout(timeout);
+        resolveBody(bodies[0]);
+      }, 50);
+
+      child.stdout.on('data', (chunk) => {
+        stdout += chunk;
+        if (!changed && stdout.includes('flecto watching')) {
+          changed = true;
+          setTimeout(() => {
+            writeFileSync(file, JSON.stringify({ database: { password: 's3cr3t-pw' } }), 'utf8');
+          }, 100);
+        }
+      });
+      child.on('error', (err) => {
+        clearInterval(poll);
+        clearTimeout(timeout);
+        reject(err);
+      });
+    });
+
+    const payload = JSON.parse(body);
+    assert.ok(Array.isArray(payload.blocks), 'slack format posts Block Kit blocks');
+    assert.equal(payload.blocks[0].type, 'header');
+    assert.equal(payload.schema_version, undefined);
+    assert.doesNotMatch(body, /s3cr3t-pw/);
+    assert.match(body, /\*\*\*/);
+  } finally {
+    child?.kill();
+    await new Promise((done) => server.close(done));
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('watch rejects an unknown webhook format from the CLI and from .flectorc', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-webhook-format-invalid-'));
+  const file = join(dir, 'config.json');
+  const rootIndex = resolve(process.cwd(), 'index.js');
+
+  try {
+    writeFileSync(file, JSON.stringify({ a: 1 }), 'utf8');
+    const fromCli = spawnSync(
+      process.execPath,
+      [rootIndex, 'watch', file, '--webhook', 'https://hooks.example.com/x', '--webhook-format', 'hipchat'],
+      { cwd: dir, encoding: 'utf8' },
+    );
+    assert.equal(fromCli.status, 1);
+    assert.match(fromCli.stderr, /--webhook-format must be one of: flecto, slack, discord, teams, auto/);
+
+    writeFileSync(
+      join(dir, '.flectorc.json'),
+      JSON.stringify({ defaults: { webhookFormat: 'hipchat' } }),
+      'utf8',
+    );
+    const fromRc = spawnSync(
+      process.execPath,
+      [rootIndex, 'watch', file, '--webhook', 'https://hooks.example.com/x'],
+      { cwd: dir, encoding: 'utf8' },
+    );
+    assert.equal(fromRc.status, 1);
+    assert.match(fromRc.stderr, /--webhook-format must be one of/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

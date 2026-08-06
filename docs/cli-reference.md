@@ -36,6 +36,7 @@ If you omit `files`, Flecto uses the `files` / `include` patterns from `.flector
 | `--webhook-header <header>` | — | Extra webhook header, repeatable |
 | `--webhook-timeout <ms>` | `5000` | Webhook request timeout |
 | `--webhook-retries <n>` | `2` | Webhook retry attempts |
+| `--webhook-format <service>` | `flecto` | Payload shape: `flecto`, `slack`, `discord`, `teams`, or `auto` (detect from the URL) |
 | `--delivery-mode <mode>` | `best-effort` | `best-effort` or `at-least-once` |
 | `--on-alert-failure <mode>` | `warn` | `warn`, `exit`, or `retry` |
 | `--ignore <keys>` | — | Comma-separated key paths to ignore |

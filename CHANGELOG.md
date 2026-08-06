@@ -20,6 +20,20 @@ The format is based on [Keep a Changelog], and this project adheres to
   key such as `db.connstr` is both flagged and masked. Packs can use it directly
   through the new `afterLooksSecret` / `beforeLooksSecret` predicates. Key-name
   detection is unchanged. ([#66])
+- Native Slack, Discord, and Microsoft Teams alert payloads:
+  `flecto watch --webhook-format <flecto|slack|discord|teams|auto>` (or
+  `webhookFormat` in `.flectorc`). The existing webhook path is reused as-is —
+  headers, `--webhook-timeout`, `--webhook-retries`, `--delivery-mode`, and
+  `--on-alert-failure` all behave identically; only the request body changes, so
+  no receiver of your own is needed. Slack gets Block Kit `blocks` with an
+  mrkdwn `text` fallback, Discord an embed colored by the highest policy
+  severity, Teams a MessageCard. Long change sets truncate to `… +N more`
+  within each service's documented limits (Slack 3000 chars per section, Discord
+  4096 per embed description, Teams 28 KB per message). `auto` detects the
+  format from the webhook host (`hooks.slack.com`, `discord.com/api/webhooks`,
+  `*.office.com`) and is opt-in: the default remains `flecto`, which posts the
+  raw envelope byte-for-byte as before. `--mask-secrets-webhooks` applies to
+  chat payloads too. ([#68])
 - Multi-document YAML support (`---`-separated), the usual shape of a Kubernetes
   manifest. Previously such a file failed to parse. Each document is diffed
   under its own key: `kind/name` for Kubernetes-shaped documents (namespaced
@@ -167,6 +181,7 @@ The format is based on [Keep a Changelog], and this project adheres to
 [#39]: https://github.com/myselfsiddharth/Flecto/issues/39
 [#40]: https://github.com/myselfsiddharth/Flecto/pull/40
 [#66]: https://github.com/myselfsiddharth/Flecto/issues/66
+[#68]: https://github.com/myselfsiddharth/Flecto/issues/68
 [#69]: https://github.com/myselfsiddharth/Flecto/issues/69
 [#70]: https://github.com/myselfsiddharth/Flecto/issues/70
 [#72]: https://github.com/myselfsiddharth/Flecto/issues/72
