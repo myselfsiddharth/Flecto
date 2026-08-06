@@ -147,6 +147,30 @@ Also check scope: `--mask-secrets` covers terminal output only. Add
 
 ---
 
+## A YAML anchor that points back at itself shows up as `<circular>`
+
+```yaml
+a: &x
+  b: *x
+```
+
+A YAML anchor can alias a container that contains itself, which parses to a
+genuinely cyclic object — `parsed.a.b` and `parsed.a` are the same object, not
+a copy. That can't be written to a snapshot or diffed as-is (nothing can
+serialize a cycle to JSON), so Flecto substitutes the fixed string
+`"<circular>"` at the back-reference and normalizes the rest of the file as
+usual. The file above snapshots as `{"a": {"b": "<circular>"}}`.
+
+The substitution is deliberately just a marker, not a path back to the anchor:
+two files with the same cycle shape always normalize to the same tree and
+diff clean against each other, and a genuine change elsewhere in the file
+still reads as a normal, stable diff path.
+
+This is unrelated to merge keys (`<<: *base`): those resolve to a normal,
+non-cyclic tree at parse time and are unaffected.
+
+---
+
 ## Behavior reference
 
 | Situation | What Flecto does |
@@ -154,6 +178,7 @@ Also check scope: `--mask-secrets` covers terminal output only. Add
 | File not found | Error, exit 1 |
 | Unsupported format | Lists supported extensions, exit 1 |
 | Parse error while watching | Warning; keeps the last valid state |
+| A YAML anchor that references its own container | Back-reference becomes `"<circular>"`; the rest of the file parses normally |
 | Command or webhook fails | Warning, unless `--on-alert-failure exit` |
 | Policy pack fails to load in watch | Exits non-zero |
 | Ctrl+C | Clean shutdown |

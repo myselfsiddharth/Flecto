@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, rmSync } from 'fs';
 import { join, resolve } from 'path';
 import { tmpdir } from 'os';
 import { spawnSync } from 'child_process';
-import { parseContent, parseYamlStream } from '../src/parser.js';
+import { parseContent, parseYamlStream, CIRCULAR_SENTINEL } from '../src/parser.js';
 import { diffTrees } from '../src/differ.js';
 
 const DEPLOYMENT = `apiVersion: apps/v1
@@ -109,6 +109,73 @@ negative_infinity = -inf
     });
     assert.doesNotThrow(() => JSON.stringify(parsed));
     assert.deepEqual(diffTrees(parsed, JSON.parse(JSON.stringify(parsed))), []);
+  });
+});
+
+describe('cyclic YAML anchors (#103)', () => {
+  // `a: &x\n  b: *x` is not a typo-shaped edge case: js-yaml resolves the
+  // alias to the *same object* as the anchor, so the parsed tree is genuinely
+  // cyclic (`parsed.a.b === parsed.a`). Before this fix that crashed scalar
+  // normalization with "Maximum call stack size exceeded"; before #102 it
+  // crashed later, at snapshot write, with "Converting circular structure to
+  // JSON". Neither the anchor's own name nor the alias survives js-yaml's
+  // parse, so the only thing normalization can do at the back-reference is
+  // substitute a fixed sentinel.
+
+  test('a self-referential anchor parses instead of crashing', () => {
+    const parsed = parseContent('cyclic.yaml', 'a: &x\n  b: *x\n');
+    assert.deepEqual(parsed, { a: { b: CIRCULAR_SENTINEL } });
+  });
+
+  test('the normalized tree survives JSON.stringify, the snapshot write path', () => {
+    const parsed = parseContent('cyclic.yaml', 'a: &x\n  b: *x\n');
+    assert.doesNotThrow(() => JSON.stringify(parsed));
+    assert.deepEqual(JSON.parse(JSON.stringify(parsed)), parsed);
+  });
+
+  test('a cycle nested below the top level is still caught', () => {
+    const parsed = parseContent('nested-cyclic.yaml', 'a:\n  b:\n    c: &x\n      d: *x\n');
+    assert.deepEqual(parsed, { a: { b: { c: { d: CIRCULAR_SENTINEL } } } });
+  });
+
+  test('an array containing itself terminates instead of recursing forever', () => {
+    const parsed = parseContent('self-array.yaml', 'a: &x\n  - 1\n  - *x\n');
+    assert.deepEqual(parsed, { a: [1, CIRCULAR_SENTINEL] });
+  });
+
+  test('an anchor reused on two branches (not a true cycle) is expanded on both', () => {
+    // Ancestor tracking must stop a value from containing itself, not stop a
+    // value that is merely referenced twice from unrelated branches.
+    const parsed = parseContent('shared.yaml', 'shared: &s\n  x: 1\na: *s\nb: *s\n');
+    assert.deepEqual(parsed, { shared: { x: 1 }, a: { x: 1 }, b: { x: 1 } });
+  });
+
+  test('two files with the same cycle shape normalize equal and diff clean', () => {
+    const before = parseContent('cyclic-a.yaml', 'a: &x\n  b: *x\n');
+    const after = parseContent('cyclic-b.yaml', 'a: &x\n  b: *x\n');
+    assert.deepEqual(before, after);
+    assert.deepEqual(diffTrees(before, after), []);
+  });
+
+  test('a diff across two cyclic files reports the real change', () => {
+    const before = parseContent('cyclic-a.yaml', 'a: &x\n  b: *x\n');
+    const after = parseContent('cyclic-b.yaml', 'a: &x\n  b: *x\n  c: 2\n');
+    const events = diffTrees(before, after);
+    assert.deepEqual(events, [{ type: 'added', path: 'a.c', after: 2 }]);
+  });
+
+  test('merge keys resolve to a normal acyclic tree, unaffected by the cycle guard', () => {
+    const parsed = parseContent(
+      'merge.yaml',
+      'base: &base\n  x: 1\n  y: 2\nchild:\n  <<: *base\n  y: 3\n',
+    );
+    assert.deepEqual(parsed, { base: { x: 1, y: 2 }, child: { x: 1, y: 3 } });
+  });
+
+  test('an ordinary file normalizes byte-identically to before', () => {
+    const raw = 'port: 3000\ndatabase:\n  pool_size: 5\n  hosts:\n    - a\n    - b\n';
+    const parsed = parseContent('config.yaml', raw);
+    assert.deepEqual(parsed, { port: 3000, database: { pool_size: 5, hosts: ['a', 'b'] } });
   });
 });
 

@@ -72,16 +72,46 @@ function isPlainObject(v) {
 }
 
 /**
+ * What a YAML anchor that points back at one of its own containers collapses
+ * to. See {@link normalizeParsedValue} for why this is necessary and why a
+ * plain sentinel, rather than e.g. a path reference, is enough.
+ */
+export const CIRCULAR_SENTINEL = '<circular>';
+
+/**
  * Convert parser-specific scalar objects into a stable JSON-safe tree before
  * they reach snapshots, the differ, or output renderers.
+ *
+ * A recursive YAML anchor (`a: &x\n  b: *x`) parses to a genuinely cyclic
+ * object — js-yaml resolves the alias to the *same* object reference, not a
+ * copy, so `a.b === a`. `ancestors` tracks the containers on the path
+ * currently being walked, the same ancestor-tracking pattern `collectLeaves`
+ * in policy.js uses for the same reason; revisiting one replaces the
+ * back-reference with {@link CIRCULAR_SENTINEL} instead of recursing into it.
+ * A value merely reached twice by separate branches (not an ancestor of
+ * itself) is still normalized in full on each branch.
+ *
+ * The result is always plain JSON: safe for `JSON.stringify` at the snapshot
+ * write, and safe for the differ, which never sees a cycle because nothing
+ * downstream of this function ever does. The sentinel is a fixed string
+ * rather than e.g. a back-reference path, so two files with the same cycle
+ * shape normalize to the same tree and compare equal — the whole point of a
+ * stable, readable diff path.
  * @param {unknown} value
+ * @param {Set<object>} [ancestors] internal recursion state; omit when calling
  * @returns {unknown}
  */
-function normalizeParsedValue(value) {
+function normalizeParsedValue(value, ancestors = new Set()) {
   if (typeof value === 'bigint') return String(value);
   if (typeof value === 'number' && !Number.isFinite(value)) return String(value);
   if (value instanceof Date) return value.toJSON();
-  if (Array.isArray(value)) return value.map(normalizeParsedValue);
+  if (Array.isArray(value)) {
+    if (ancestors.has(value)) return CIRCULAR_SENTINEL;
+    ancestors.add(value);
+    const out = value.map((item) => normalizeParsedValue(item, ancestors));
+    ancestors.delete(value);
+    return out;
+  }
   if (
     value !== null
     && typeof value === 'object'
@@ -89,13 +119,17 @@ function normalizeParsedValue(value) {
   ) {
     const serialized = value.toJSON();
     if (serialized !== value && (serialized === null || typeof serialized !== 'object')) {
-      return normalizeParsedValue(serialized);
+      return normalizeParsedValue(serialized, ancestors);
     }
   }
   if (isPlainObject(value)) {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, child]) => [key, normalizeParsedValue(child)]),
+    if (ancestors.has(value)) return CIRCULAR_SENTINEL;
+    ancestors.add(value);
+    const out = Object.fromEntries(
+      Object.entries(value).map(([key, child]) => [key, normalizeParsedValue(child, ancestors)]),
     );
+    ancestors.delete(value);
+    return out;
   }
   return value;
 }

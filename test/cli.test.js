@@ -258,6 +258,48 @@ test('snapshot fails closed when nothing was written', () => {
   }
 });
 
+test('watch --snapshot and --diff handle a self-referential YAML anchor (#103)', () => {
+  // `a: &x\n  b: *x` parses to a genuinely cyclic object (js-yaml resolves the
+  // alias to the same object reference). This reproduces the issue's exact
+  // repro end to end: snapshot must reach the JSON.stringify write path
+  // without throwing, and a later --diff must read that snapshot back and
+  // report only the real change.
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-cyclic-'));
+  const file = join(dir, 'cyclic.yaml');
+  const rootIndex = resolve(process.cwd(), 'index.js');
+
+  try {
+    writeFileSync(file, 'a: &x\n  b: *x\n', 'utf8');
+
+    const snap = spawnSync(
+      process.execPath,
+      [rootIndex, 'watch', file, '--snapshot'],
+      { encoding: 'utf8', cwd: dir }
+    );
+    assert.equal(snap.status, 0, snap.stderr);
+    assert.match(snap.stdout, /Snapshot saved/);
+
+    // No change yet.
+    const clean = spawnSync(
+      process.execPath,
+      [rootIndex, 'watch', file, '--diff'],
+      { encoding: 'utf8', cwd: dir }
+    );
+    assert.equal(clean.status, 0, clean.stderr);
+
+    writeFileSync(file, 'a: &x\n  b: *x\n  c: 2\n', 'utf8');
+    const diff = spawnSync(
+      process.execPath,
+      [rootIndex, 'watch', file, '--diff'],
+      { encoding: 'utf8', cwd: dir }
+    );
+    assert.equal(diff.status, 1, diff.stderr);
+    assert.match(diff.stdout, /a\.c/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('watch fails closed on policy pack errors regardless of alert failure setting', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'flecto-watch-policy-fail-'));
   const file = join(dir, 'config.json');
