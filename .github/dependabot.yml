@@ -16,6 +16,11 @@ updates:
         update-types: ["version-update:semver-major"]
       - dependency-name: "js-yaml"
         update-types: ["version-update:semver-major"]
+      # chalk 6 requires Node >=22. Flecto only uses red/green/yellow/cyan/dim/
+      # blue, stable since chalk 4, so the major buys nothing worth dropping a
+      # supported runtime for. Revisit with the Node floor itself (#104).
+      - dependency-name: "chalk"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: "/"
     schedule:

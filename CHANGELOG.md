@@ -9,6 +9,15 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ### Added
 
+- A test that every runtime dependency's `engines.node` is satisfiable by the
+  Node version Flecto itself declares, plus a check that the CI matrix actually
+  exercises that floor. This class of bug has now happened twice ([#22], and
+  chalk 6 requiring Node >=22 in [#104]) and CI could not catch it: `engines` is
+  advisory, so the Node 20 job passes while npm warns users with `EBADENGINE`.
+  The check reads each manifest off disk rather than through `require()`,
+  because a package whose `exports` map hides `./package.json` — chalk 6 is
+  exactly that — would otherwise be skipped silently. `chalk` majors are held in
+  Dependabot alongside `commander` and `js-yaml`. ([#104])
 - Pre-merge review of rendered Kubernetes manifests, and a `kubernetes` policy
   pack to gate it. ArgoCD, Flux, and `helm diff` compare a cluster to the
   repository; this compares the manifests a pull request *would* produce against
@@ -368,5 +377,6 @@ The format is based on [Keep a Changelog], and this project adheres to
 [#77]: https://github.com/myselfsiddharth/Flecto/issues/77
 [#78]: https://github.com/myselfsiddharth/Flecto/issues/78
 [#79]: https://github.com/myselfsiddharth/Flecto/issues/79
+[#104]: https://github.com/myselfsiddharth/Flecto/issues/104
 [Keep a Changelog]: https://keepachangelog.com/en/1.1.0/
 [Semantic Versioning]: https://semver.org/spec/v2.0.0.html
