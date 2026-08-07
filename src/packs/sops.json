@@ -21,7 +21,7 @@
       "severity": "error",
       "when": ["added"],
       "match": {
-        "path": "^sops\\.(kms|gcp_kms|azure_kv|hc_vault|age|pgp)(?:$|[.\\[])"
+        "path": "(?:^|\\.)sops\\.(kms|gcp_kms|azure_kv|hc_vault|age|pgp)(?:$|[.\\[])"
       },
       "messageTemplate": "A decryption recipient was added at {path}. That key can now decrypt this file — confirm it is authorized and that the change was intended."
     },
@@ -30,7 +30,7 @@
       "severity": "warn",
       "when": ["removed"],
       "match": {
-        "path": "^sops\\.(kms|gcp_kms|azure_kv|hc_vault|age|pgp)(?:$|[.\\[])"
+        "path": "(?:^|\\.)sops\\.(kms|gcp_kms|azure_kv|hc_vault|age|pgp)(?:$|[.\\[])"
       },
       "messageTemplate": "A decryption recipient was removed at {path}. Anything that key already read stays readable to its holder — rotate the secrets if the removal was a revocation."
     },

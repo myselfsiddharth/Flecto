@@ -1,0 +1,18 @@
+# `multidoc.before.yaml` with the encrypted document committed decrypted: no
+# `sops` block anywhere in the file, and the value in the clear. Nothing in this
+# file is encrypted any more, which is what makes it an <encryption> transition.
+# The exposed value is invented for the fixture.
+kind: ConfigMap
+metadata:
+    name: billing-config
+    namespace: prod
+data:
+    region: eu-west-1
+    pool_size: "10"
+---
+kind: Secret
+metadata:
+    name: billing
+    namespace: prod
+data:
+    dsn: not-a-real-exposed-dsn

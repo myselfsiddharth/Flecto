@@ -402,6 +402,163 @@ describe('policy findings', () => {
   });
 });
 
+describe('multi-document files (#109)', () => {
+  /** The value `multidoc.after.yaml` commits in the clear. */
+  const EXPOSED = 'not-a-real-exposed-dsn';
+  const SECRET_DOC = 'Secret/prod/billing';
+
+  /**
+   * @param {string} beforeName
+   * @param {string} afterName
+   */
+  function eventsFor(beforeName, afterName) {
+    return diffTrees(parseFile(fixture(beforeName)), parseFile(fixture(afterName)));
+  }
+
+  test('a SOPS block one document down still makes the file encrypted', () => {
+    const tree = parseFile(fixture('multidoc.before.yaml'));
+    assert.equal(looksLikeSopsMetadata(tree.sops), false, 'nothing at the root');
+    assert.ok(looksLikeSopsMetadata(tree[SECRET_DOC].sops), 'the metadata is inside a document');
+    assert.equal(encryptionState(tree), 'sops');
+  });
+
+  test('a plain document beside an encrypted one does not make the file plaintext', () => {
+    const tree = parseFile(fixture('multidoc.before.yaml'));
+    assert.equal(looksLikeSopsMetadata(tree['ConfigMap/prod/billing-config']?.sops), false);
+    assert.equal(encryptionState(tree), 'sops');
+  });
+
+  test('a decrypted value is withheld, exactly as it is in a single-document file', () => {
+    const events = eventsFor('multidoc.before.yaml', 'multidoc.after.yaml');
+    const dsn = events.find((event) => event.path === `${SECRET_DOC}.data.dsn`);
+    assert.equal(dsn.after, '<no longer encrypted>');
+    assert.equal(dsn.note, 'value is no longer encrypted');
+    assert.equal(JSON.stringify(events).includes(EXPOSED), false);
+  });
+
+  test('the exposed plaintext never reaches rendered output, masked or not', () => {
+    const events = eventsFor('multidoc.before.yaml', 'multidoc.after.yaml');
+    for (const maskSecrets of [false, true]) {
+      for (const mode of ['compact', 'verbose']) {
+        const out = captureStdout(() => renderChanges('m.yaml', events, mode, { maskSecrets }));
+        assert.equal(out.includes(EXPOSED), false, `renderChanges(${mode}, mask=${maskSecrets})`);
+        assertNoCiphertext(out, `renderChanges(${mode}, mask=${maskSecrets})`);
+      }
+      const diffOut = captureStdout(() => renderDiff('m.yaml', events, { maskSecrets }));
+      assert.equal(diffOut.includes(EXPOSED), false, `renderDiff(mask=${maskSecrets})`);
+      assert.ok(diffOut.includes('<no longer encrypted>'));
+    }
+  });
+
+  test('the exposed plaintext never reaches the CLI in any format, masked or not', () => {
+    for (const mask of [[], ['--mask-secrets']]) {
+      for (const format of ['human', 'json', 'ndjson', 'github-annotations']) {
+        const result = runCli([
+          'compare',
+          fixture('multidoc.before.yaml'),
+          fixture('multidoc.after.yaml'),
+          '--format', format,
+          '--policies', 'default,sops',
+          ...mask,
+        ]);
+        const label = `compare --format ${format} ${mask.join(' ')}`;
+        assert.equal(result.stdout.includes(EXPOSED), false, `${label} stdout`);
+        assert.equal(result.stderr.includes(EXPOSED), false, `${label} stderr`);
+        assertNoCiphertext(result.stdout, `${label} stdout`);
+      }
+    }
+  });
+
+  test('a recipient inserted at the front of a document is one addition', () => {
+    const events = eventsFor('multidoc.before.yaml', 'multidoc.recipient-added.yaml');
+    assert.deepEqual(events.map((event) => [event.type, event.path]), [[
+      'added',
+      `${SECRET_DOC}.sops.age.age1newcomernewcomernewcomernewcomernewcomernewcomer000000`,
+    ]]);
+    assert.ok(isEncryptedSentinel(events[0].after.enc));
+  });
+
+  test('a MAC that moved on its own inside a document is still reported', () => {
+    const events = eventsFor('multidoc.before.yaml', 'multidoc.mac-tamper.yaml');
+    const mac = events.find((event) => event.path === '<encryption.mac>');
+    assert.equal(mac.after, 'mac-only');
+  });
+
+  test('a MAC moving alongside a value change in a document is not a tamper signal', () => {
+    const events = eventsFor('multidoc.before.yaml', 'multidoc.after.yaml');
+    assert.equal(events.some((event) => event.path === '<encryption.mac>'), false);
+  });
+
+  test('a file that loses its only encrypted document reports <encryption>', () => {
+    const events = eventsFor('multidoc.before.yaml', 'multidoc.plaintext.yaml');
+    const state = events.find((event) => event.path === '<encryption>');
+    assert.deepEqual(
+      { before: state.before, after: state.after },
+      { before: 'sops', after: 'plaintext' },
+    );
+  });
+
+  test('the sops pack fires on a document-prefixed recipient path', async () => {
+    const findings = await evaluatePolicies(
+      eventsFor('multidoc.before.yaml', 'multidoc.recipient-added.yaml'),
+      { policies: ['sops'] },
+    );
+    assert.deepEqual(findings.map((finding) => finding.id), ['sops-recipient-added']);
+    assert.equal(findings[0].severity, 'error');
+    assert.ok(findings[0].path.startsWith(`${SECRET_DOC}.sops.age.`));
+  });
+
+  test('removing a recipient from a document is a warning', async () => {
+    const findings = await evaluatePolicies(
+      eventsFor('multidoc.recipient-added.yaml', 'multidoc.before.yaml'),
+      { policies: ['sops'] },
+    );
+    assert.deepEqual(findings.map((finding) => finding.id), ['sops-recipient-removed']);
+  });
+
+  test('the default pack reports the decrypted value and the recipient addition', async () => {
+    const findings = await evaluatePolicies(
+      eventsFor('multidoc.before.yaml', 'multidoc.after.yaml'),
+      { policies: ['default', 'sops'] },
+    );
+    const ids = new Set(findings.map((finding) => finding.id));
+    assert.ok(ids.has('sops-value-decrypted'), [...ids].join(', '));
+    assert.ok(ids.has('sops-recipient-added'), [...ids].join(', '));
+    assert.ok(
+      findings.every((finding) => !String(finding.message).includes(EXPOSED)),
+      'a policy message repeated the exposed value',
+    );
+  });
+
+  test('losing encryption in a multi-document file is a default-pack error', async () => {
+    const findings = await evaluatePolicies(
+      eventsFor('multidoc.before.yaml', 'multidoc.plaintext.yaml'),
+      { policies: ['default'] },
+    );
+    const decrypted = findings.filter((finding) => finding.id === 'sops-file-decrypted');
+    assert.equal(decrypted.length, 1);
+    assert.equal(decrypted[0].path, '<encryption>');
+  });
+
+  test('a routine re-encryption of one document raises no sops findings', async () => {
+    const findings = await evaluatePolicies(
+      eventsFor('multidoc.before.yaml', 'multidoc.before.yaml'),
+      { policies: ['sops'] },
+    );
+    assert.deepEqual(findings, []);
+  });
+
+  test('a multi-document file with no sops block gains no encryption events', () => {
+    const events = diffTrees(
+      parseContent('m.yaml', 'kind: A\nmetadata:\n  name: x\nreplicas: 1\n---\nkind: B\nmetadata:\n  name: y\nreplicas: 2\n'),
+      parseContent('m.yaml', 'kind: A\nmetadata:\n  name: x\nreplicas: 3\n---\nkind: B\nmetadata:\n  name: y\nreplicas: 2\n'),
+    );
+    assert.deepEqual(events, [
+      { type: 'changed', path: 'A/x.replicas', before: 1, after: 3 },
+    ]);
+  });
+});
+
 describe('ordinary files are untouched', () => {
   test('an unencrypted tree comes back from the encryption pass as the same object', () => {
     for (const name of ['plain.before.yaml', 'plain.after.yaml', 'lookalike.yaml']) {

@@ -1,7 +1,13 @@
-import { test } from 'node:test';
+import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
 
 import { maskChangeEvent, renderChanges, renderDiff } from '../src/renderer.js';
+import { diffTrees } from '../src/differ.js';
+import { parseContent, parseFile } from '../src/parser.js';
+
+const K8S_FIXTURES = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'kubernetes');
 
 /**
  * Capture console.log output produced by fn.
@@ -193,4 +199,102 @@ test('renderDiff masks nested secrets in arrays', () => {
   assert.doesNotMatch(output, /t0ken/);
   assert.match(output, /"token":"\*\*\*"/);
   assert.match(output, /"name":"admin"/);
+});
+
+describe('multi-document identity prefixes are not secret names (#110)', () => {
+  /**
+   * @param {string} name
+   * @returns {string}
+   */
+  function k8s(name) {
+    return join(K8S_FIXTURES, `multidoc-secret-names.${name}.yaml`);
+  }
+
+  function manifestEvents() {
+    return diffTrees(parseFile(k8s('before')), parseFile(k8s('after')));
+  }
+
+  /**
+   * @param {import('../src/differ.js').ChangeEvent[]} events
+   * @param {string} path
+   */
+  function line(events, path) {
+    const event = events.find((entry) => entry.path === path);
+    assert.ok(event, `no event at ${path}`);
+    return captureStdout(() => renderDiff('m.yaml', [event], { maskSecrets: true }));
+  }
+
+  test('a resource named token-service does not mask the values inside it', () => {
+    const events = manifestEvents();
+    const prefix = 'Deployment/prod/token-service';
+
+    assert.match(line(events, `${prefix}.spec.replicas`), /2 → 9/);
+    assert.match(
+      line(events, `${prefix}.spec.template.spec.containers["api"].securityContext.privileged`),
+      /false → true/,
+    );
+    assert.match(
+      line(events, `${prefix}.spec.template.spec.containers["api"].image`),
+      /registry\/api:1\.0\.0.*registry\/api:1\.1\.0/,
+    );
+  });
+
+  test('a document without a secret-shaped name is unaffected either way', () => {
+    assert.match(line(manifestEvents(), 'Service/prod/api.spec.type'), /ClusterIP.*LoadBalancer/);
+  });
+
+  test('genuinely sensitive keys inside a document are still masked', () => {
+    const events = manifestEvents();
+    for (const path of ['Secret/prod/db.data.password', 'Secret/prod/db.stringData.token']) {
+      const out = line(events, path);
+      assert.match(out, /"\*\*\*" → "\*\*\*"/, path);
+    }
+    const rendered = captureStdout(() => renderDiff('m.yaml', events, { maskSecrets: true }));
+    assert.doesNotMatch(rendered, /not-a-real-token|not-a-real-rotated-token/);
+  });
+
+  test('machine-readable payloads mask on the same stripped path', () => {
+    const events = manifestEvents();
+    const masked = events.map(maskChangeEvent);
+    const byPath = new Map(masked.map((event) => [event.path, event]));
+
+    assert.equal(byPath.get('Deployment/prod/token-service.spec.replicas').after, 9);
+    assert.equal(
+      byPath.get('Deployment/prod/token-service.spec.template.spec.containers["api"].securityContext.privileged').after,
+      true,
+    );
+    assert.equal(byPath.get('Secret/prod/db.stringData.token').after, '***');
+    // The document prefix stays in the emitted path — only matching ignores it.
+    assert.ok(byPath.has('Secret/prod/db.data.password'));
+  });
+
+  test('a whole document added under a secret-shaped name masks by key, not wholesale', () => {
+    const base = 'kind: ConfigMap\nmetadata:\n  name: app\ndata:\n  region: eu-west-1\n';
+    const added = 'kind: Secret\nmetadata:\n  name: api-token\ndata:\n  password: hunter2\n  issuer: auth.example.test\n';
+    const events = diffTrees(
+      parseContent('m.yaml', `${base}---\nkind: Service\nmetadata:\n  name: app\nspec:\n  type: ClusterIP\n`),
+      parseContent('m.yaml', `${base}---\nkind: Service\nmetadata:\n  name: app\nspec:\n  type: ClusterIP\n---\n${added}`),
+    );
+    const event = events.find((entry) => entry.path === 'Secret/api-token');
+    assert.equal(event.type, 'added');
+
+    const masked = maskChangeEvent(event);
+    assert.equal(masked.after.data.password, '***');
+    assert.equal(masked.after.data.issuer, 'auth.example.test');
+    assert.equal(masked.after.metadata.name, 'api-token');
+  });
+
+  test('single-document paths keep the behaviour they always had', () => {
+    const output = captureStdout(() => renderDiff(
+      'config.json',
+      [
+        { type: 'changed', path: 'token_service.replicas', before: 2, after: 9 },
+        { type: 'changed', path: 'api_key', before: 'a', after: 'b' },
+      ],
+      { maskSecrets: true },
+    ));
+    // No document keys were recorded, so the full path matches exactly as before.
+    assert.match(output, /token_service\.replicas: "\*\*\*" → "\*\*\*"/);
+    assert.match(output, /api_key: "\*\*\*" → "\*\*\*"/);
+  });
 });

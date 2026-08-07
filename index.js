@@ -9,7 +9,8 @@ import { execFileSync } from 'child_process';
 import chalk from 'chalk';
 
 import { parseFile, isSupported, parseContent } from './src/parser.js';
-import { diffTrees } from './src/differ.js';
+import { diffTrees, secretMatchPath } from './src/differ.js';
+import { documentKeysOf, withDocumentKeys } from './src/documents.js';
 import { startWatcher } from './src/watcher.js';
 import {
   renderChanges,
@@ -115,6 +116,7 @@ function preserveLegacySnapshotForHistory(absPath, snapshotPath, idsWithHistory)
     JSON.stringify({
       file: legacy.file ?? absPath,
       state: legacy.state ?? legacy,
+      ...(Array.isArray(legacy.documents) ? { documents: legacy.documents } : {}),
       createdAt: legacy.createdAt ?? statSync(snapshotPath).mtime.toISOString(),
     }, null, 2),
     'utf8',
@@ -135,7 +137,7 @@ function readLocalSnapshotHistory() {
   return snapshotEntries.map((entry) => {
     const path = resolve(SNAPSHOT_DIR, entry.name);
     const snapshot = JSON.parse(readFileSync(path, 'utf8'));
-    const state = snapshot?.state ?? snapshot;
+    const state = restoreSnapshotDocumentKeys(snapshot?.state ?? snapshot, snapshot);
     if (typeof snapshot?.file !== 'string') {
       throw new Error(`Invalid snapshot file: ${path}`);
     }
@@ -265,7 +267,7 @@ function maybeMaskFindings(findings, changes, maskSecrets) {
     for (const change of changes.filter((event) => event.path === finding.path)) {
       for (const value of [change.before, change.after]) {
         const original = String(value);
-        const masked = String(maskSensitiveValue(value, change.path));
+        const masked = String(maskSensitiveValue(value, secretMatchPath(change)));
         if (original && original !== masked) message = message.replaceAll(original, masked);
       }
     }
@@ -303,9 +305,24 @@ async function resolveTargetFiles(cliFiles, rcConfig) {
   });
 }
 
+/**
+ * Restore the parser's multi-document signal onto a state read back from a
+ * snapshot. A snapshot is plain JSON, so the in-memory marking is gone; a
+ * snapshot written before this field existed simply leaves the provenance
+ * unknown, which is what it is.
+ * @param {unknown} state
+ * @param {unknown} snapshot the parsed snapshot envelope
+ * @returns {unknown} the same state
+ */
+function restoreSnapshotDocumentKeys(state, snapshot) {
+  const documents = /** @type {{ documents?: unknown }} */ (snapshot)?.documents;
+  if (!Array.isArray(documents)) return state;
+  return withDocumentKeys(state, documents.map(String));
+}
+
 function readSnapshotStateFromFile(snapshotPath) {
   const snap = JSON.parse(readFileSync(snapshotPath, 'utf8'));
-  return snap?.state ?? snap;
+  return restoreSnapshotDocumentKeys(snap?.state ?? snap, snap);
 }
 
 /**
@@ -501,7 +518,15 @@ program
           const state = parseFile(filepath);
           const snapshotPath = snapshotPathForFile(filepath);
           preserveLegacySnapshotForHistory(filepath, snapshotPath, idsWithHistory);
-          const snapshot = { file: filepath, state, createdAt: new Date().toISOString() };
+          // Only a multi-document file records `documents`, so an ordinary
+          // snapshot is byte-for-byte what it was before this field existed.
+          const documents = documentKeysOf(state) ?? [];
+          const snapshot = {
+            file: filepath,
+            state,
+            ...(documents.length > 0 ? { documents: [...documents] } : {}),
+            createdAt: new Date().toISOString(),
+          };
           writeFileSync(snapshotPath, JSON.stringify(snapshot, null, 2), 'utf8');
           writeFileSync(snapshotHistoryPathForFile(filepath), JSON.stringify(snapshot, null, 2), 'utf8');
           // Keep the set in step with what this run has written, so a repeated

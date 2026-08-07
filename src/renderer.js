@@ -1,7 +1,18 @@
 import chalk from 'chalk';
 import { redactSecretString } from './secrets.js';
 import { ENCRYPTED_DISPLAY, displayEncrypted, isEncryptedSentinel } from './encrypted.js';
+import { secretMatchPath } from './differ.js';
 
+/**
+ * Key names that mean "this value is a credential".
+ *
+ * Matched against the *configuration* path only. A multi-document file prefixes
+ * every path with the document's identity — `Deployment/prod/token-service.…` —
+ * and that identity is a resource name the user chose, not a key name. Letting
+ * it match here masked every value in the document, numbers and booleans
+ * included, so the path reaching this regex is always the one
+ * {@link secretMatchPath} produced.
+ */
 const SECRET_PATH_RE = /(secret|token|password|api[_-]?key|private[_-]?key|credential)/i;
 
 /**
@@ -47,7 +58,9 @@ function timestamp() {
  */
 function renderEvent(event, mode, opts = {}) {
   const { type, path, before, after, note } = event;
-  const maskOpts = { maskSecrets: Boolean(opts.maskSecrets), path };
+  // The full path is what gets printed; the stripped one is what secret-name
+  // matching is allowed to see.
+  const maskOpts = { maskSecrets: Boolean(opts.maskSecrets), path: secretMatchPath(event) };
   // Notes ride on every change type — a Terraform plan explains a create or a
   // destroy there. The tree differ only ever notes changed events, so existing
   // added/removed output is unaffected.
@@ -215,9 +228,10 @@ export function maskSensitiveValue(value, path = '') {
  * @returns {import('./differ.js').ChangeEvent}
  */
 export function maskChangeEvent(event) {
+  const path = secretMatchPath(event);
   return {
     ...event,
-    before: event.before === undefined ? undefined : maskSensitiveValue(event.before, event.path),
-    after: event.after === undefined ? undefined : maskSensitiveValue(event.after, event.path),
+    before: event.before === undefined ? undefined : maskSensitiveValue(event.before, path),
+    after: event.after === undefined ? undefined : maskSensitiveValue(event.after, path),
   };
 }

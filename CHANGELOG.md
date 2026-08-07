@@ -266,6 +266,38 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ### Fixed
 
+- **SOPS protections no longer disengage on multi-document YAML.** Multi-document
+  files ([#69]) wrap each document in a synthetic identity-keyed object, so a
+  `sops` metadata block sits one level below the root — and `encryptionState` /
+  `normalizeEncrypted` looked only at the root. Every SOPS protection silently
+  switched off on exactly the file shape Kubernetes secrets ship in: the
+  plaintext of a value that had just been decrypted was printed verbatim (with
+  `--mask-secrets` on as well as off), no `sops` or `default` pack rule could
+  fire, and a recipient inserted at the front of a document's key list read as
+  "every recipient changed". A pull request that added an attacker's decryption
+  key *and* committed a secret in the clear passed `--fail-on policy,error`
+  while printing the secret into the CI log. Encryption state is now determined
+  per document, `sops` pack rules match a document-prefixed path, and recipient
+  groups inside a document are re-keyed by identity exactly as they are at the
+  root. Ciphertext itself never leaked — `redactCiphertext` always walked the
+  whole tree — and single-document behaviour is byte-for-byte unchanged.
+  ([#109])
+- **`--mask-secrets` no longer masks every value in a document whose resource
+  name looks secret-shaped.** Secret-name matching ran against the whole diff
+  path, and a multi-document path begins with the document's identity, so any
+  resource whose kind or name contained `secret`, `token`, `password`,
+  `api_key`, `private_key`, or `credential` — every `kind: Secret`, and any
+  Deployment called something like `token-service` — had all of its values
+  replaced by `***`, numbers and booleans included. A reviewer could not see
+  that `replicas` went 2 → 9 or that `privileged` went false → true, and policy
+  messages interpolating those values degraded to nonsense. The parser now
+  records the keys it invented for a multi-document file and the renderers match
+  secret names against the path *below* that prefix: a resource name is user
+  data and never participates. Genuinely sensitive keys inside a document —
+  `data.password`, `stringData.token` — are masked exactly as before. Snapshots
+  of multi-document files record their document keys so `flecto report` and
+  `flecto history` mask correctly too; snapshots of ordinary files are
+  unchanged. ([#110])
 - Policy finding messages no longer bypass secret masking. `evaluatePolicies`
   runs on unmasked events, so a pack rule whose `messageTemplate` interpolates
   `{before}` / `{after}` could print a credential that `--mask-secrets` had
@@ -435,5 +467,7 @@ The format is based on [Keep a Changelog], and this project adheres to
 [#98]: https://github.com/myselfsiddharth/Flecto/issues/98
 [#103]: https://github.com/myselfsiddharth/Flecto/issues/103
 [#104]: https://github.com/myselfsiddharth/Flecto/issues/104
+[#109]: https://github.com/myselfsiddharth/Flecto/issues/109
+[#110]: https://github.com/myselfsiddharth/Flecto/issues/110
 [Keep a Changelog]: https://keepachangelog.com/en/1.1.0/
 [Semantic Versioning]: https://semver.org/spec/v2.0.0.html
