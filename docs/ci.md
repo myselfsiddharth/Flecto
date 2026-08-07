@@ -317,7 +317,7 @@ and the Action itself is at
 
 ### Pinning
 
-Both Actions run `npx --yes flecto@2 ci`, so compatible updates are picked up
+Both Actions run `npx --yes flecto@3 ci`, so compatible updates are picked up
 automatically. For fully reproducible builds, pin the Action reference to a
 commit SHA; `flecto-pr-risk` also takes an exact CLI version through
 `flecto-version`, so pinning it needs no fork.
@@ -333,12 +333,12 @@ commit SHA; `flecto-pr-risk` also takes an exact CLI version through
 config-check:
   image: node:22
   script:
-    - npx --yes flecto@2 ci "config/**/*.yaml" --snapshot-ref "$CI_MERGE_REQUEST_DIFF_BASE_SHA" --fail-on "policy,error"
+    - npx --yes flecto@3 ci "config/**/*.yaml" --snapshot-ref "$CI_MERGE_REQUEST_DIFF_BASE_SHA" --fail-on "policy,error"
 ```
 
 ```bash
 # Pre-commit hook (.git/hooks/pre-commit)
-npx --yes flecto@2 ci "config/**/*.yaml" --snapshot-ref HEAD --fail-on "policy,error" || {
+npx --yes flecto@3 ci "config/**/*.yaml" --snapshot-ref HEAD --fail-on "policy,error" || {
   echo "Flecto flagged a risky config change. Review above, or commit with --no-verify."
   exit 1
 }

@@ -91,4 +91,4 @@ runs:
 
         # Pin to the compatible major line. Pin to a full version for
         # reproducible builds when consuming this action from another repo.
-        npx --yes flecto@2 "${args[@]}"
+        npx --yes flecto@3 "${args[@]}"

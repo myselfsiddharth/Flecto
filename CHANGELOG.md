@@ -7,6 +7,63 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-08-06
+
+### Migration notes
+
+Flecto 3.0.0 is additive in surface — no command, flag, or envelope field was
+removed, exit codes are unchanged, and `schema_version` is still `2.0`. Two
+behavior changes can turn a green 2.1.0 pipeline red, so read these first.
+
+**1. The `default` policy pack catches more.** Value-pattern secret detection
+and the SOPS decryption rules were added to `default`, so a credential-shaped
+value under an innocuous key name — or a secret committed in the clear — is now
+an `error`. A pipeline using `--fail-on policy` can fail on config that passed
+in 2.1.0:
+
+```
+flecto ci config.yaml --fail-on policy,error
+#  2.1.0 -> exit 0        3.0.0 -> exit 1
+```
+
+That is the intended behavior, but it is worth a dry run before upgrading CI.
+To keep the 2.1.0 rule set while you triage, name the packs explicitly and
+silence the new rules with `severityRemap`:
+
+```json
+{ "profiles": { "ci": { "severityRemap": {
+  "secret-value-detected": "off",
+  "sops-file-decrypted": "off",
+  "sops-value-decrypted": "off"
+} } } }
+```
+
+**2. Unknown `--fail-on` triggers are now an error.** A typo previously matched
+nothing and the run exited `0`, so the gate was silently absent:
+
+```
+flecto ci config.yaml --fail-on "polciy,eror"
+#  2.1.0 -> exit 0, ignored        3.0.0 -> exit 1, "unknown triggers: polciy, eror"
+```
+
+Any pipeline carrying a typo will go red on upgrade. That is the bug being
+fixed — those runs were never actually gated — but the failure is new.
+
+**Also worth knowing, unlikely to break a build:**
+
+- **Multi-document YAML now parses** instead of failing the file. Paths inside
+  such a file are prefixed with the document identity (`Deployment/prod/api.…`),
+  so `--ignore` entries and custom pack path regexes written against
+  single-document paths will not match. Single-document files are unchanged.
+- **Encrypted files no longer emit ciphertext to machine consumers.** 2.1.0 put
+  `ENC[AES256_GCM,data:…]` in the diff; 3.0.0 emits sentinels. Anything parsing
+  the JSON/NDJSON envelope for SOPS files needs updating.
+- **`flecto init` no longer overwrites an existing config.** 2.1.0 silently
+  regenerated `.flectorc.json`, destroying edits. Both still exit `0`, so a
+  script relying on regeneration now gets a no-op.
+- **`--mask-secrets` masks more than before** — value-shaped detection and
+  nested values, not only top-level sensitive key names.
+
 ### Added
 
 - A test that every runtime dependency's `engines.node` is satisfiable by the
@@ -415,7 +472,8 @@ The format is based on [Keep a Changelog], and this project adheres to
 - Misconfigured policy packs/plugins cause `watch` to exit non-zero instead of
   continuing with no policies.
 
-[Unreleased]: https://github.com/myselfsiddharth/Flecto/compare/v2.1.0...HEAD
+[Unreleased]: https://github.com/myselfsiddharth/Flecto/compare/v3.0.0...HEAD
+[3.0.0]: https://github.com/myselfsiddharth/Flecto/compare/v2.1.0...v3.0.0
 [2.1.0]: https://github.com/myselfsiddharth/Flecto/compare/v2.0.0...v2.1.0
 [#6]: https://github.com/myselfsiddharth/Flecto/issues/6
 [#7]: https://github.com/myselfsiddharth/Flecto/issues/7

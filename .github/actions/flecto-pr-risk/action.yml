@@ -60,7 +60,7 @@ inputs:
       npm version range for the Flecto CLI. Pin to an exact version for
       reproducible builds.
     required: false
-    default: "2"
+    default: "3"
   node-version:
     description: Node.js version used to run Flecto.
     required: false

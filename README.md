@@ -51,7 +51,7 @@ flecto doctor
 ```
 
 Prefer not to install globally? Every example below works with
-`npx --yes flecto@2` instead of `flecto`.
+`npx --yes flecto@3` instead of `flecto`.
 
 ---
 
