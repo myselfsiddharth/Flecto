@@ -35,6 +35,18 @@ English, flags what looks risky, and gives you an exit code to gate on.
 | Hope someone notices `debug: true` | Policy finding → build fails |
 | "Something in `.env` changed" | The exact keys, with secrets masked |
 
+The same engine reads whatever your change actually lives in:
+
+| You are reviewing | Flecto reads |
+|---|---|
+| App config — YAML, JSON, TOML, INI, dotenv | the files directly |
+| A Terraform change | `terraform show -json` output, via `flecto plan` |
+| A Kubernetes change | rendered manifests from `helm`, `kustomize`, or anything else |
+| A SOPS-encrypted file | its structure and recipients — **never its plaintext** |
+
+It never invokes `terraform`, `helm`, `kustomize`, `sops`, or `age`, so nothing
+extra has to exist on the CI runner.
+
 ---
 
 ## Install
@@ -285,6 +297,37 @@ resource. Flecto never runs `helm` or `kustomize` — you render, it diffs, so a
 renderer works and no binary is needed in CI.
 → **[Kubernetes](docs/kubernetes.md)**
 
+### Read a Terraform plan in plain English
+
+`terraform plan` output is precise and long. Flecto turns it into the handful of
+lines a reviewer actually needs to argue about:
+
+```bash
+terraform show -json plan.tfplan > plan.json
+flecto plan plan.json --fail-on error
+```
+
+```
+plan.json — plan format 1.2
+Plan: 0 to add, 1 to change, 0 to destroy, 1 to replace.
+  ~ aws_security_group.web.ingress[0].cidr_blocks[0]: "10.0.0.0/8" → "0.0.0.0/0"
+  - aws_db_instance.main.#action: "replace" [terraform will destroy and recreate aws_db_instance.main]
+  ~ aws_db_instance.main.password: "(sensitive value)" → "(sensitive value)" [sensitive]
+  ! policy(error) [terraform] …cidr_blocks[0]: Security group ingress will accept
+    traffic from the whole internet (0.0.0.0/0). Restrict the source to a known CIDR…
+  ! policy(error) [terraform] …#action: Terraform will destroy a stateful resource.
+    Its data does not survive. Take a final snapshot, or add a prevent_destroy…
+```
+
+A **replace reads as a removal**, not a benign update — a recreated database
+should never look like a config tweak. Values Terraform marks sensitive are
+redacted during parsing, before the policy engine or any formatter sees them, and
+`after_unknown` renders as `(known after apply)` rather than `null`.
+
+**Flecto never runs `terraform`** — you produce the JSON, it reads it, so nothing
+extra has to exist on the CI runner.
+→ **[Terraform plans](docs/terraform.md)**
+
 ### Encode your own rules
 
 Beyond the built-in packs, write rules as declarative JSON or YAML — no code:
@@ -364,6 +407,11 @@ and runs no code from the package. →
 | INI | `.ini` |
 | dotenv | `.env`, `.env.*`, `*.env` |
 | age (armored) | `.age`, or any file whose contents are one armored blob |
+
+Terraform plan JSON (`terraform show -json`) is read by **`flecto plan`**, which
+applies Terraform's own sensitivity marking. Point `plan` at it rather than `ci`
+or `watch` — those treat it as ordinary JSON and will print values Terraform
+marks sensitive ([#113](https://github.com/myselfsiddharth/Flecto/issues/113)).
 
 Multi-document YAML (`---`-separated, the usual shape of a Kubernetes manifest)
 is supported. Each document is diffed under its own key — `kind/name` for
