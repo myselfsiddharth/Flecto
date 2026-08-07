@@ -4,7 +4,7 @@
     "access": "public",
     "provenance": true
   },
-  "version": "3.0.0",
+  "version": "3.0.1",
   "description": "Flecto \u2014 semantic config watcher that reports meaningful changes in plain English",
   "license": "MIT",
   "keywords": [

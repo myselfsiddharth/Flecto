@@ -7,6 +7,37 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ## [Unreleased]
 
+## [3.0.1] - 2026-08-07
+
+### Security
+
+- **Policy plugins declared in `.flectorc` are no longer loaded**
+  ([GHSA-wq8m-fc3q-8m5x], critical). A pull request that added a `.flectorc`
+  with a `plugins` entry achieved **arbitrary code execution on the CI runner** —
+  `flecto ci` is what teams run on pull requests, and it honoured the attacker's
+  config with no opt-in, no allowlist, and no path containment. The attacker's
+  code ran with whatever the workflow exposed, including `GITHUB_TOKEN`, and the
+  path was not contained, so `../../../../tmp/x.mjs` loaded a module from
+  anywhere on disk.
+
+  Plugins now load only from an explicit `--plugins` flag. If a config file is
+  genuinely trusted, set `FLECTO_ALLOW_RC_PLUGINS=1`; even then an rc-declared
+  plugin must live inside the working directory. Flecto **fails loudly** rather
+  than skipping the plugin silently, because a policy plugin that stopped running
+  without saying so would quietly weaken a gate the operator believes is
+  enforced.
+
+  Policy *packs* are declarative and were never affected. `--plugins` is
+  unchanged, including paths outside the project, since the flag is operator
+  intent rather than attacker input.
+
+  **If you run Flecto on untrusted pull requests, upgrade.** If you rely on
+  `plugins` in `.flectorc`, move it to `--plugins` or set the opt-in.
+
+  The trust boundary is now documented in [plugin authoring](docs/plugins.md);
+  it previously was not stated anywhere.
+
+
 ## [3.0.0] - 2026-08-06
 
 ### Migration notes
@@ -472,7 +503,8 @@ fixed — those runs were never actually gated — but the failure is new.
 - Misconfigured policy packs/plugins cause `watch` to exit non-zero instead of
   continuing with no policies.
 
-[Unreleased]: https://github.com/myselfsiddharth/Flecto/compare/v3.0.0...HEAD
+[Unreleased]: https://github.com/myselfsiddharth/Flecto/compare/v3.0.1...HEAD
+[3.0.1]: https://github.com/myselfsiddharth/Flecto/compare/v3.0.0...v3.0.1
 [3.0.0]: https://github.com/myselfsiddharth/Flecto/compare/v2.1.0...v3.0.0
 [2.1.0]: https://github.com/myselfsiddharth/Flecto/compare/v2.0.0...v2.1.0
 [#6]: https://github.com/myselfsiddharth/Flecto/issues/6
@@ -531,3 +563,4 @@ fixed — those runs were never actually gated — but the failure is new.
 [#110]: https://github.com/myselfsiddharth/Flecto/issues/110
 [Keep a Changelog]: https://keepachangelog.com/en/1.1.0/
 [Semantic Versioning]: https://semver.org/spec/v2.0.0.html
+[GHSA-wq8m-fc3q-8m5x]: https://github.com/myselfsiddharth/Flecto/security/advisories/GHSA-wq8m-fc3q-8m5x

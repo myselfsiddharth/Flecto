@@ -4,9 +4,9 @@
 
 | Version | Supported |
 |---|---|
-| 2.x | Yes |
-| 1.x | Best-effort (security fixes may be backported when practical) |
-| < 1.0 | No |
+| 3.x | Yes |
+| 2.x | Best-effort (security fixes may be backported when practical) |
+| < 2.0 | No |
 
 ## Reporting a vulnerability
 

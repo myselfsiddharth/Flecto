@@ -484,8 +484,9 @@ program
     try {
       const { config } = loadRcConfig(process.cwd());
       const profile = resolveProfileName(opts.profile);
-      const effective = resolveEffectiveOptions(config, profile, stripUnsetCliOverrides(opts, command));
-      const { policies, plugins, severityRemap } = resolvePolicyOptions(effective);
+      const cliOverrides = stripUnsetCliOverrides(opts, command);
+      const effective = resolveEffectiveOptions(config, profile, cliOverrides);
+      const { policies, plugins, severityRemap } = resolvePolicyOptions(effective, { pluginsFromCli: cliOverrides.plugins !== undefined });
       const targets = (await resolveTargetFiles(files, config)).map((f) => resolve(f));
       if (targets.length === 0) {
         throw new Error('No files matched. Provide files or configure .flectorc files/include.');
@@ -682,7 +683,8 @@ program
 
       const { config } = loadRcConfig(process.cwd());
       const profile = resolveProfileName(opts.profile);
-      const effective = resolveEffectiveOptions(config, profile, stripUnsetCliOverrides(opts, command));
+      const cliOverrides = stripUnsetCliOverrides(opts, command);
+      const effective = resolveEffectiveOptions(config, profile, cliOverrides);
       const ignorePaths = parseCsv(effective.ignore);
       const dOpts = diffOptionsFromEffective(effective, ignorePaths);
 
@@ -732,8 +734,9 @@ program
     try {
       const { config } = loadRcConfig(process.cwd());
       const profile = resolveProfileName(opts.profile);
-      const effective = resolveEffectiveOptions(config, profile, stripUnsetCliOverrides(opts, command));
-      const { policies: packIds, plugins, severityRemap } = resolvePolicyOptions(effective);
+      const cliOverrides = stripUnsetCliOverrides(opts, command);
+      const effective = resolveEffectiveOptions(config, profile, cliOverrides);
+      const { policies: packIds, plugins, severityRemap } = resolvePolicyOptions(effective, { pluginsFromCli: cliOverrides.plugins !== undefined });
 
       const limit = Number.parseInt(String(effective.limit ?? '10'), 10);
       if (!Number.isInteger(limit) || limit < 1) {
@@ -826,8 +829,9 @@ program
     try {
       const { config } = loadRcConfig(process.cwd());
       const profile = resolveProfileName(opts.profile);
-      const effective = resolveEffectiveOptions(config, profile, stripUnsetCliOverrides(opts, command));
-      const { policies: packIds, plugins, severityRemap } = resolvePolicyOptions(effective);
+      const cliOverrides = stripUnsetCliOverrides(opts, command);
+      const effective = resolveEffectiveOptions(config, profile, cliOverrides);
+      const { policies: packIds, plugins, severityRemap } = resolvePolicyOptions(effective, { pluginsFromCli: cliOverrides.plugins !== undefined });
       const targets = (await resolveTargetFiles(files, config)).map((f) => resolve(f));
       if (targets.length === 0) {
         throw new Error('No files matched. Provide files or configure .flectorc files/include.');
@@ -932,7 +936,8 @@ program
     try {
       const { config } = loadRcConfig(process.cwd());
       const profile = resolveProfileName(opts.profile);
-      const effective = resolveEffectiveOptions(config, profile, stripUnsetCliOverrides(opts, command));
+      const cliOverrides = stripUnsetCliOverrides(opts, command);
+      const effective = resolveEffectiveOptions(config, profile, cliOverrides);
       // A plan carries Terraform-shaped paths, so the config-file packs are not
       // the useful default here; `terraform` is. An explicit --policies or a
       // .flectorc entry still wins.
@@ -940,6 +945,7 @@ program
         effective.policies === undefined
           ? { ...effective, policies: PLAN_DEFAULT_POLICIES }
           : effective,
+        { pluginsFromCli: cliOverrides.plugins !== undefined },
       );
 
       const ignorePaths = parseCsv(effective.ignore);
@@ -1036,8 +1042,9 @@ program
     try {
       const { config } = loadRcConfig(process.cwd());
       const profile = resolveProfileName(opts.profile);
-      const effective = resolveEffectiveOptions(config, profile, stripUnsetCliOverrides(opts, command));
-      const { policies: packIds, plugins, severityRemap } = resolvePolicyOptions(effective);
+      const cliOverrides = stripUnsetCliOverrides(opts, command);
+      const effective = resolveEffectiveOptions(config, profile, cliOverrides);
+      const { policies: packIds, plugins, severityRemap } = resolvePolicyOptions(effective, { pluginsFromCli: cliOverrides.plugins !== undefined });
 
       const ignorePaths = parseCsv(effective.ignore);
       const failOn = parseFailOn(effective.failOn ?? 'changed,added,removed,policy,error');
