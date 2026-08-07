@@ -139,7 +139,7 @@ describe('bundled GitHub Actions', () => {
     // Empty, not HEAD~1: the baseline is resolved from the pull request.
     assert.equal(inputs['snapshot-ref'].default, '');
     assert.equal(inputs['node-version'].default, '20');
-    assert.equal(inputs['flecto-version'].default, '2');
+    assert.equal(inputs['flecto-version'].default, '3');
 
     for (const [name, spec] of Object.entries(inputs)) {
       assert.equal(spec.required, false, `${name}: nothing is required`);

@@ -107,11 +107,19 @@ Plan JSON carries `before_sensitive` / `after_sensitive` alongside the values
 themselves — Terraform's human renderer uses them to decide what to hide, but
 the values are right there in the JSON.
 
-Flecto replaces every value at a sensitive position with `(sensitive value)`
-**during parsing**, before the policy engine, the envelope, or any formatter can
-see it. This is unconditional: it does not depend on `--mask-secrets`, and there
-is no flag to turn it off. A value Terraform refuses to print is not going to
-leak through a Flecto PR comment or a CI log.
+`flecto plan` replaces every value at a sensitive position with
+`(sensitive value)` **during parsing**, before the policy engine, the envelope,
+or any formatter can see it. Within `flecto plan` this is unconditional: it does
+not depend on `--mask-secrets`, and there is no flag to turn it off.
+
+> **The redaction lives in `flecto plan` only.** A plan file is ordinary JSON, so
+> pointing another command at one — `flecto ci "**/*.json"`, a committed
+> `tfplan.json` swept up by a `.flectorc` `files` pattern, `watch`, `compare`, or
+> `report` — reads it as a plain config tree and **will print the sensitive
+> values**. `--mask-secrets` only helps when the attribute name happens to look
+> sensitive (`password` does, `user_data` does not). Always read plan JSON with
+> `flecto plan`, and keep `*.tfplan.json` out of the globs your other commands
+> watch. Tracked in [#113](https://github.com/myselfsiddharth/Flecto/issues/113).
 
 A few consequences worth knowing:
 
@@ -178,7 +186,7 @@ engine. Override severities per profile with `severityRemap`, or drop
     terraform show -json plan.tfplan > plan.json
 
 - name: Flecto plan review
-  run: npx --yes flecto@2 plan plan.json --format pr-comment --pr-comment-post
+  run: npx --yes flecto@3 plan plan.json --format pr-comment --pr-comment-post
   env:
     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```
