@@ -2,6 +2,28 @@
 
 Plugins implement policy logic that a declarative pack cannot express. A plugin is a local ESM module that exports an `evaluate(changes, ctx)` function.
 
+> ### A plugin executes code — treat it as trusted input
+>
+> Flecto imports the module and runs it in its own process. It can read files,
+> reach the network, and see every environment variable the run has, including
+> `GITHUB_TOKEN` in CI. That is the point of a plugin, but it makes the source of
+> a plugin path a security boundary.
+>
+> **Plugins declared in `.flectorc` are refused by default.** A `.flectorc` can
+> arrive in a pull request, so honouring it would let any contributor run code on
+> your CI runner. Pass plugins on the command line instead:
+>
+> ```bash
+> flecto ci "config/**/*.yaml" --plugins ./policies/replica-limit.js
+> ```
+>
+> If the config file is genuinely trusted — your own repo, no untrusted pull
+> requests — opt in with `FLECTO_ALLOW_RC_PLUGINS=1`. Even then, an rc-declared
+> plugin must live inside the directory Flecto is running in.
+>
+> Policy **packs** are declarative and are never executed, so prefer a pack when
+> one can express the rule. See [policy packs](policy-packs.md).
+
 Run the complete example:
 
 ```bash
