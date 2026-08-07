@@ -365,7 +365,7 @@ const packCache = new Map();
  * @returns {string}
  */
 function packCacheKey(cwd, path, mtimeMs) {
-  return `${resolve(cwd)} ${path} ${mtimeMs}`;
+  return `${resolve(cwd)}\u0000${path}\u0000${mtimeMs}`;
 }
 
 /**
