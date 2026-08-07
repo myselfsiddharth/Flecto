@@ -262,7 +262,7 @@ The format is based on [Keep a Changelog], and this project adheres to
   (median across two 15-run sessions: ~38 ms to ~15 ms); end-to-end `flecto ci`
   wall time improves more modestly and closer to the harness's documented ±10%
   run-to-run noise. See [docs/performance.md](docs/performance.md).
-  ([#92], [#93])
+  ([#92], [#93]) ([#108])
 
 ### Fixed
 
@@ -349,7 +349,7 @@ The format is based on [Keep a Changelog], and this project adheres to
   back-references now normalize to a fixed `"<circular>"` sentinel, so the
   rest of the file parses, snapshots, and diffs normally, two files with the
   same cycle shape compare equal, and merge keys (`<<: *base`), which resolve
-  to an ordinary acyclic tree, are unaffected. ([#103])
+  to an ordinary acyclic tree, are unaffected. ([#103]) ([#107])
 
 ## [2.1.0] - 2026-07-24
 
@@ -467,6 +467,8 @@ The format is based on [Keep a Changelog], and this project adheres to
 [#98]: https://github.com/myselfsiddharth/Flecto/issues/98
 [#103]: https://github.com/myselfsiddharth/Flecto/issues/103
 [#104]: https://github.com/myselfsiddharth/Flecto/issues/104
+[#107]: https://github.com/myselfsiddharth/Flecto/pull/107
+[#108]: https://github.com/myselfsiddharth/Flecto/pull/108
 [#109]: https://github.com/myselfsiddharth/Flecto/issues/109
 [#110]: https://github.com/myselfsiddharth/Flecto/issues/110
 [Keep a Changelog]: https://keepachangelog.com/en/1.1.0/
