@@ -4,6 +4,7 @@ import yaml from 'js-yaml';
 import TOML from '@iarna/toml';
 import dotenv from 'dotenv';
 import { isArmoredAgeFile, normalizeEncrypted, opaqueFileState } from './encrypted.js';
+import { documentKeysOf, withDocumentKeys } from './documents.js';
 
 const SUPPORTED_EXT = ['.json', '.yaml', '.yml', '.toml', '.env', '.ini', '.age'];
 
@@ -198,6 +199,10 @@ function documentKeys(docs) {
  * parses to an object keyed per document, which lets the differ walk it like
  * any other tree. Empty documents (a leading or trailing `---`, or a `null`
  * document) are dropped, so a stray separator does not create a phantom entry.
+ *
+ * The keys it invents are recorded on the wrapper (see documents.js) so that
+ * everything downstream can tell a synthetic document prefix from a real
+ * configuration key without having to guess from its shape.
  * @param {string} raw
  * @returns {unknown}
  * @throws {Error} on YAML syntax errors
@@ -205,8 +210,8 @@ function documentKeys(docs) {
 export function parseYamlStream(raw) {
   const docs = yaml.loadAll(raw).filter((doc) => doc != null);
 
-  if (docs.length === 0) return {};
-  if (docs.length === 1) return docs[0];
+  if (docs.length === 0) return withDocumentKeys({}, []);
+  if (docs.length === 1) return withDocumentKeys(docs[0], []);
 
   const keys = documentKeys(docs);
   /** @type {Record<string, unknown>} */
@@ -214,7 +219,7 @@ export function parseYamlStream(raw) {
   for (let i = 0; i < docs.length; i++) {
     out[keys[i]] = docs[i];
   }
-  return out;
+  return withDocumentKeys(out, keys);
 }
 
 /**
@@ -226,6 +231,11 @@ export function parseYamlStream(raw) {
  * nothing downstream — diff, snapshot, webhook, report — is ever handed
  * ciphertext, because the parser never produces any. A file with nothing to
  * redact comes back as the very same object.
+ *
+ * The multi-document keys invented by `parseYamlStream` are handed to the
+ * encryption pass explicitly — a SOPS block sits inside each document, not at
+ * the root — and re-recorded on the returned tree, since normalization may have
+ * replaced the object the mark was on.
  * @param {string} filepath
  * @param {string} raw
  * @returns {unknown}
@@ -272,7 +282,8 @@ export function parseContent(filepath, raw) {
     );
   }
 
-  return normalizeEncrypted(normalizeParsedValue(parsed));
+  const keys = documentKeysOf(parsed) ?? [];
+  return withDocumentKeys(normalizeEncrypted(normalizeParsedValue(parsed), keys), keys);
 }
 
 /**

@@ -88,7 +88,11 @@ const RECIPIENT_ID_FIELDS = {
   pgp: ['fp'],
 };
 
-/** Paths whose change means "the SOPS MAC moved". */
+/**
+ * Paths whose change means "the SOPS MAC moved", relative to the document that
+ * owns the metadata block — the file root for an ordinary file, one document
+ * down for a multi-document one.
+ */
 const MAC_PATHS = new Set(['sops.mac', 'sops_mac']);
 
 /**
@@ -215,11 +219,45 @@ function hasFlatSopsMetadata(tree) {
 }
 
 /**
+ * Top-level keys whose value carries a SOPS metadata block of its own.
+ *
+ * This is what a multi-document file looks like once `parseYamlStream` has
+ * wrapped its documents: the `sops` block of each `kind: Secret` sits one level
+ * down, under the document's identity key. Detection is by content —
+ * {@link looksLikeSopsMetadata}, which wants a version plus two more signals —
+ * and never by the shape of the key, so a config whose top-level keys happen to
+ * read like `Kind/ns/name` is not affected unless it genuinely contains a SOPS
+ * metadata block, in which case calling it encrypted is the right answer.
+ *
+ * Content rather than the parser's own multi-document signal, because this runs
+ * at diff time on trees that may have been read back out of a JSON snapshot,
+ * where no in-memory signal can have survived. Both sides of every diff are
+ * therefore judged by the same rule, which is what keeps a snapshot baseline
+ * from disagreeing with a freshly parsed file about whether a file is
+ * encrypted.
+ * @param {unknown} tree
+ * @returns {string[]}
+ */
+function sopsDocumentKeys(tree) {
+  if (!isPlainObject(tree)) return [];
+  const keys = [];
+  for (const [key, doc] of Object.entries(tree)) {
+    if (isPlainObject(doc) && looksLikeSopsMetadata(doc.sops)) keys.push(key);
+  }
+  return keys;
+}
+
+/**
  * The encryption state of an already-normalized tree.
  *
- * Deliberately O(1): it looks only at the root, never walking the tree. Every
- * diff runs this on both sides, and an ordinary config must not pay for a
- * feature it does not use.
+ * Cheap by construction: the root checks are O(1) and the per-document scan is
+ * one property read per top-level key, each of which bails out immediately
+ * unless that key holds a genuine SOPS metadata block. Every diff runs this on
+ * both sides, and an ordinary config must not pay for a feature it does not use.
+ *
+ * A multi-document file counts as encrypted when *any* of its documents is —
+ * the same reading as the single-document case, where one `sops` block makes
+ * the file encrypted. Losing it everywhere is what raises `<encryption>`.
  * @param {unknown} tree
  * @returns {EncryptionState}
  */
@@ -228,7 +266,7 @@ export function encryptionState(tree) {
   if (!isPlainObject(tree)) return 'plaintext';
   if (looksLikeSopsMetadata(tree.sops)) return 'sops';
   if (hasFlatSopsMetadata(tree)) return 'sops';
-  return 'plaintext';
+  return sopsDocumentKeys(tree).length > 0 ? 'sops' : 'plaintext';
 }
 
 /**
@@ -358,21 +396,49 @@ function normalizeSopsBlock(block) {
 }
 
 /**
+ * Replace `owner.sops` with its recipient-normalized form, or return `owner`
+ * itself when nothing needed re-keying.
+ * @param {Record<string, unknown>} owner
+ * @returns {Record<string, unknown>}
+ */
+function normalizeSopsOwner(owner) {
+  if (!looksLikeSopsMetadata(owner.sops)) return owner;
+  const sops = normalizeSopsBlock(/** @type {Record<string, unknown>} */ (owner.sops));
+  // Spreading first keeps `sops` in its original position among the keys.
+  return sops === owner.sops ? owner : { ...owner, sops };
+}
+
+/**
  * The parser's entry point: make a freshly parsed tree safe to carry.
  *
  * Returns the argument itself when the file holds no ciphertext, so an ordinary
  * config is not merely equal to what it used to be — it is the same object.
+ *
+ * `documentKeys` are the synthetic keys `parseYamlStream` invented for a
+ * multi-document file. They are threaded in rather than rediscovered because
+ * this pass *rewrites diff paths* — it re-keys recipient arrays by identity —
+ * and that must happen for a document the parser really produced and nowhere
+ * else. A single-document config that merely embeds something SOPS-shaped keeps
+ * the paths it has always had.
  * @param {unknown} tree
+ * @param {readonly string[]} [documentKeys]
  * @returns {unknown}
  */
-export function normalizeEncrypted(tree) {
+export function normalizeEncrypted(tree, documentKeys = []) {
   const redacted = redactCiphertext(tree);
-  if (!isPlainObject(redacted) || !looksLikeSopsMetadata(redacted.sops)) return redacted;
+  if (!isPlainObject(redacted)) return redacted;
 
-  const sops = normalizeSopsBlock(/** @type {Record<string, unknown>} */ (redacted.sops));
-  if (sops === redacted.sops) return redacted;
-  // Spreading first keeps `sops` in its original position among the keys.
-  return { ...redacted, sops };
+  let out = normalizeSopsOwner(redacted);
+  for (const key of documentKeys) {
+    if (!Object.prototype.hasOwnProperty.call(out, key)) continue;
+    const doc = out[key];
+    if (!isPlainObject(doc)) continue;
+    const normalized = normalizeSopsOwner(doc);
+    if (normalized === doc) continue;
+    if (out === redacted) out = { ...redacted };
+    out[key] = normalized;
+  }
+  return out;
 }
 
 /**
@@ -398,6 +464,26 @@ function isSopsMetadataPath(path) {
 }
 
 /**
+ * The metadata-relative form of a diff path: the path as the document that owns
+ * the `sops` block sees it. `sops.mac` for an ordinary file,
+ * `ConfigMap/prod/billing.sops.mac` → `sops.mac` for a multi-document one.
+ *
+ * `prefixes` are the top-level keys that carry their own metadata block, so a
+ * document without one never has its paths rewritten.
+ * @param {string} path
+ * @param {string[]} prefixes
+ * @returns {string}
+ */
+function metadataRelativePath(path, prefixes) {
+  for (const prefix of prefixes) {
+    if (path.startsWith(prefix) && path[prefix.length] === '.') {
+      return path.slice(prefix.length + 1);
+    }
+  }
+  return path;
+}
+
+/**
  * @param {EncryptionState} before
  * @param {EncryptionState} after
  * @returns {string}
@@ -414,7 +500,10 @@ function stateNote(before, after) {
  *
  * Called by `diffTrees` for every diff. When neither side is encrypted it
  * returns the exact array it was given, so an ordinary config sees no new
- * events, no copied objects, and no measurable cost.
+ * events, no copied objects, and no measurable cost. "Encrypted" here covers a
+ * multi-document file in which any single document is — otherwise a `kind:
+ * Secret` shipped alongside a plain ConfigMap would lose every protection
+ * below.
  *
  * Three things are derived that a key-by-key walk cannot express on its own:
  *
@@ -461,8 +550,14 @@ export function annotateEncryptedChanges(before, after, events) {
   }
 
   if (beforeState !== 'plaintext' && afterState !== 'plaintext') {
-    const macChanged = events.some((event) => event.type === 'changed' && MAC_PATHS.has(event.path));
-    const payloadChanged = events.some((event) => !isSopsMetadataPath(event.path));
+    // In a multi-document file the metadata blocks live under the document
+    // keys, so read every path relative to whichever document owns one.
+    const prefixes = [...new Set([...sopsDocumentKeys(before), ...sopsDocumentKeys(after)])];
+    const relative = (path) => metadataRelativePath(path, prefixes);
+    const macChanged = events.some(
+      (event) => event.type === 'changed' && MAC_PATHS.has(relative(event.path)),
+    );
+    const payloadChanged = events.some((event) => !isSopsMetadataPath(relative(event.path)));
     if (macChanged && !payloadChanged) {
       out.push({
         type: 'changed',

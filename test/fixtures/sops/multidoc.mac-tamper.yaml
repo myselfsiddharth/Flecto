@@ -1,0 +1,32 @@
+# `multidoc.before.yaml` with only the encrypted document's MAC changed. A
+# normal edit moves a value and the MAC together, so a MAC moving on its own
+# inside a document is the same tamper signal it is at the root of a file.
+kind: ConfigMap
+metadata:
+    name: billing-config
+    namespace: prod
+data:
+    region: eu-west-1
+    pool_size: "10"
+---
+kind: Secret
+metadata:
+    name: billing
+    namespace: prod
+data:
+    dsn: ENC[AES256_GCM,data:ZmFrZTA=,iv:ZmFrZQ==,tag:ZmFrZQ==,type:str]
+sops:
+    kms: []
+    gcp_kms: []
+    azure_kv: []
+    hc_vault: []
+    age:
+        - recipient: age1exampleexampleexampleexampleexampleexampleexample000000
+          enc: |
+            -----BEGIN AGE ENCRYPTED FILE-----
+            ZmFrZWZha2VmYWtlZmFrZQ==
+            -----END AGE ENCRYPTED FILE-----
+    lastmodified: "2026-01-04T10:15:00Z"
+    mac: ENC[AES256_GCM,data:bWFjMQ==,iv:ZmFrZQ==,tag:ZmFrZQ==,type:str]
+    encrypted_regex: ^(dsn)$
+    version: 3.9.0

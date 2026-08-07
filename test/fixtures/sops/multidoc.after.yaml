@@ -1,0 +1,39 @@
+# The pull request every SOPS protection exists to stop, in multi-document
+# form: the Secret's value committed in the clear, an unfamiliar age recipient
+# inserted at the front of the key list, and an ordinary ConfigMap edit beside
+# them so the diff is not obviously suspicious. The exposed value is invented
+# for the fixture and is not a credential for anything.
+kind: ConfigMap
+metadata:
+    name: billing-config
+    namespace: prod
+data:
+    region: eu-west-1
+    pool_size: "40"
+---
+kind: Secret
+metadata:
+    name: billing
+    namespace: prod
+data:
+    dsn: not-a-real-exposed-dsn
+sops:
+    kms: []
+    gcp_kms: []
+    azure_kv: []
+    hc_vault: []
+    age:
+        - recipient: age1newcomernewcomernewcomernewcomernewcomernewcomer000000
+          enc: |
+            -----BEGIN AGE ENCRYPTED FILE-----
+            ZmFrZW5ld2NvbWVyZmFrZQ==
+            -----END AGE ENCRYPTED FILE-----
+        - recipient: age1exampleexampleexampleexampleexampleexampleexample000000
+          enc: |
+            -----BEGIN AGE ENCRYPTED FILE-----
+            ZmFrZWZha2VmYWtlZmFrZQ==
+            -----END AGE ENCRYPTED FILE-----
+    lastmodified: "2026-01-04T10:15:00Z"
+    mac: ENC[AES256_GCM,data:bWFjMA==,iv:ZmFrZQ==,tag:ZmFrZQ==,type:str]
+    encrypted_regex: ^(dsn)$
+    version: 3.9.0

@@ -146,6 +146,24 @@ but the new value is replaced with `<no longer encrypted>`. The point of the
 event is that the value was exposed; printing it into a CI log would expose it
 again, to a wider audience.
 
+### Multi-document files
+
+A `---`-separated file — the shape Kubernetes secrets ship in — is handled per
+document. Each document is inspected for its own `sops` metadata block, so a
+`kind: Secret` travelling alongside a plain ConfigMap keeps every protection
+above: its ciphertext is redacted, its recipient groups are re-keyed by
+identity, and a value committed in the clear is withheld behind
+`<no longer encrypted>`. Paths carry the document identity in front, and the
+`sops` pack rules match there too:
+
+```
+  ~ Secret/prod/billing.data.dsn: <encrypted value> → "<no longer encrypted>" [value is no longer encrypted]
+  + Secret/prod/billing.sops.age.age1newcomernewcomer…: {"recipient":"age1newcomernewcomer…","enc":"<encrypted value>"}
+```
+
+`<encryption>` stays a file-level signal: it fires when the *file* stops
+carrying any encrypted document at all.
+
 ## What is deliberately *not* reported
 
 - **Plaintext of any encrypted value.** There is no code path that could
@@ -209,10 +227,6 @@ warning rather than an error.
 
 ## Limitations
 
-- **Multi-document YAML.** A `---`-separated file gets its ciphertext redacted
-  normally, but recipient re-keying and the `<encryption>` signal look at the
-  top level only, so they do not apply per document. SOPS does not support
-  multi-document YAML either.
 - **SOPS dotenv and INI format.** The flat `sops_*` metadata is detected, and
   `ENC[…]` values are redacted, but the flattened key groups
   (`sops_age__list_0__map_enc` and friends) are not re-keyed by recipient. A

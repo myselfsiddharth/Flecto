@@ -1,8 +1,51 @@
 import { annotateEncryptedChanges } from './encrypted.js';
+import { diffDocumentKeys, stripDocumentPrefix } from './documents.js';
 
 /**
  * @typedef {{ type: 'added' | 'removed' | 'changed', path: string, before?: unknown, after?: unknown, note?: string }} ChangeEvent
  */
+
+/**
+ * Where an event's path carries a synthetic multi-document prefix, the same
+ * path without it. Recorded non-enumerably so the event stays byte-identical
+ * everywhere it is serialized — JSON output, webhook payloads, snapshots.
+ */
+const SECRET_MATCH_PATH = Symbol.for('flecto.secretMatchPath');
+
+/**
+ * The path to match secret-looking *key names* against.
+ *
+ * For an ordinary file this is just `event.path`. For a multi-document file it
+ * is the path with the document identity removed, because that identity is a
+ * resource name — user data — and a Deployment called `token-service` must not
+ * make every value inside it read as a secret. See documents.js.
+ * @param {ChangeEvent} event
+ * @returns {string}
+ */
+export function secretMatchPath(event) {
+  const stripped = /** @type {Record<string | symbol, unknown>} */ (event)?.[SECRET_MATCH_PATH];
+  return typeof stripped === 'string' ? stripped : (event?.path ?? '');
+}
+
+/**
+ * @param {ChangeEvent[]} events
+ * @param {readonly string[]} documentKeys
+ * @returns {ChangeEvent[]}
+ */
+function tagSecretMatchPaths(events, documentKeys) {
+  if (documentKeys.length === 0) return events;
+  for (const event of events) {
+    const stripped = stripDocumentPrefix(event.path, documentKeys);
+    if (stripped === event.path) continue;
+    Object.defineProperty(event, SECRET_MATCH_PATH, {
+      value: stripped,
+      enumerable: false,
+      writable: false,
+      configurable: true,
+    });
+  }
+  return events;
+}
 
 /**
  * Checks whether a value is a plain object (not array, not null).
@@ -419,5 +462,10 @@ export function diffTrees(before, after, options = {}) {
   // no-op — the same array, untouched — when neither side is encrypted.
   // Ignore patterns are applied afterwards so `--ignore` silences the derived
   // paths exactly like any other.
-  return annotateEncryptedChanges(before, after, events).filter(e => !ignore(e.path));
+  const annotated = annotateEncryptedChanges(before, after, events).filter(e => !ignore(e.path));
+
+  // Multi-document paths carry a resource name in front. Record what secret-name
+  // matching should look at, once, here — the renderers see events and nothing
+  // else, and a resource name must never decide whether a value gets masked.
+  return tagSecretMatchPaths(annotated, diffDocumentKeys(before, after));
 }

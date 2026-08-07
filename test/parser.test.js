@@ -6,6 +6,7 @@ import { tmpdir } from 'os';
 import { spawnSync } from 'child_process';
 import { parseContent, parseYamlStream, CIRCULAR_SENTINEL } from '../src/parser.js';
 import { diffTrees } from '../src/differ.js';
+import { documentKeysOf, stripDocumentPrefix, withDocumentKeys } from '../src/documents.js';
 
 const DEPLOYMENT = `apiVersion: apps/v1
 kind: Deployment
@@ -324,6 +325,66 @@ describe('multi-document YAML diffs', () => {
     );
     const events = diffTrees(before, after, { ignorePaths: ['Deployment/api'] });
     assert.equal(events.length, 0);
+  });
+});
+
+describe('the parser records which keys it invented', () => {
+  test('a multi-document wrapper carries its document keys', () => {
+    const parsed = parseContent('manifest.yaml', `${DEPLOYMENT}---\n${SERVICE}`);
+    assert.deepEqual([...documentKeysOf(parsed)], ['Deployment/api', 'Service/api']);
+  });
+
+  test('a single document records that it is not a wrapper', () => {
+    assert.deepEqual([...documentKeysOf(parseContent('config.yaml', 'port: 3000\n'))], []);
+    assert.deepEqual([...documentKeysOf(parseContent('config.json', '{"port":3000}'))], []);
+  });
+
+  test('an unmarked tree — one read back out of a snapshot — reports unknown', () => {
+    assert.equal(documentKeysOf(JSON.parse('{"a":1}')), null);
+    assert.equal(documentKeysOf('scalar'), null);
+    assert.equal(documentKeysOf(null), null);
+  });
+
+  test('the record is invisible to everything that serializes or compares a tree', () => {
+    const raw = `${DEPLOYMENT}---\n${SERVICE}`;
+    const parsed = parseContent('manifest.yaml', raw);
+    assert.deepEqual(Object.keys(parsed), ['Deployment/api', 'Service/api']);
+    assert.equal(
+      JSON.stringify(parsed),
+      JSON.stringify(JSON.parse(JSON.stringify(parsed))),
+    );
+    // deepEqual compares own *enumerable* properties, so a marked tree still
+    // equals the plain object a snapshot round trip produces.
+    assert.deepEqual(parsed, JSON.parse(JSON.stringify(parsed)));
+  });
+
+  test('index-keyed documents are recorded too', () => {
+    assert.deepEqual([...documentKeysOf(parseYamlStream('a: 1\n---\nb: 2\n'))], ['0', '1']);
+  });
+
+  test('stripDocumentPrefix removes only a whole leading document key', () => {
+    const keys = ['Deployment/prod/token-service'];
+    assert.equal(
+      stripDocumentPrefix('Deployment/prod/token-service.spec.replicas', keys),
+      'spec.replicas',
+    );
+    assert.equal(stripDocumentPrefix('Deployment/prod/token-service', keys), '');
+    assert.equal(stripDocumentPrefix('Deployment/prod/token-service[0]', keys), '[0]');
+    // A key that merely starts with the same text is a different key.
+    assert.equal(
+      stripDocumentPrefix('Deployment/prod/token-service-2.spec', keys),
+      'Deployment/prod/token-service-2.spec',
+    );
+    assert.equal(stripDocumentPrefix('spec.replicas', keys), 'spec.replicas');
+    assert.equal(stripDocumentPrefix('spec.replicas', null), 'spec.replicas');
+    assert.equal(stripDocumentPrefix('spec.replicas', []), 'spec.replicas');
+  });
+
+  test('withDocumentKeys leaves non-objects alone and returns the same object', () => {
+    assert.equal(withDocumentKeys(42, ['a']), 42);
+    assert.equal(withDocumentKeys(null, ['a']), null);
+    const tree = { a: 1 };
+    assert.equal(withDocumentKeys(tree, ['a']), tree);
   });
 });
 

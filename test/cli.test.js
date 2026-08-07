@@ -993,6 +993,52 @@ test('watch --diff --mask-secrets redacts nested secrets in terminal output', ()
   }
 });
 
+test('a snapshot of a multi-document file carries its document keys (#110)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-multidoc-mask-'));
+  const file = join(dir, 'manifest.yaml');
+  const rootIndex = resolve(process.cwd(), 'index.js');
+  const manifest = (replicas, token) => [
+    'kind: Deployment',
+    'metadata:',
+    '  name: token-service',
+    '  namespace: prod',
+    'spec:',
+    `  replicas: ${replicas}`,
+    '---',
+    'kind: Secret',
+    'metadata:',
+    '  name: db',
+    '  namespace: prod',
+    'stringData:',
+    `  token: ${token}`,
+    '',
+  ].join('\n');
+
+  try {
+    writeFileSync(file, manifest(2, 'not-a-real-token'), 'utf8');
+    assert.equal(
+      spawnSync(process.execPath, [rootIndex, 'watch', file, '--snapshot'], { cwd: dir }).status,
+      0,
+    );
+    writeFileSync(file, manifest(9, 'not-a-real-rotated-token'), 'utf8');
+
+    const diff = spawnSync(
+      process.execPath,
+      [rootIndex, 'watch', file, '--diff', '--mask-secrets'],
+      { cwd: dir, encoding: 'utf8' },
+    );
+
+    assert.equal(diff.status, 1);
+    // The Deployment is *named* token-service; its replica count is not a secret.
+    assert.match(diff.stdout, /Deployment\/prod\/token-service\.spec\.replicas: 2 → 9/);
+    // The Secret's value is.
+    assert.doesNotMatch(diff.stdout, /not-a-real-rotated-token/);
+    assert.match(diff.stdout, /Secret\/prod\/db\.stringData\.token: "\*\*\*" → "\*\*\*"/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('watch --webhook-format slack posts a masked Block Kit payload', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-webhook-format-'));
   const file = join(dir, 'config.json');
