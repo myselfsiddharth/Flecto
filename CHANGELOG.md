@@ -7,6 +7,21 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- Inline suppressions: `# flecto-ignore-next-line <rule> — <reason>` on the line
+  above a deliberate finding accepts that one finding in place, the companion to
+  the baseline's bulk acceptance. **A reason is mandatory** — a directive without
+  one is refused with a pointer to the file and line, never silently applied or
+  dropped — so a repo does not accumulate unexplained suppressions. It is scoped
+  to the next line and the named rule, and resolves to that line's full key path
+  (nesting for YAML, section/table for INI/TOML, flat for dotenv), so a
+  suppression on one `pool_size` cannot hide an uncommented `pool_size` elsewhere
+  in the file. Works in every commented format Flecto parses (YAML, TOML, INI,
+  dotenv); JSON has no comments, so use the baseline there. Suppressed findings
+  are still surfaced — a count by default, the full list with `--show-suppressed`
+  — so the gate stays legible. ([#119])
+
 ## [3.0.1] - 2026-08-07
 
 ### Security
@@ -561,6 +576,7 @@ fixed — those runs were never actually gated — but the failure is new.
 [#108]: https://github.com/myselfsiddharth/Flecto/pull/108
 [#109]: https://github.com/myselfsiddharth/Flecto/issues/109
 [#110]: https://github.com/myselfsiddharth/Flecto/issues/110
+[#119]: https://github.com/myselfsiddharth/Flecto/issues/119
 [Keep a Changelog]: https://keepachangelog.com/en/1.1.0/
 [Semantic Versioning]: https://semver.org/spec/v2.0.0.html
 [GHSA-wq8m-fc3q-8m5x]: https://github.com/myselfsiddharth/Flecto/security/advisories/GHSA-wq8m-fc3q-8m5x

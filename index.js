@@ -35,6 +35,11 @@ import { fireAlerts } from './src/alerter.js';
 import { resolveWebhookFormat, WEBHOOK_FORMAT_CHOICES } from './src/notifiers.js';
 import { createEnvelope } from './src/envelope.js';
 import {
+  suppressionFormat,
+  parseSuppressions,
+  applySuppressions,
+} from './src/suppressions.js';
+import {
   evaluatePolicies,
   highestSeverity,
   listPolicyPacks,
@@ -374,6 +379,34 @@ function shouldFailFromPolicy(findings, failOn) {
   if (failOn.has('error') && highestSeverity(findings) === 'error') return true;
   if (failOn.has('warn') && (highestSeverity(findings) === 'warn' || highestSeverity(findings) === 'error')) return true;
   return false;
+}
+
+/**
+ * Parse a file's inline suppressions and split its findings into active and
+ * suppressed. A directive missing its mandatory reason is a hard error: applying
+ * it would hide a finding with no justification, and skipping it silently would
+ * fail the build confusingly. JSON (no comment syntax) has no suppressions.
+ * @param {string} filepath
+ * @param {import('./src/policy.js').PolicyFinding[]} findings
+ * @returns {{ active: any[], suppressed: Array<{ finding: any, reason: string }> }}
+ */
+function resolveSuppressed(filepath, findings) {
+  const format = suppressionFormat(filepath);
+  if (!format) return { active: findings, suppressed: [] };
+
+  let raw;
+  try {
+    raw = readFileSync(filepath, 'utf8');
+  } catch {
+    return { active: findings, suppressed: [] };
+  }
+  const { suppressions, errors } = parseSuppressions(raw, format);
+  if (errors.length > 0) {
+    const rel = relative(process.cwd(), filepath) || filepath;
+    const detail = errors.map((e) => `  ${rel}:${e.line}: ${e.message}`).join('\n');
+    throw new Error(`Inline suppression is missing a required reason:\n${detail}`);
+  }
+  return applySuppressions(findings, suppressions);
 }
 
 function shouldFailFromChanges(events, failOn) {
@@ -824,6 +857,7 @@ program
   .option('--no-array-id', 'Diff arrays by index instead of object identity')
   .option('--array-ignore-order', 'Treat array order as insignificant', false)
   .option('--mask-secrets', 'Mask secret-like values in CI output', false)
+  .option('--show-suppressed', 'List inline-suppressed findings instead of only counting them', false)
   .option('--allow-empty', 'Allow CI to succeed when no files were diffed', false)
   .action(async (files, opts, command) => {
     try {
@@ -848,10 +882,13 @@ program
         renderWarn('Ignoring --pr-comment-post: it only applies to --format pr-comment.');
       }
       const maskSecrets = Boolean(effective.maskSecrets);
+      const showSuppressed = Boolean(effective.showSuppressed);
       const dOpts = diffOptionsFromEffective(effective, ignorePaths);
 
       /** @type {any[]} */
       const results = [];
+      /** @type {Array<{ file: string, finding: any, reason: string }>} */
+      const allSuppressed = [];
       let shouldFail = false;
       let diffed = 0;
 
@@ -875,7 +912,7 @@ program
           );
         }
         const events = diffTrees(before, after, dOpts);
-        const policyFindings = await evaluatePolicies(events, {
+        const rawFindings = await evaluatePolicies(events, {
           cwd: process.cwd(),
           file: filepath,
           profile: profile ?? null,
@@ -884,6 +921,15 @@ program
           plugins,
           severityRemap,
         });
+
+        // Inline suppressions remove a deliberately-accepted finding before the
+        // gate and the output see it. A directive missing its mandatory reason is
+        // refused loudly rather than applied — resolveSuppressed throws.
+        const { active: policyFindings, suppressed } = resolveSuppressed(filepath, rawFindings);
+        for (const item of suppressed) {
+          allSuppressed.push({ file: filepath, finding: item.finding, reason: item.reason });
+        }
+
         const outboundChanges = maybeMaskChanges(events, maskSecrets);
         const outboundFindings = maybeMaskFindings(policyFindings, events, maskSecrets);
         const envelope = createEnvelope({
@@ -905,6 +951,22 @@ program
           'No files were diffed — all targets were missing or unsupported.' +
             ' Pass --allow-empty to allow an empty CI run.',
         );
+      }
+
+      // Suppressed findings are still surfaced — a count by default, the full
+      // list with --show-suppressed — so a gate you cannot see the shape of does
+      // not quietly grow. All of this goes to stderr, leaving machine output clean.
+      if (allSuppressed.length > 0) {
+        renderNote(
+          `${allSuppressed.length} finding${allSuppressed.length === 1 ? '' : 's'} suppressed inline`
+          + `${showSuppressed ? ':' : ' (use --show-suppressed to list them).'}`,
+        );
+        if (showSuppressed) {
+          for (const { file, finding, reason } of allSuppressed) {
+            const rel = relative(process.cwd(), file) || file;
+            renderNote(`  ${rel} ${finding.path}: ${finding.id} — ${reason}`);
+          }
+        }
       }
 
       if (format === 'pr-comment') {
