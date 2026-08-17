@@ -7,6 +7,23 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- Adding a second YAML document beside an existing one no longer re-paths the
+  whole file. A lone Kubernetes-shaped document (`apiVersion` + `kind` +
+  `metadata.name`) is now keyed by identity — `kind/namespace/name` — exactly as
+  it is inside a multi-document file, so a `Service` added next to a `Deployment`
+  reads as one addition instead of reporting the untouched Deployment as removed
+  and re-added. Ordinary single-document YAML (anything without both
+  `apiVersion` and `kind`) is unchanged. ([#124])
+
+  **Migration:** paths for a *single*-document manifest change from bare
+  (`spec.replicas`) to identity-prefixed (`Deployment/prod/api.spec.replicas`).
+  Snapshots and CI baselines taken of a single manifest before this release will
+  show one-time churn on the next diff; `--ignore` entries and custom pack path
+  regexes written against the bare paths need the prefix. Multi-document files
+  and non-manifest config are unaffected.
+
 ## [3.0.1] - 2026-08-07
 
 ### Security
@@ -561,6 +578,7 @@ fixed — those runs were never actually gated — but the failure is new.
 [#108]: https://github.com/myselfsiddharth/Flecto/pull/108
 [#109]: https://github.com/myselfsiddharth/Flecto/issues/109
 [#110]: https://github.com/myselfsiddharth/Flecto/issues/110
+[#124]: https://github.com/myselfsiddharth/Flecto/issues/124
 [Keep a Changelog]: https://keepachangelog.com/en/1.1.0/
 [Semantic Versioning]: https://semver.org/spec/v2.0.0.html
 [GHSA-wq8m-fc3q-8m5x]: https://github.com/myselfsiddharth/Flecto/security/advisories/GHSA-wq8m-fc3q-8m5x

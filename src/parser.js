@@ -171,6 +171,25 @@ function documentIdentity(doc) {
 }
 
 /**
+ * True for a document that carries the Kubernetes resource markers `apiVersion`
+ * and `kind`. This is the signal used to decide whether a *single*-document file
+ * should be keyed by identity like a multi-document one (#124): a manifest that
+ * gains a second document beside it must keep the paths it had, and the only way
+ * to do that is to key it the same way whether it stands alone or not.
+ *
+ * Ordinary config that happens to have a `kind` but no `apiVersion` — a form
+ * field, say — is not treated as a manifest, so single-document config files are
+ * untouched.
+ * @param {unknown} doc
+ * @returns {boolean}
+ */
+function isKubernetesDocument(doc) {
+  return isPlainObject(doc)
+    && scalarField(doc, 'apiVersion') !== null
+    && scalarField(doc, 'kind') !== null;
+}
+
+/**
  * Keys for a multi-document file: identities when every document has a unique
  * one, otherwise document indices. It is all-or-nothing so keys within one file
  * stay homogeneous.
@@ -194,10 +213,12 @@ function documentKeys(docs) {
 /**
  * Parse a YAML stream, supporting `---`-separated multi-document files.
  *
- * A file holding a single document parses to that document unchanged, so diff
- * paths for ordinary YAML are untouched. A file holding several documents
- * parses to an object keyed per document, which lets the differ walk it like
- * any other tree. Empty documents (a leading or trailing `---`, or a `null`
+ * A file holding a single *non-manifest* document parses to that document
+ * unchanged, so diff paths for ordinary YAML are untouched. A file holding
+ * several documents — or a single Kubernetes manifest — parses to an object
+ * keyed per document, which lets the differ walk it like any other tree and,
+ * crucially, keeps a manifest's paths stable when a second document is added
+ * beside it (#124). Empty documents (a leading or trailing `---`, or a `null`
  * document) are dropped, so a stray separator does not create a phantom entry.
  *
  * The keys it invents are recorded on the wrapper (see documents.js) so that
@@ -211,7 +232,20 @@ export function parseYamlStream(raw) {
   const docs = yaml.loadAll(raw).filter((doc) => doc != null);
 
   if (docs.length === 0) return withDocumentKeys({}, []);
-  if (docs.length === 1) return withDocumentKeys(docs[0], []);
+
+  // A lone document is normally returned bare, preserving ordinary YAML paths.
+  // The exception is a Kubernetes manifest with a resolvable identity: keying it
+  // now means adding a second document later leaves its paths unchanged, instead
+  // of re-pathing the whole file and reporting the untouched resource as
+  // removed-and-re-added. Ordinary single-document config is unaffected.
+  if (docs.length === 1) {
+    const [doc] = docs;
+    const identity = isKubernetesDocument(doc) ? documentIdentity(doc) : null;
+    if (identity == null || identity === '__proto__') {
+      return withDocumentKeys(doc, []);
+    }
+    return withDocumentKeys({ [identity]: doc }, [identity]);
+  }
 
   const keys = documentKeys(docs);
   /** @type {Record<string, unknown>} */
