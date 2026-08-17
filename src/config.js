@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, writeFileSync } from 'fs';
-import { resolve } from 'path';
+import { resolve, sep } from 'path';
 import fg from 'fast-glob';
 import yaml from 'js-yaml';
 
@@ -67,23 +67,70 @@ export function resolveEffectiveOptions(config, profile, cliOverrides = {}) {
 }
 
 /**
- * Normalize policy-related effective options.
- * @param {Record<string, unknown>} effective
+ * Has the operator explicitly opted in to plugins declared in `.flectorc`?
+ * @returns {boolean}
  */
-export function resolvePolicyOptions(effective) {
-  const policiesRaw = effective.policies;
-  const pluginsRaw = effective.plugins;
+function rcPluginsAllowed() {
+  const raw = process.env.FLECTO_ALLOW_RC_PLUGINS;
+  return raw === '1' || String(raw).toLowerCase() === 'true';
+}
+
+/**
+ * Split a policy list that may arrive as an array or a comma-separated string.
+ * @param {unknown} raw
+ * @param {string[]} fallback
+ * @returns {string[]}
+ */
+function toList(raw, fallback) {
+  if (Array.isArray(raw)) return raw.map(String);
+  if (typeof raw === 'string') return raw.split(',').map((s) => s.trim()).filter(Boolean);
+  return fallback;
+}
+
+/**
+ * Normalize policy-related effective options.
+ *
+ * Plugins execute code, and `.flectorc` is attacker-controlled on an untrusted
+ * pull request, so a plugin that came from the rc file rather than an explicit
+ * `--plugins` flag is refused unless the operator opts in with
+ * `FLECTO_ALLOW_RC_PLUGINS=1`. Refusing loudly rather than skipping silently is
+ * deliberate: a plugin that stops running without saying so would weaken a
+ * policy gate the operator believes is in place. (GHSA-wq8m-fc3q-8m5x, backported
+ * from 3.0.1.)
+ * @param {Record<string, unknown>} effective
+ * @param {{ pluginsFromCli?: boolean, cwd?: string }} [provenance]
+ */
+export function resolvePolicyOptions(effective, provenance = {}) {
   const severityRemapRaw = effective.severityRemap;
-  const policies = Array.isArray(policiesRaw)
-    ? policiesRaw.map(String)
-    : typeof policiesRaw === 'string'
-      ? String(policiesRaw).split(',').map((s) => s.trim()).filter(Boolean)
-      : ['default'];
-  const plugins = Array.isArray(pluginsRaw)
-    ? pluginsRaw.map(String)
-    : typeof pluginsRaw === 'string'
-      ? String(pluginsRaw).split(',').map((s) => s.trim()).filter(Boolean)
-      : [];
+  const policies = toList(effective.policies, ['default']);
+  const plugins = toList(effective.plugins, []);
+
+  if (plugins.length > 0 && !provenance.pluginsFromCli) {
+    if (!rcPluginsAllowed()) {
+      throw new Error(
+        'Refusing to load policy plugins declared in .flectorc: plugins execute code, '
+        + 'and a config file can come from an untrusted pull request.\n'
+        + `Declared: ${plugins.join(', ')}\n`
+        + 'Pass them on the command line with --plugins instead, or set '
+        + 'FLECTO_ALLOW_RC_PLUGINS=1 if this config is trusted.',
+      );
+    }
+    // Opted in, but the rc file may still be attacker-authored. Keep rc-declared
+    // plugins inside the project so `../../../../tmp/x.mjs` cannot reach a module
+    // planted elsewhere on the runner. An explicit --plugins is operator intent
+    // and stays unrestricted: shared policies outside the cwd are a real setup.
+    const root = resolve(provenance.cwd ?? process.cwd());
+    for (const pluginPath of plugins) {
+      const abs = resolve(root, pluginPath);
+      if (abs !== root && !abs.startsWith(root + sep)) {
+        throw new Error(
+          `Policy plugin declared in .flectorc is outside the project: ${pluginPath}\n`
+          + 'Plugins execute code, so an rc-declared plugin must live inside the '
+          + 'directory Flecto is running in.',
+        );
+      }
+    }
+  }
   if (
     severityRemapRaw !== undefined
     && (severityRemapRaw === null || Array.isArray(severityRemapRaw) || typeof severityRemapRaw !== 'object')

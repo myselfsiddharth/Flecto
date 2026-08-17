@@ -7,6 +7,30 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ## [Unreleased]
 
+## [2.1.1] - 2026-08-17
+
+### Security
+
+- **Policy plugins declared in `.flectorc` are no longer loaded**
+  ([GHSA-wq8m-fc3q-8m5x], critical). Backport of the 3.0.1 fix (#117) to the 2.x
+  line. A pull request that added a `.flectorc` with a `plugins` entry achieved
+  **arbitrary code execution on the CI runner**: `flecto ci` is what teams run on
+  pull requests, and it honoured the attacker's config with no opt-in, no
+  allowlist, and no path containment. The code ran with whatever the workflow
+  exposed, including `GITHUB_TOKEN`, and `../../../../tmp/x.mjs` could load a
+  module from anywhere on disk. Confirmed exploitable on 2.1.0 with a working
+  reproduction (#125).
+
+  Plugins now load only from an explicit `--plugins` flag. If a config file is
+  genuinely trusted, set `FLECTO_ALLOW_RC_PLUGINS=1`; even then an rc-declared
+  plugin must live inside the working directory. Flecto **fails loudly** rather
+  than skipping the plugin silently. Policy *packs* are declarative and were
+  never affected; `--plugins` is unchanged, including paths outside the project.
+
+  **If you run Flecto 2.x on untrusted pull requests, upgrade to 2.1.1 or 3.0.1.**
+  If you rely on `plugins` in `.flectorc`, move it to `--plugins` or set the
+  opt-in. ([#117], [#125])
+
 ## [2.1.0] - 2026-07-24
 
 ### Added
@@ -99,5 +123,8 @@ The format is based on [Keep a Changelog], and this project adheres to
 [#38]: https://github.com/myselfsiddharth/Flecto/issues/38
 [#39]: https://github.com/myselfsiddharth/Flecto/issues/39
 [#40]: https://github.com/myselfsiddharth/Flecto/pull/40
+[#117]: https://github.com/myselfsiddharth/Flecto/pull/117
+[#125]: https://github.com/myselfsiddharth/Flecto/issues/125
+[GHSA-wq8m-fc3q-8m5x]: https://github.com/myselfsiddharth/Flecto/security/advisories/GHSA-wq8m-fc3q-8m5x
 [Keep a Changelog]: https://keepachangelog.com/en/1.1.0/
 [Semantic Versioning]: https://semver.org/spec/v2.0.0.html
