@@ -7,6 +7,18 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- `flecto init` now detects Kubernetes manifests and SOPS usage — the two file
+  shapes 3.0 was built around — and enables the `kubernetes` and `sops` packs
+  accordingly. Detection is content-based: a YAML document must actually carry
+  `apiVersion` + `kind` to count as a manifest (a config with a bare `kind:`
+  field does not), and SOPS is recognized from a top-level metadata block or a
+  `.sops.yaml` creation-rules file. Sniffing is bounded — the repo root plus the
+  conventional `k8s/` / `kubernetes/` / `manifests/` / `deploy/` directories, a
+  cap on files read, and files over 256 KB skipped — so `init` never turns into
+  a full-tree scan. The "detected nothing" generic fallback is unchanged. ([#123])
+
 ## [3.0.1] - 2026-08-07
 
 ### Security
@@ -561,6 +573,7 @@ fixed — those runs were never actually gated — but the failure is new.
 [#108]: https://github.com/myselfsiddharth/Flecto/pull/108
 [#109]: https://github.com/myselfsiddharth/Flecto/issues/109
 [#110]: https://github.com/myselfsiddharth/Flecto/issues/110
+[#123]: https://github.com/myselfsiddharth/Flecto/issues/123
 [Keep a Changelog]: https://keepachangelog.com/en/1.1.0/
 [Semantic Versioning]: https://semver.org/spec/v2.0.0.html
 [GHSA-wq8m-fc3q-8m5x]: https://github.com/myselfsiddharth/Flecto/security/advisories/GHSA-wq8m-fc3q-8m5x
