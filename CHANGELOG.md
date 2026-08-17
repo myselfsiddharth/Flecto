@@ -7,6 +7,23 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- Adoption baseline for `flecto ci`: `--baseline <file>` gates only on findings
+  not already recorded, and `--update-baseline` rewrites the file from the
+  current findings. This is how a repo with years of pre-existing config turns on
+  enforcement without first fixing everything or silencing rules it still wants
+  on new config. A finding is keyed on `(rule id, file, path)` — not its value —
+  so an accepted `pool-size-jump` stays accepted as the number drifts, and the
+  file does not churn. Recorded findings are suppressed from the gate and the
+  output; new ones still fail. The file is diff-friendly (one sorted entry per
+  finding, with severity, message, `acceptedAt`, and an optional hand-written
+  `reason` that updates preserve). Stale entries — recorded findings that no
+  longer occur — are reported so the file shrinks; updating is always explicit,
+  never automatic, so a run cannot launder new risk into the accepted set.
+  Change-based `--fail-on` triggers still fire, since the baseline accepts policy
+  findings, not the diff. ([#118])
+
 ## [3.0.1] - 2026-08-07
 
 ### Security
@@ -561,6 +578,7 @@ fixed — those runs were never actually gated — but the failure is new.
 [#108]: https://github.com/myselfsiddharth/Flecto/pull/108
 [#109]: https://github.com/myselfsiddharth/Flecto/issues/109
 [#110]: https://github.com/myselfsiddharth/Flecto/issues/110
+[#118]: https://github.com/myselfsiddharth/Flecto/issues/118
 [Keep a Changelog]: https://keepachangelog.com/en/1.1.0/
 [Semantic Versioning]: https://semver.org/spec/v2.0.0.html
 [GHSA-wq8m-fc3q-8m5x]: https://github.com/myselfsiddharth/Flecto/security/advisories/GHSA-wq8m-fc3q-8m5x
