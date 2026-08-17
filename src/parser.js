@@ -5,6 +5,7 @@ import TOML from '@iarna/toml';
 import dotenv from 'dotenv';
 import { isArmoredAgeFile, normalizeEncrypted, opaqueFileState } from './encrypted.js';
 import { documentKeysOf, withDocumentKeys } from './documents.js';
+import { assertNotTerraformPlan } from './terraform.js';
 
 const SUPPORTED_EXT = ['.json', '.yaml', '.yml', '.toml', '.env', '.ini', '.age'];
 
@@ -281,6 +282,12 @@ export function parseContent(filepath, raw) {
       `Parse error in "${filepath}"${lineInfo}: ${err.message}`
     );
   }
+
+  // Guarded here, on the one path every generic command shares, rather than in
+  // each command: ci, watch, compare, report, and snapshot reads all land here,
+  // and so does a plan read out of git via --snapshot-ref. `flecto plan` reads
+  // through readTerraformPlanFile() instead and is unaffected (#113).
+  assertNotTerraformPlan(parsed, filepath);
 
   const keys = documentKeysOf(parsed) ?? [];
   return withDocumentKeys(normalizeEncrypted(normalizeParsedValue(parsed), keys), keys);
