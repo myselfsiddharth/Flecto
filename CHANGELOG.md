@@ -7,6 +7,20 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- `flecto ci --format sarif` emits SARIF 2.1.0 for upload to GitHub code
+  scanning (`github/codeql-action/upload-sarif`). Policy findings render on the
+  pull request diff and in the Security tab, with GitHub handling dedup,
+  new-vs-existing, and fixed-finding tracking. Each pack rule maps to a
+  `reportingDescriptor` (id, short description, pack, level); `severity` maps to
+  SARIF `level` (`error`/`warning`/`note`). `--mask-secrets` applies, since a
+  SARIF file is uploaded and retained. Results are **file-level** for now —
+  Flecto reports a semantic path, not a source line, so each result anchors at
+  the top of the file and preserves the full path as a SARIF logical location;
+  GitHub still renders and tracks the alert. Recipe and required
+  `security-events: write` permission are in [docs/ci.md](docs/ci.md). ([#120])
+
 ## [3.0.1] - 2026-08-07
 
 ### Security
@@ -561,6 +575,7 @@ fixed — those runs were never actually gated — but the failure is new.
 [#108]: https://github.com/myselfsiddharth/Flecto/pull/108
 [#109]: https://github.com/myselfsiddharth/Flecto/issues/109
 [#110]: https://github.com/myselfsiddharth/Flecto/issues/110
+[#120]: https://github.com/myselfsiddharth/Flecto/issues/120
 [Keep a Changelog]: https://keepachangelog.com/en/1.1.0/
 [Semantic Versioning]: https://semver.org/spec/v2.0.0.html
 [GHSA-wq8m-fc3q-8m5x]: https://github.com/myselfsiddharth/Flecto/security/advisories/GHSA-wq8m-fc3q-8m5x

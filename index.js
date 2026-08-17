@@ -34,6 +34,7 @@ import { redactSecretString } from './src/secrets.js';
 import { fireAlerts } from './src/alerter.js';
 import { resolveWebhookFormat, WEBHOOK_FORMAT_CHOICES } from './src/notifiers.js';
 import { createEnvelope } from './src/envelope.js';
+import { buildSarif } from './src/sarif.js';
 import {
   evaluatePolicies,
   highestSeverity,
@@ -406,6 +407,11 @@ function printCiOutput(results, format) {
     for (const result of results) {
       console.log(JSON.stringify(result));
     }
+    return;
+  }
+  if (format === 'sarif') {
+    const sarif = buildSarif(results, { cwd: process.cwd(), toolVersion: PKG.version });
+    console.log(JSON.stringify(sarif, null, 2));
     return;
   }
   if (format === 'github-annotations') {
@@ -814,7 +820,7 @@ program
   .description('Run semantic diff in CI mode')
   .option('-p, --profile <name>', 'Use profile from .flectorc (else FLECTO_PROFILE)')
   .option('--snapshot-ref <ref>', 'Snapshot reference: snapshot path or git ref')
-  .option('--format <type>', 'Output format: json | ndjson | github-annotations | pr-comment', 'json')
+  .option('--format <type>', 'Output format: json | ndjson | sarif | github-annotations | pr-comment', 'json')
   .option('--pr-comment-post', 'With --format pr-comment, upsert the comment on the PR (needs GITHUB_TOKEN + PR context)', false)
   .option('--fail-on <rules>', 'Comma-separated fail rules: changed,added,removed,policy,error,warn', 'changed,policy,error')
   .option('--ignore <keys>', 'Comma-separated key paths to ignore')
@@ -840,8 +846,8 @@ program
       const ignorePaths = parseCsv(effective.ignore);
       const failOn = parseFailOn(effective.failOn ?? 'changed,policy,error');
       const format = String(effective.format ?? 'json');
-      if (!['json', 'ndjson', 'github-annotations', 'pr-comment'].includes(format)) {
-        throw new Error('--format must be json, ndjson, github-annotations, or pr-comment');
+      if (!['json', 'ndjson', 'sarif', 'github-annotations', 'pr-comment'].includes(format)) {
+        throw new Error('--format must be json, ndjson, sarif, github-annotations, or pr-comment');
       }
       const prCommentPost = Boolean(effective.prCommentPost);
       if (prCommentPost && format !== 'pr-comment') {

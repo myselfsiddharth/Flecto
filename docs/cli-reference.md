@@ -72,7 +72,7 @@ flecto ci "config/**/*.yaml" --snapshot-ref HEAD~1 --fail-on "policy,error"
 |---|---|---|
 | `-p, --profile <name>` | — | Use a profile from `.flectorc` (else `FLECTO_PROFILE`) |
 | `--snapshot-ref <ref>` | local snapshot | Baseline: a snapshot file path, or a git ref |
-| `--format <type>` | `json` | `json`, `ndjson`, `github-annotations`, or `pr-comment` |
+| `--format <type>` | `json` | `json`, `ndjson`, `sarif`, `github-annotations`, or `pr-comment` |
 | `--pr-comment-post` | off | With `--format pr-comment`, upsert the sticky comment on the PR |
 | `--fail-on <rules>` | `changed,policy,error` | Comma-separated fail triggers |
 | `--ignore <keys>` | — | Comma-separated key paths to ignore |
