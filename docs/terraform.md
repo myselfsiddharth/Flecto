@@ -112,14 +112,28 @@ the values are right there in the JSON.
 or any formatter can see it. Within `flecto plan` this is unconditional: it does
 not depend on `--mask-secrets`, and there is no flag to turn it off.
 
-> **The redaction lives in `flecto plan` only.** A plan file is ordinary JSON, so
-> pointing another command at one — `flecto ci "**/*.json"`, a committed
-> `tfplan.json` swept up by a `.flectorc` `files` pattern, `watch`, `compare`, or
-> `report` — reads it as a plain config tree and **will print the sensitive
-> values**. `--mask-secrets` only helps when the attribute name happens to look
-> sensitive (`password` does, `user_data` does not). Always read plan JSON with
-> `flecto plan`, and keep `*.tfplan.json` out of the globs your other commands
-> watch. Tracked in [#113](https://github.com/myselfsiddharth/Flecto/issues/113).
+> **The redaction lives in `flecto plan` only — and every other command now
+> refuses plan JSON rather than reading it.** A plan file is ordinary JSON, so
+> `flecto ci "**/*.json"`, a committed `tfplan.json` swept up by a `.flectorc`
+> `files` pattern, `watch`, `compare`, `report`, and snapshot writes would
+> otherwise read it as a plain config tree and print the sensitive values.
+> `--mask-secrets` is not a backstop: it only fires when the attribute *name*
+> looks sensitive, and `password` does while `user_data` does not.
+>
+> Those commands now fail with a pointer to `flecto plan`, mirroring how
+> `flecto plan` already refuses a file that is not a plan:
+>
+> ```
+> $ flecto ci tfplan.json
+> [error] "tfplan.json" is Terraform plan JSON, which this command cannot read safely.
+> …
+> Use: flecto plan tfplan.json
+> ```
+>
+> This is a hard failure rather than a skip, because a plan file caught by a
+> repo-wide glob is a real misconfiguration, and silently omitting the file would
+> leave you believing it had been gated. If a glob picks up plan files you do not
+> want reviewed, exclude them — `"exclude": ["**/*.tfplan.json"]`.
 
 A few consequences worth knowing:
 

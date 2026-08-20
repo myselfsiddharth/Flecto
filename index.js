@@ -34,6 +34,19 @@ import { redactSecretString } from './src/secrets.js';
 import { fireAlerts } from './src/alerter.js';
 import { resolveWebhookFormat, WEBHOOK_FORMAT_CHOICES } from './src/notifiers.js';
 import { createEnvelope } from './src/envelope.js';
+import { buildSarif } from './src/sarif.js';
+import {
+  loadBaseline,
+  applyBaseline,
+  buildBaselineFile,
+  writeBaselineFile,
+  baselineRelativePath,
+} from './src/baseline.js';
+import {
+  suppressionFormat,
+  parseSuppressions,
+  applySuppressions,
+} from './src/suppressions.js';
 import {
   evaluatePolicies,
   highestSeverity,
@@ -376,6 +389,34 @@ function shouldFailFromPolicy(findings, failOn) {
   return false;
 }
 
+/**
+ * Parse a file's inline suppressions and split its findings into active and
+ * suppressed. A directive missing its mandatory reason is a hard error: applying
+ * it would hide a finding with no justification, and skipping it silently would
+ * fail the build confusingly. JSON (no comment syntax) has no suppressions.
+ * @param {string} filepath
+ * @param {import('./src/policy.js').PolicyFinding[]} findings
+ * @returns {{ active: any[], suppressed: Array<{ finding: any, reason: string }> }}
+ */
+function resolveSuppressed(filepath, findings) {
+  const format = suppressionFormat(filepath);
+  if (!format) return { active: findings, suppressed: [] };
+
+  let raw;
+  try {
+    raw = readFileSync(filepath, 'utf8');
+  } catch {
+    return { active: findings, suppressed: [] };
+  }
+  const { suppressions, errors } = parseSuppressions(raw, format);
+  if (errors.length > 0) {
+    const rel = relative(process.cwd(), filepath) || filepath;
+    const detail = errors.map((e) => `  ${rel}:${e.line}: ${e.message}`).join('\n');
+    throw new Error(`Inline suppression is missing a required reason:\n${detail}`);
+  }
+  return applySuppressions(findings, suppressions);
+}
+
 function shouldFailFromChanges(events, failOn) {
   if (events.length === 0) return false;
   if (failOn.has('changed') && events.some((e) => e.type === 'changed')) return true;
@@ -406,6 +447,11 @@ function printCiOutput(results, format) {
     for (const result of results) {
       console.log(JSON.stringify(result));
     }
+    return;
+  }
+  if (format === 'sarif') {
+    const sarif = buildSarif(results, { cwd: process.cwd(), toolVersion: PKG.version });
+    console.log(JSON.stringify(sarif, null, 2));
     return;
   }
   if (format === 'github-annotations') {
@@ -814,9 +860,11 @@ program
   .description('Run semantic diff in CI mode')
   .option('-p, --profile <name>', 'Use profile from .flectorc (else FLECTO_PROFILE)')
   .option('--snapshot-ref <ref>', 'Snapshot reference: snapshot path or git ref')
-  .option('--format <type>', 'Output format: json | ndjson | github-annotations | pr-comment', 'json')
+  .option('--format <type>', 'Output format: json | ndjson | sarif | github-annotations | pr-comment', 'json')
   .option('--pr-comment-post', 'With --format pr-comment, upsert the comment on the PR (needs GITHUB_TOKEN + PR context)', false)
   .option('--fail-on <rules>', 'Comma-separated fail rules: changed,added,removed,policy,error,warn', 'changed,policy,error')
+  .option('--baseline <file>', 'Gate only on findings not already recorded in this baseline file')
+  .option('--update-baseline', 'Rewrite the --baseline file from the current findings (explicit, never automatic)', false)
   .option('--ignore <keys>', 'Comma-separated key paths to ignore')
   .option('--policies <ids>', 'Comma-separated policy pack ids')
   .option('--plugins <paths>', 'Comma-separated local ESM plugin paths')
@@ -824,6 +872,7 @@ program
   .option('--no-array-id', 'Diff arrays by index instead of object identity')
   .option('--array-ignore-order', 'Treat array order as insignificant', false)
   .option('--mask-secrets', 'Mask secret-like values in CI output', false)
+  .option('--show-suppressed', 'List inline-suppressed findings instead of only counting them', false)
   .option('--allow-empty', 'Allow CI to succeed when no files were diffed', false)
   .action(async (files, opts, command) => {
     try {
@@ -840,19 +889,28 @@ program
       const ignorePaths = parseCsv(effective.ignore);
       const failOn = parseFailOn(effective.failOn ?? 'changed,policy,error');
       const format = String(effective.format ?? 'json');
-      if (!['json', 'ndjson', 'github-annotations', 'pr-comment'].includes(format)) {
-        throw new Error('--format must be json, ndjson, github-annotations, or pr-comment');
+      if (!['json', 'ndjson', 'sarif', 'github-annotations', 'pr-comment'].includes(format)) {
+        throw new Error('--format must be json, ndjson, sarif, github-annotations, or pr-comment');
       }
       const prCommentPost = Boolean(effective.prCommentPost);
       if (prCommentPost && format !== 'pr-comment') {
         renderWarn('Ignoring --pr-comment-post: it only applies to --format pr-comment.');
       }
       const maskSecrets = Boolean(effective.maskSecrets);
+      const showSuppressed = Boolean(effective.showSuppressed);
       const dOpts = diffOptionsFromEffective(effective, ignorePaths);
 
-      /** @type {any[]} */
-      const results = [];
-      let shouldFail = false;
+      const cwd = process.cwd();
+      const baselinePath = effective.baseline ? resolve(cwd, String(effective.baseline)) : null;
+      const updateBaseline = Boolean(effective.updateBaseline);
+      if (updateBaseline && !baselinePath) {
+        throw new Error('--update-baseline requires --baseline <file> naming the file to write.');
+      }
+
+      /** @type {Array<{ filepath: string, relFile: string, outboundChanges: any[], outboundFindings: any[], changesFail: boolean }>} */
+      const perFile = [];
+      /** @type {Array<{ file: string, finding: any, reason: string }>} */
+      const allSuppressed = [];
       let diffed = 0;
 
       for (const filepath of targets) {
@@ -875,8 +933,8 @@ program
           );
         }
         const events = diffTrees(before, after, dOpts);
-        const policyFindings = await evaluatePolicies(events, {
-          cwd: process.cwd(),
+        const rawFindings = await evaluatePolicies(events, {
+          cwd,
           file: filepath,
           profile: profile ?? null,
           source: 'ci',
@@ -884,20 +942,24 @@ program
           plugins,
           severityRemap,
         });
-        const outboundChanges = maybeMaskChanges(events, maskSecrets);
-        const outboundFindings = maybeMaskFindings(policyFindings, events, maskSecrets);
-        const envelope = createEnvelope({
-          source: 'ci',
-          file: filepath,
-          changes: outboundChanges,
-          policies: outboundFindings,
-        });
-        results.push({ file: filepath, envelope, policies: outboundFindings });
-        diffed += 1;
 
-        if (shouldFailFromChanges(events, failOn) || shouldFailFromPolicy(policyFindings, failOn)) {
-          shouldFail = true;
+        // Inline suppressions run first: a deliberately-accepted finding is
+        // removed before the baseline, the gate, and the output ever see it, so
+        // it is never also counted by a baseline. A directive missing its
+        // mandatory reason is refused loudly rather than applied.
+        const { active: policyFindings, suppressed } = resolveSuppressed(filepath, rawFindings);
+        for (const item of suppressed) {
+          allSuppressed.push({ file: filepath, finding: item.finding, reason: item.reason });
         }
+
+        perFile.push({
+          filepath,
+          relFile: baselineRelativePath(filepath, cwd),
+          outboundChanges: maybeMaskChanges(events, maskSecrets),
+          outboundFindings: maybeMaskFindings(policyFindings, events, maskSecrets),
+          changesFail: shouldFailFromChanges(events, failOn),
+        });
+        diffed += 1;
       }
 
       if (diffed === 0 && !effective.allowEmpty) {
@@ -907,8 +969,95 @@ program
         );
       }
 
+      // Suppressed findings are still surfaced — a count by default, the full
+      // list with --show-suppressed — so a gate you cannot see the shape of does
+      // not quietly grow. All of this goes to stderr, leaving machine output clean.
+      if (allSuppressed.length > 0) {
+        renderNote(
+          `${allSuppressed.length} finding${allSuppressed.length === 1 ? '' : 's'} suppressed inline`
+          + `${showSuppressed ? ':' : ' (use --show-suppressed to list them).'}`,
+        );
+        if (showSuppressed) {
+          for (const { file, finding, reason } of allSuppressed) {
+            const rel = relative(cwd, file) || file;
+            renderNote(`  ${rel} ${finding.path}: ${finding.id} — ${reason}`);
+          }
+        }
+      }
+
+      // Every finding this run produced, paired with its repo-relative file, so
+      // the baseline can be matched, updated, and stale-checked on stable keys.
+      const located = perFile.flatMap((f) =>
+        f.outboundFindings.map((finding) => ({ file: f.relFile, finding })));
+
+      // Without a baseline, every finding is active — behavior is unchanged.
+      let activeByFile = new Map(perFile.map((f) => [f.relFile, f.outboundFindings]));
+      let baselineSummary = null;
+      if (baselinePath) {
+        const { entries: recorded } = loadBaseline(baselinePath);
+
+        if (updateBaseline) {
+          // Recording the current state accepts all of it: the file is rewritten
+          // from every finding, and nothing is "new" relative to what was just
+          // written, so the gate passes on the policy axis.
+          writeBaselineFile(baselinePath, buildBaselineFile(located, recorded));
+          renderNote(
+            `Baseline updated: ${baselineRelativePath(baselinePath, cwd)} `
+            + `(${located.length} finding${located.length === 1 ? '' : 's'} recorded)`,
+          );
+          activeByFile = new Map();
+          baselineSummary = { active: 0, accepted: located.length, stale: [] };
+        } else {
+          const { active, accepted, stale } = applyBaseline(located, recorded);
+          const activeMap = new Map();
+          for (const { file, finding } of active) {
+            if (!activeMap.has(file)) activeMap.set(file, []);
+            activeMap.get(file).push(finding);
+          }
+          activeByFile = activeMap;
+          baselineSummary = { active: active.length, accepted: accepted.length, stale };
+        }
+      }
+
+      // Results reflect the *active* findings: with a baseline in effect, an
+      // accepted finding is suppressed from output as well as from the gate, so a
+      // green run is not buried under hundreds of already-accepted findings.
+      const results = perFile.map((f) => {
+        const active = activeByFile.get(f.relFile) ?? [];
+        return {
+          file: f.filepath,
+          envelope: createEnvelope({
+            source: 'ci',
+            file: f.filepath,
+            changes: f.outboundChanges,
+            policies: active,
+          }),
+          policies: active,
+        };
+      });
+
+      // With --update-baseline everything is now accepted, so there are no active
+      // findings to gate on; the policy gate simply passes. Change-based triggers
+      // are about the diff, not the findings, so they still apply.
+      const activeFindings = results.flatMap((r) => r.policies);
+      const shouldFail = perFile.some((f) => f.changesFail)
+        || shouldFailFromPolicy(activeFindings, failOn);
+
+      if (baselineSummary) {
+        const parts = [`${baselineSummary.active} new`, `${baselineSummary.accepted} baselined`];
+        if (baselineSummary.stale.length > 0) parts.push(`${baselineSummary.stale.length} stale`);
+        renderNote(`Baseline: ${parts.join(', ')}.`);
+        if (baselineSummary.stale.length > 0 && !updateBaseline) {
+          renderWarn(
+            `${baselineSummary.stale.length} baseline `
+            + `${baselineSummary.stale.length === 1 ? 'entry no longer occurs' : 'entries no longer occur'}; `
+            + 're-run with --update-baseline to prune.',
+          );
+        }
+      }
+
       if (format === 'pr-comment') {
-        const body = renderPrComment(results, { cwd: process.cwd(), failed: shouldFail });
+        const body = renderPrComment(results, { cwd, failed: shouldFail });
         console.log(body);
         await deliverPrCommentSafely(body, prCommentPost);
       } else {

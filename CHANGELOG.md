@@ -23,6 +23,98 @@ The format is based on [Keep a Changelog], and this project adheres to
   residual limitation (attacker-supplied regexes in custom packs, which Node
   cannot time out) is noted in [SECURITY.md](SECURITY.md).
 
+### Added
+
+- Inline suppressions: `# flecto-ignore-next-line <rule> — <reason>` on the line
+  above a deliberate finding accepts that one finding in place, the companion to
+  the baseline's bulk acceptance. **A reason is mandatory** — a directive without
+  one is refused with a pointer to the file and line, never silently applied or
+  dropped — so a repo does not accumulate unexplained suppressions. It is scoped
+  to the next line and the named rule, and resolves to that line's full key path
+  (nesting for YAML, section/table for INI/TOML, flat for dotenv), so a
+  suppression on one `pool_size` cannot hide an uncommented `pool_size` elsewhere
+  in the file. Works in every commented format Flecto parses (YAML, TOML, INI,
+  dotenv); JSON has no comments, so use the baseline there. Suppressed findings
+  are still surfaced — a count by default, the full list with `--show-suppressed`
+  — so the gate stays legible. ([#119])
+
+- Adoption baseline for `flecto ci`: `--baseline <file>` gates only on findings
+  not already recorded, and `--update-baseline` rewrites the file from the
+  current findings. This is how a repo with years of pre-existing config turns on
+  enforcement without first fixing everything or silencing rules it still wants
+  on new config. A finding is keyed on `(rule id, file, path)` — not its value —
+  so an accepted `pool-size-jump` stays accepted as the number drifts, and the
+  file does not churn. Recorded findings are suppressed from the gate and the
+  output; new ones still fail. The file is diff-friendly (one sorted entry per
+  finding, with severity, message, `acceptedAt`, and an optional hand-written
+  `reason` that updates preserve). Stale entries — recorded findings that no
+  longer occur — are reported so the file shrinks; updating is always explicit,
+  never automatic, so a run cannot launder new risk into the accepted set.
+  Change-based `--fail-on` triggers still fire, since the baseline accepts policy
+  findings, not the diff. ([#118])
+
+- `flecto ci --format sarif` emits SARIF 2.1.0 for upload to GitHub code
+  scanning (`github/codeql-action/upload-sarif`). Policy findings render on the
+  pull request diff and in the Security tab, with GitHub handling dedup,
+  new-vs-existing, and fixed-finding tracking. Each pack rule maps to a
+  `reportingDescriptor` (id, short description, pack, level); `severity` maps to
+  SARIF `level` (`error`/`warning`/`note`). `--mask-secrets` applies, since a
+  SARIF file is uploaded and retained. Results are **file-level** for now —
+  Flecto reports a semantic path, not a source line, so each result anchors at
+  the top of the file and preserves the full path as a SARIF logical location;
+  GitHub still renders and tracks the alert. Recipe and required
+  `security-events: write` permission are in [docs/ci.md](docs/ci.md). ([#120])
+
+- `flecto init` now detects Kubernetes manifests and SOPS usage — the two file
+  shapes 3.0 was built around — and enables the `kubernetes` and `sops` packs
+  accordingly. Detection is content-based: a YAML document must actually carry
+  `apiVersion` + `kind` to count as a manifest (a config with a bare `kind:`
+  field does not), and SOPS is recognized from a top-level metadata block or a
+  `.sops.yaml` creation-rules file. Sniffing is bounded — the repo root plus the
+  conventional `k8s/` / `kubernetes/` / `manifests/` / `deploy/` directories, a
+  cap on files read, and files over 256 KB skipped — so `init` never turns into
+  a full-tree scan. The "detected nothing" generic fallback is unchanged. ([#123])
+
+### Fixed
+
+- Adding a second YAML document beside an existing one no longer re-paths the
+  whole file. A lone Kubernetes-shaped document (`apiVersion` + `kind` +
+  `metadata.name`) is now keyed by identity — `kind/namespace/name` — exactly as
+  it is inside a multi-document file, so a `Service` added next to a `Deployment`
+  reads as one addition instead of reporting the untouched Deployment as removed
+  and re-added. Ordinary single-document YAML (anything without both
+  `apiVersion` and `kind`) is unchanged. ([#124])
+
+  **Migration:** paths for a *single*-document manifest change from bare
+  (`spec.replicas`) to identity-prefixed (`Deployment/prod/api.spec.replicas`).
+  Snapshots and CI baselines taken of a single manifest before this release will
+  show one-time churn on the next diff; `--ignore` entries and custom pack path
+  regexes written against the bare paths need the prefix. Multi-document files
+  and non-manifest config are unaffected.
+
+### Security
+
+- **Terraform plan JSON is refused by every command except `flecto plan`.**
+  Terraform's `before_sensitive` / `after_sensitive` redaction is applied only by
+  `flecto plan`; a plan file is ordinary JSON, so `ci`, `watch`, `compare`,
+  `report`, and snapshot writes read it as a plain config tree and printed the
+  values Terraform itself refuses to print. `--mask-secrets` was not a backstop —
+  it fires on the attribute *name*, and `user_data` does not match. Realistic
+  ways to hit it: `flecto ci "**/*.json"`, a committed `tfplan.json`, or
+  `.flectorc` `files` patterns that sweep JSON. Those commands now fail with a
+  pointer to `flecto plan`, mirroring the guard `flecto plan` already had in the
+  other direction. ([#113])
+
+### Fixed
+
+- `flecto policies test` now resolves packs installed by `flecto policies add`.
+  The harness searched only the fixture directory's `policies/`, while
+  `policies add` writes to the invoking project's — so the two commands added in
+  the same release did not compose. A fixture's own `policies/` still wins, so
+  self-contained fixtures are unaffected; the project is a fallback. The
+  "unknown pack" error now names every directory it searched instead of
+  suggesting a path that already existed. ([#114])
+
 ## [3.0.1] - 2026-08-07
 
 ### Security
@@ -578,6 +670,20 @@ fixed — those runs were never actually gated — but the failure is new.
 [#109]: https://github.com/myselfsiddharth/Flecto/issues/109
 [#110]: https://github.com/myselfsiddharth/Flecto/issues/110
 [#121]: https://github.com/myselfsiddharth/Flecto/issues/121
+
+[#119]: https://github.com/myselfsiddharth/Flecto/issues/119
+
+[#118]: https://github.com/myselfsiddharth/Flecto/issues/118
+
+[#120]: https://github.com/myselfsiddharth/Flecto/issues/120
+
+[#123]: https://github.com/myselfsiddharth/Flecto/issues/123
+
+[#124]: https://github.com/myselfsiddharth/Flecto/issues/124
+
+[#113]: https://github.com/myselfsiddharth/Flecto/issues/113
+
+[#114]: https://github.com/myselfsiddharth/Flecto/issues/114
 [Keep a Changelog]: https://keepachangelog.com/en/1.1.0/
 [Semantic Versioning]: https://semver.org/spec/v2.0.0.html
 [GHSA-wq8m-fc3q-8m5x]: https://github.com/myselfsiddharth/Flecto/security/advisories/GHSA-wq8m-fc3q-8m5x
