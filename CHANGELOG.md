@@ -20,6 +20,16 @@ The format is based on [Keep a Changelog], and this project adheres to
   pointer to `flecto plan`, mirroring the guard `flecto plan` already had in the
   other direction. ([#113])
 
+### Fixed
+
+- `flecto policies test` now resolves packs installed by `flecto policies add`.
+  The harness searched only the fixture directory's `policies/`, while
+  `policies add` writes to the invoking project's — so the two commands added in
+  the same release did not compose. A fixture's own `policies/` still wins, so
+  self-contained fixtures are unaffected; the project is a fallback. The
+  "unknown pack" error now names every directory it searched instead of
+  suggesting a path that already existed. ([#114])
+
 ## [3.0.1] - 2026-08-07
 
 ### Security
@@ -575,6 +585,8 @@ fixed — those runs were never actually gated — but the failure is new.
 [#109]: https://github.com/myselfsiddharth/Flecto/issues/109
 [#110]: https://github.com/myselfsiddharth/Flecto/issues/110
 [#113]: https://github.com/myselfsiddharth/Flecto/issues/113
+
+[#114]: https://github.com/myselfsiddharth/Flecto/issues/114
 [Keep a Changelog]: https://keepachangelog.com/en/1.1.0/
 [Semantic Versioning]: https://semver.org/spec/v2.0.0.html
 [GHSA-wq8m-fc3q-8m5x]: https://github.com/myselfsiddharth/Flecto/security/advisories/GHSA-wq8m-fc3q-8m5x
