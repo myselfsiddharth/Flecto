@@ -328,8 +328,9 @@ program
     try {
       const { config } = loadRcConfig(process.cwd());
       const profile = resolveProfileName(opts.profile);
-      const effective = resolveEffectiveOptions(config, profile, stripUnsetCliOverrides(opts, command));
-      const { policies, plugins, severityRemap } = resolvePolicyOptions(effective);
+      const cliOverrides = stripUnsetCliOverrides(opts, command);
+      const effective = resolveEffectiveOptions(config, profile, cliOverrides);
+      const { policies, plugins, severityRemap } = resolvePolicyOptions(effective, { pluginsFromCli: cliOverrides.plugins !== undefined });
       const targets = (await resolveTargetFiles(files, config)).map((f) => resolve(f));
       if (targets.length === 0) {
         throw new Error('No files matched. Provide files or configure .flectorc files/include.');
@@ -557,8 +558,9 @@ program
     try {
       const { config } = loadRcConfig(process.cwd());
       const profile = resolveProfileName(opts.profile);
-      const effective = resolveEffectiveOptions(config, profile, stripUnsetCliOverrides(opts, command));
-      const { policies: packIds, plugins, severityRemap } = resolvePolicyOptions(effective);
+      const cliOverrides = stripUnsetCliOverrides(opts, command);
+      const effective = resolveEffectiveOptions(config, profile, cliOverrides);
+      const { policies: packIds, plugins, severityRemap } = resolvePolicyOptions(effective, { pluginsFromCli: cliOverrides.plugins !== undefined });
       const targets = (await resolveTargetFiles(files, config)).map((f) => resolve(f));
       if (targets.length === 0) {
         throw new Error('No files matched. Provide files or configure .flectorc files/include.');
