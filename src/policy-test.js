@@ -90,7 +90,7 @@ export function assertExpectedFindings(actual, expected) {
 /**
  * Run a policy fixture stored in a directory.
  * @param {string} fixtureDir
- * @param {{ configName?: string }} [options]
+ * @param {{ configName?: string, cwd?: string }} [options]
  */
 export async function testPolicyFixture(fixtureDir, options = {}) {
   const dir = resolve(fixtureDir);
@@ -117,6 +117,10 @@ export async function testPolicyFixture(fixtureDir, options = {}) {
     source: config.source ?? 'ci',
     policies: config.policies,
     plugins: config.plugins,
+    // A fixture's own policies/ still wins, so self-contained fixtures behave
+    // exactly as before. The invoking project is a fallback, which is where
+    // `flecto policies add` installs packs (#114).
+    packRoots: [options.cwd ?? process.cwd()],
   });
   assertExpectedFindings(findings, config.expected);
 
