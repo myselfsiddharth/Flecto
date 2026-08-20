@@ -64,6 +64,110 @@ diff — and tighten later.
 
 ---
 
+## Suppressing one finding in place
+
+When a single finding is deliberate, accept it *next to the thing being
+accepted* with an inline comment, rather than in a baseline file elsewhere:
+
+```yaml
+database:
+  # flecto-ignore-next-line pool-size-jump — provisioned for the Black Friday load test, reverting in December
+  pool_size: 200
+```
+
+The comment goes on the line above the flagged value and names the rule. **A
+reason is mandatory** — a suppression without one is refused, with a pointer to
+the file and line, so a repo never accumulates unexplained `# noqa`:
+
+```
+[error] Inline suppression is missing a required reason:
+  config/prod.yaml:12: flecto-ignore-next-line pool-size-jump needs a reason …
+```
+
+The reason follows the rule id after an em dash (`—`), `--`, `:`, or just a
+space. The directive works in every format Flecto parses that *has* comments —
+YAML, TOML, INI, and dotenv (`#`, or `;` in INI). **JSON has no comment syntax,**
+so use the [baseline](#adopting-on-an-existing-repo-the-baseline) for JSON.
+
+A suppression is scoped to the **next line and the named rule** — never a bare
+"ignore everything here"; `--ignore` and `severityRemap` already do that. It
+resolves to the exact key on that line (with its full nesting), so a suppression
+on one `pool_size` never hides an uncommented `pool_size` elsewhere in the file.
+Array items and multi-document YAML resolve to no path — use the baseline for
+those.
+
+Suppressed findings are still surfaced so the gate stays legible: a **count** by
+default, the full list with `--show-suppressed`, both on stderr.
+
+**Suppression vs. baseline.** They solve different problems. A baseline is "we
+are adopting Flecto and have 200 pre-existing findings." A suppression is "this
+one line is deliberate, and here is why." Suppressions apply first — a finding
+suppressed inline is gone before the baseline is consulted, so it is never
+counted twice.
+
+## Adopting on an existing repo: the baseline
+
+Turn Flecto on in a repo that has been running for years and the first CI run is
+a wall of findings for config that was already there. The baseline is how you get
+to green without either fixing everything first or silencing rules you still want
+enforced on *new* config.
+
+```bash
+# record what exists today (explicit — a baseline is never written automatically)
+flecto ci "config/**/*.yaml" --snapshot-ref origin/main \
+  --baseline .flecto-baseline.json --update-baseline
+
+# from now on, gate only on findings that are NOT in the baseline
+flecto ci "config/**/*.yaml" --snapshot-ref origin/main \
+  --baseline .flecto-baseline.json --fail-on policy,error
+```
+
+Commit `.flecto-baseline.json`. A recorded finding is suppressed from both the
+gate and the output; a genuinely new finding still fails the build.
+
+**What makes a finding "the same one."** The baseline keys each finding on
+`(rule id, file, path)` — deliberately **not** the value. A `pool-size-jump`
+accepted at 5→20 stays accepted when it becomes 5→21, so the file does not churn
+on every edit and get deleted. The flip side: renaming a file or restructuring a
+path re-introduces its findings as new, which is the honest cost of a key precise
+enough to tell two findings apart.
+
+The file is human-reviewable and diff-friendly — one entry per finding, sorted,
+each carrying the rule, file, path, severity, the message for context, and when
+it was accepted. Add a `"reason"` to any entry by hand; `--update-baseline`
+preserves it and the original `acceptedAt`:
+
+```json
+{
+  "version": 1,
+  "findings": [
+    {
+      "rule": "pool-size-jump",
+      "file": "config/prod.yaml",
+      "path": "database.pool_size",
+      "severity": "warn",
+      "message": "Pool size increased from 5 to 200 (>=2x).",
+      "acceptedAt": "2026-08-17T10:00:00.000Z",
+      "reason": "provisioned for the Black Friday load test, reverting in December"
+    }
+  ]
+}
+```
+
+**Keeping it honest.** A run reports **stale** entries — recorded findings that no
+longer occur — on stderr, so the file shrinks over time instead of accreting
+forever. `--update-baseline` prunes them. Updating is always explicit: a CI run
+that quietly re-recorded findings would launder new risk into the accepted set,
+so it never happens without the flag. A malformed baseline is an error, not a
+silent empty one, since treating it as empty would fail the build in a way that
+looks like a regression.
+
+`--fail-on changed` and the other change triggers are about the *diff*, not the
+findings, so they still fire under a baseline — the baseline accepts policy
+findings, it does not accept the change itself.
+
+---
+
 ## Output formats
 
 ### `github-annotations`
@@ -84,6 +188,41 @@ a build's config state or post-processing.
 
 One JSON object per line — for streaming into a log pipeline without buffering
 the whole run.
+
+### `sarif`
+
+SARIF 2.1.0, for upload to **GitHub code scanning**. Policy findings render on
+the pull request diff and in the Security tab, and GitHub handles dedup,
+new-vs-existing, and fixed-finding tracking across runs.
+
+```bash
+flecto ci "config/**/*.yaml" --snapshot-ref origin/main --format sarif > flecto.sarif
+```
+
+```yaml
+permissions:
+  contents: read
+  security-events: write   # required to upload SARIF
+steps:
+  - run: flecto ci "config/**/*.yaml" --snapshot-ref origin/main --format sarif > flecto.sarif
+  - uses: github/codeql-action/upload-sarif@v3
+    with:
+      sarif_file: flecto.sarif
+```
+
+Two things worth knowing:
+
+- **SARIF carries policy findings, not raw changes.** A SARIF result needs a
+  rule id; a bare change (`--fail-on changed`) has none. The run still exits
+  non-zero, and the diff is still in the `json` output — SARIF reports the gated
+  policy findings.
+- **Results are file-level for now.** Flecto reports a semantic *path*
+  (`Deployment/prod/api.spec.replicas`), not a source line, so each result
+  anchors at the top of the file and preserves the full path as a SARIF *logical
+  location*. GitHub still renders, dedupes, and tracks the alert; it just is not
+  yet pinned to the exact line.
+- **`--mask-secrets` applies.** A SARIF file is uploaded and retained, so mask
+  before you upload if findings could carry sensitive values.
 
 ### `pr-comment`
 

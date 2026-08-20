@@ -135,3 +135,73 @@ describe('policy plugins are not loaded from an untrusted .flectorc', () => {
     }
   });
 });
+
+describe('denial-of-service hardening (#121)', () => {
+  // Secret detection runs on every changed string value under the default pack,
+  // so a single pathological value in an attacker's pull request must not hang
+  // the CI runner. These bound the *shape* of the cost: the pre-fix regexes were
+  // O(n²) and a ~500 KB value took tens of seconds / hung; linear scanning of
+  // 1 MB is well under a second. A generous ceiling keeps the test from flaking
+  // while still failing loudly if quadratic behavior returns.
+  const BUDGET_MS = 5_000;
+
+  test('a long value with a private-key prefix and no terminator scans linearly', async () => {
+    const { redactSecretString, looksLikeSecret } = await import('../src/secrets.js');
+    const value = `-----BEGIN PRIVATE KEY-----${'A'.repeat(1_000_000)}`;
+    const start = Date.now();
+    looksLikeSecret(value);
+    redactSecretString(value);
+    assert.ok(Date.now() - start < BUDGET_MS, 'private-key scan must be linear');
+  });
+
+  test('a long value that never contains :// scans linearly', async () => {
+    const { redactSecretString } = await import('../src/secrets.js');
+    const value = `${'a'.repeat(1_000_000)}://`;
+    const start = Date.now();
+    redactSecretString(value);
+    assert.ok(Date.now() - start < BUDGET_MS, 'url-credential scan must be linear');
+  });
+
+  test('a real private key is still detected and redacted after the rewrite', async () => {
+    const { detectSecretKind, redactSecretString } = await import('../src/secrets.js');
+    const pem = '-----BEGIN RSA PRIVATE KEY-----\nMIIBrealkeymaterialAAAA==\n-----END RSA PRIVATE KEY-----';
+    assert.equal(detectSecretKind(pem), 'private-key-block');
+    assert.ok(!redactSecretString(pem).includes('MIIBrealkeymaterial'));
+    // An unterminated fragment is still a leaked key.
+    assert.equal(detectSecretKind('x -----BEGIN PRIVATE KEY-----\nMIIBleak'), 'private-key-block');
+  });
+
+  test('a YAML alias bomb fails fast instead of exhausting memory', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'flecto-sec-bomb-'));
+    try {
+      // A few hundred bytes that expand to ~10^12 nodes if realized as a tree.
+      let lines = ['l0: &l0 [x,x,x,x,x,x,x,x,x,x]'];
+      for (let i = 1; i < 12; i++) {
+        const ref = `*l${i - 1}`;
+        lines.push(`l${i}: &l${i} [${Array(10).fill(ref).join(',')}]`);
+      }
+      writeFileSync(join(dir, 'bomb.yaml'), `${lines.join('\n')}\n`, 'utf8');
+      writeFileSync(join(dir, 'snap.json'), JSON.stringify({ state: {} }), 'utf8');
+
+      const start = Date.now();
+      const run = spawnSync(
+        process.execPath,
+        [rootIndex, 'ci', 'bomb.yaml', '--snapshot-ref', 'snap.json', '--allow-empty'],
+        { cwd: dir, encoding: 'utf8', timeout: 20_000 },
+      );
+      assert.ok(Date.now() - start < 15_000, 'must not hang on an alias bomb');
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /too many nodes|billion laughs/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a legitimately large config (5,000 keys) still parses', async () => {
+    const { parseContent } = await import('../src/parser.js');
+    const obj = {};
+    for (let i = 0; i < 5000; i++) obj[`k${i}`] = i;
+    const parsed = parseContent('big.json', JSON.stringify(obj));
+    assert.equal(Object.keys(parsed).length, 5000);
+  });
+});

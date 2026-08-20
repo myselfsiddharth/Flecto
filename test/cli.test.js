@@ -1275,7 +1275,7 @@ test('ci rejects an unknown format', () => {
     );
 
     assert.equal(run.status, 1);
-    assert.match(run.stderr, /--format must be json, ndjson, github-annotations, or pr-comment/);
+    assert.match(run.stderr, /--format must be json, ndjson, sarif, github-annotations, or pr-comment/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
