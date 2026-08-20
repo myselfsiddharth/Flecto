@@ -24,6 +24,29 @@ The format is based on [Keep a Changelog], and this project adheres to
   regexes written against the bare paths need the prefix. Multi-document files
   and non-manifest config are unaffected.
 
+### Security
+
+- **Terraform plan JSON is refused by every command except `flecto plan`.**
+  Terraform's `before_sensitive` / `after_sensitive` redaction is applied only by
+  `flecto plan`; a plan file is ordinary JSON, so `ci`, `watch`, `compare`,
+  `report`, and snapshot writes read it as a plain config tree and printed the
+  values Terraform itself refuses to print. `--mask-secrets` was not a backstop —
+  it fires on the attribute *name*, and `user_data` does not match. Realistic
+  ways to hit it: `flecto ci "**/*.json"`, a committed `tfplan.json`, or
+  `.flectorc` `files` patterns that sweep JSON. Those commands now fail with a
+  pointer to `flecto plan`, mirroring the guard `flecto plan` already had in the
+  other direction. ([#113])
+
+### Fixed
+
+- `flecto policies test` now resolves packs installed by `flecto policies add`.
+  The harness searched only the fixture directory's `policies/`, while
+  `policies add` writes to the invoking project's — so the two commands added in
+  the same release did not compose. A fixture's own `policies/` still wins, so
+  self-contained fixtures are unaffected; the project is a fallback. The
+  "unknown pack" error now names every directory it searched instead of
+  suggesting a path that already existed. ([#114])
+
 ## [3.0.1] - 2026-08-07
 
 ### Security
@@ -579,6 +602,10 @@ fixed — those runs were never actually gated — but the failure is new.
 [#109]: https://github.com/myselfsiddharth/Flecto/issues/109
 [#110]: https://github.com/myselfsiddharth/Flecto/issues/110
 [#124]: https://github.com/myselfsiddharth/Flecto/issues/124
+
+[#113]: https://github.com/myselfsiddharth/Flecto/issues/113
+
+[#114]: https://github.com/myselfsiddharth/Flecto/issues/114
 [Keep a Changelog]: https://keepachangelog.com/en/1.1.0/
 [Semantic Versioning]: https://semver.org/spec/v2.0.0.html
 [GHSA-wq8m-fc3q-8m5x]: https://github.com/myselfsiddharth/Flecto/security/advisories/GHSA-wq8m-fc3q-8m5x
