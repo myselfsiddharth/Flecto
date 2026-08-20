@@ -7,37 +7,6 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ## [Unreleased]
 
-### Changed
-
-- The 3.0 integrations were verified against the real tools they integrate with,
-  not only fixtures ([#122]). The HTML report was opened in a real browser — both
-  themes render with no JS errors, and the filter, expand/collapse, and
-  disclosure triangle work. The encrypted-file path is now tested against output
-  from the real `age` binary (`test/fixtures/encrypted-real/`), confirming a real
-  age file is detected and never leaks ciphertext through a diff. The
-  `flecto-pr-risk` Action was statically reviewed (no runner here to execute a
-  live PR) and its flagged mechanics are correct. What was verified, and what
-  still needs a real runner / `terraform` / `sops`, is recorded in
-  [docs/integration-verification.md](docs/integration-verification.md) — which
-  also notes that `flecto report` has no `--mask-secrets` yet, so it renders
-  secret values in the clear (a follow-up). ([#122])
-
-### Security
-
-- **Two denial-of-service vectors fixed, found while resuming the 3.0 security
-  review** ([#121]). (1) Secret detection (`src/secrets.js`), which runs on every
-  changed string value under the `default` pack, had two `O(n²)` regexes — the
-  PEM private-key and URL-credential patterns — so a single ~500 KB value in a
-  pull request could hang the CI job. Both are now linear; 1 MB scans in under a
-  second, and detection of real (including unterminated) keys is unchanged. (2) A
-  YAML alias bomb ("billion laughs") — a few hundred bytes of nested aliases that
-  `normalizeParsedValue` expanded into an exponentially large tree — now fails
-  fast against a node budget instead of exhausting memory. Regression tests for
-  both in `test/security.test.js`. The review's findings and its "checked, solid"
-  list are recorded in [docs/security-review.md](docs/security-review.md); a
-  residual limitation (attacker-supplied regexes in custom packs, which Node
-  cannot time out) is noted in [SECURITY.md](SECURITY.md).
-
 ### Added
 
 - Inline suppressions: `# flecto-ignore-next-line <rule> — <reason>` on the line
@@ -90,6 +59,21 @@ The format is based on [Keep a Changelog], and this project adheres to
   cap on files read, and files over 256 KB skipped — so `init` never turns into
   a full-tree scan. The "detected nothing" generic fallback is unchanged. ([#123])
 
+### Changed
+
+- The 3.0 integrations were verified against the real tools they integrate with,
+  not only fixtures ([#122]). The HTML report was opened in a real browser — both
+  themes render with no JS errors, and the filter, expand/collapse, and
+  disclosure triangle work. The encrypted-file path is now tested against output
+  from the real `age` binary (`test/fixtures/encrypted-real/`), confirming a real
+  age file is detected and never leaks ciphertext through a diff. The
+  `flecto-pr-risk` Action was statically reviewed (no runner here to execute a
+  live PR) and its flagged mechanics are correct. What was verified, and what
+  still needs a real runner / `terraform` / `sops`, is recorded in
+  [docs/integration-verification.md](docs/integration-verification.md) — which
+  also notes that `flecto report` has no `--mask-secrets` yet, so it renders
+  secret values in the clear (a follow-up). ([#122])
+
 ### Fixed
 
 - Adding a second YAML document beside an existing one no longer re-paths the
@@ -107,7 +91,29 @@ The format is based on [Keep a Changelog], and this project adheres to
   regexes written against the bare paths need the prefix. Multi-document files
   and non-manifest config are unaffected.
 
+- `flecto policies test` now resolves packs installed by `flecto policies add`.
+  The harness searched only the fixture directory's `policies/`, while
+  `policies add` writes to the invoking project's — so the two commands added in
+  the same release did not compose. A fixture's own `policies/` still wins, so
+  self-contained fixtures are unaffected; the project is a fallback. The
+  "unknown pack" error now names every directory it searched instead of
+  suggesting a path that already existed. ([#114])
+
 ### Security
+
+- **Two denial-of-service vectors fixed, found while resuming the 3.0 security
+  review** ([#121]). (1) Secret detection (`src/secrets.js`), which runs on every
+  changed string value under the `default` pack, had two `O(n²)` regexes — the
+  PEM private-key and URL-credential patterns — so a single ~500 KB value in a
+  pull request could hang the CI job. Both are now linear; 1 MB scans in under a
+  second, and detection of real (including unterminated) keys is unchanged. (2) A
+  YAML alias bomb ("billion laughs") — a few hundred bytes of nested aliases that
+  `normalizeParsedValue` expanded into an exponentially large tree — now fails
+  fast against a node budget instead of exhausting memory. Regression tests for
+  both in `test/security.test.js`. The review's findings and its "checked, solid"
+  list are recorded in [docs/security-review.md](docs/security-review.md); a
+  residual limitation (attacker-supplied regexes in custom packs, which Node
+  cannot time out) is noted in [SECURITY.md](SECURITY.md).
 
 - **Terraform plan JSON is refused by every command except `flecto plan`.**
   Terraform's `before_sensitive` / `after_sensitive` redaction is applied only by
@@ -119,16 +125,6 @@ The format is based on [Keep a Changelog], and this project adheres to
   `.flectorc` `files` patterns that sweep JSON. Those commands now fail with a
   pointer to `flecto plan`, mirroring the guard `flecto plan` already had in the
   other direction. ([#113])
-
-### Fixed
-
-- `flecto policies test` now resolves packs installed by `flecto policies add`.
-  The harness searched only the fixture directory's `policies/`, while
-  `policies add` writes to the invoking project's — so the two commands added in
-  the same release did not compose. A fixture's own `policies/` still wins, so
-  self-contained fixtures are unaffected; the project is a fallback. The
-  "unknown pack" error now names every directory it searched instead of
-  suggesting a path that already existed. ([#114])
 
 ## [3.0.1] - 2026-08-07
 
