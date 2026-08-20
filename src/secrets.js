@@ -57,15 +57,22 @@ const KNOWN_FORMATS = [
   { kind: 'stripe-secret-key', re: /\b[sr]k_live_[0-9A-Za-z]{16,}\b/g },
   // JWT: base64url header starting with "eyJ" ('{"'), payload, signature.
   { kind: 'jwt', re: /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g },
-  // PEM private key blocks, including PGP blocks and unterminated fragments.
-  {
-    kind: 'private-key-block',
-    re: /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----[\s\S]*?(?:-----END (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----|$)/g,
-  },
 ];
 
-/** Credentials embedded in a URL authority: scheme://user:PASSWORD@host. */
-const URL_CREDENTIALS_RE = /[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:([^\s/@]+)@/gi;
+// PEM/PGP private-key block markers, matched linearly. A single regex spanning
+// BEGIN…END with `[\s\S]*?…$` backtracks quadratically on a long BEGIN-prefixed
+// value with no END — a denial-of-service vector, since secret detection runs
+// on every changed string value. Instead we find the markers with anchored,
+// non-spanning regexes and pair them by position (see findPrivateKeyBlocks).
+const PRIVATE_KEY_BEGIN_RE = /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----/g;
+const PRIVATE_KEY_END_RE = /-----END (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----/g;
+
+// Credentials embedded in a URL authority: scheme://user:PASSWORD@host. The
+// scheme run is length-bounded ({0,32}); an unbounded `*` before the required
+// `://` backtracks quadratically on a long value that never contains `://`. No
+// real URL scheme approaches 32 characters, so the bound changes nothing that
+// matters and removes the ReDoS.
+const URL_CREDENTIALS_RE = /[a-z][a-z0-9+.-]{0,32}:\/\/[^\s/:@]+:([^\s/@]+)@/gi;
 
 /**
  * Values that only *reference* a secret. Redacting these adds noise and, worse,
@@ -206,6 +213,31 @@ function isHighEntropySecret(value) {
 }
 
 /**
+ * PEM/PGP private-key spans, found linearly. Each BEGIN marker pairs with the
+ * next END marker after it; a BEGIN with no following END runs to end of string
+ * (an unterminated fragment is still a leaked key). Pairing by position avoids
+ * the quadratic backtracking a single BEGIN…END regex incurs.
+ * @param {string} value
+ * @returns {SecretMatch[]}
+ */
+function findPrivateKeyBlocks(value) {
+  /** @type {SecretMatch[]} */
+  const spans = [];
+  PRIVATE_KEY_BEGIN_RE.lastIndex = 0;
+  let begin;
+  while ((begin = PRIVATE_KEY_BEGIN_RE.exec(value)) !== null) {
+    const bodyStart = begin.index + begin[0].length;
+    PRIVATE_KEY_END_RE.lastIndex = bodyStart;
+    const end = PRIVATE_KEY_END_RE.exec(value);
+    const spanEnd = end ? end.index + end[0].length : value.length;
+    spans.push({ kind: 'private-key-block', start: begin.index, end: spanEnd });
+    // Resume scanning past this block so overlapping BEGINs inside it are skipped.
+    PRIVATE_KEY_BEGIN_RE.lastIndex = spanEnd;
+  }
+  return spans;
+}
+
+/**
  * Locate every secret-shaped span inside a string, sorted and non-overlapping.
  * @param {string} value
  * @returns {SecretMatch[]}
@@ -222,6 +254,8 @@ function findSecretMatches(value) {
       if (match[0].length === 0) re.lastIndex += 1;
     }
   }
+
+  matches.push(...findPrivateKeyBlocks(value));
 
   URL_CREDENTIALS_RE.lastIndex = 0;
   let credentials;

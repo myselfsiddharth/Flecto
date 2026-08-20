@@ -9,6 +9,11 @@ import { assertNotTerraformPlan } from './terraform.js';
 
 const SUPPORTED_EXT = ['.json', '.yaml', '.yml', '.toml', '.env', '.ini', '.age'];
 
+// Upper bound on nodes produced when normalizing a parsed tree. Well above any
+// real config (a 5,000-key file is 5,000 nodes) and below where alias expansion
+// becomes a denial of service. See normalizeParsedValue.
+const MAX_NORMALIZED_NODES = 5_000_000;
+
 /**
  * True for dotenv-like names: `.env`, `.env.*`, `*.env`
  * @param {string} filepath
@@ -99,18 +104,34 @@ export const CIRCULAR_SENTINEL = '<circular>';
  * rather than e.g. a back-reference path, so two files with the same cycle
  * shape normalize to the same tree and compare equal — the whole point of a
  * stable, readable diff path.
+ *
+ * A budget bounds the total nodes produced. YAML aliases resolve to shared
+ * object *references*, so a tiny file — `a: &a [x,…]`, `b: [*a,*a,…]`, repeated
+ * a handful of levels — parses to a small DAG that this function expands into an
+ * exponentially large *tree* (each alias reference is normalized independently,
+ * on purpose, so two files with the same shape compare equal). Without a bound,
+ * a few hundred bytes of nested aliases hang the process — a "billion laughs"
+ * denial of service reachable on any parsed file. The budget makes it fail with
+ * a clear error instead. The limit is far above any real config.
  * @param {unknown} value
  * @param {Set<object>} [ancestors] internal recursion state; omit when calling
+ * @param {{ n: number }} [budget] internal node counter; omit when calling
  * @returns {unknown}
  */
-function normalizeParsedValue(value, ancestors = new Set()) {
+function normalizeParsedValue(value, ancestors = new Set(), budget = { n: 0 }) {
+  if (++budget.n > MAX_NORMALIZED_NODES) {
+    throw new Error(
+      `document expands to too many nodes (limit ${MAX_NORMALIZED_NODES}); `
+      + 'this is usually YAML alias expansion (a "billion laughs" bomb)',
+    );
+  }
   if (typeof value === 'bigint') return String(value);
   if (typeof value === 'number' && !Number.isFinite(value)) return String(value);
   if (value instanceof Date) return value.toJSON();
   if (Array.isArray(value)) {
     if (ancestors.has(value)) return CIRCULAR_SENTINEL;
     ancestors.add(value);
-    const out = value.map((item) => normalizeParsedValue(item, ancestors));
+    const out = value.map((item) => normalizeParsedValue(item, ancestors, budget));
     ancestors.delete(value);
     return out;
   }
@@ -121,14 +142,14 @@ function normalizeParsedValue(value, ancestors = new Set()) {
   ) {
     const serialized = value.toJSON();
     if (serialized !== value && (serialized === null || typeof serialized !== 'object')) {
-      return normalizeParsedValue(serialized, ancestors);
+      return normalizeParsedValue(serialized, ancestors, budget);
     }
   }
   if (isPlainObject(value)) {
     if (ancestors.has(value)) return CIRCULAR_SENTINEL;
     ancestors.add(value);
     const out = Object.fromEntries(
-      Object.entries(value).map(([key, child]) => [key, normalizeParsedValue(child, ancestors)]),
+      Object.entries(value).map(([key, child]) => [key, normalizeParsedValue(child, ancestors, budget)]),
     );
     ancestors.delete(value);
     return out;

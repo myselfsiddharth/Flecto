@@ -7,6 +7,22 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ## [Unreleased]
 
+### Security
+
+- **Two denial-of-service vectors fixed, found while resuming the 3.0 security
+  review** ([#121]). (1) Secret detection (`src/secrets.js`), which runs on every
+  changed string value under the `default` pack, had two `O(n²)` regexes — the
+  PEM private-key and URL-credential patterns — so a single ~500 KB value in a
+  pull request could hang the CI job. Both are now linear; 1 MB scans in under a
+  second, and detection of real (including unterminated) keys is unchanged. (2) A
+  YAML alias bomb ("billion laughs") — a few hundred bytes of nested aliases that
+  `normalizeParsedValue` expanded into an exponentially large tree — now fails
+  fast against a node budget instead of exhausting memory. Regression tests for
+  both in `test/security.test.js`. The review's findings and its "checked, solid"
+  list are recorded in [docs/security-review.md](docs/security-review.md); a
+  residual limitation (attacker-supplied regexes in custom packs, which Node
+  cannot time out) is noted in [SECURITY.md](SECURITY.md).
+
 ### Added
 
 - Inline suppressions: `# flecto-ignore-next-line <rule> — <reason>` on the line
@@ -653,6 +669,8 @@ fixed — those runs were never actually gated — but the failure is new.
 [#108]: https://github.com/myselfsiddharth/Flecto/pull/108
 [#109]: https://github.com/myselfsiddharth/Flecto/issues/109
 [#110]: https://github.com/myselfsiddharth/Flecto/issues/110
+[#121]: https://github.com/myselfsiddharth/Flecto/issues/121
+
 [#119]: https://github.com/myselfsiddharth/Flecto/issues/119
 
 [#118]: https://github.com/myselfsiddharth/Flecto/issues/118
