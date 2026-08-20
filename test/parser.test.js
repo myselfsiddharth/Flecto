@@ -299,15 +299,43 @@ describe('multi-document YAML diffs', () => {
     assert.equal(events[0].path, 'Service/api');
   });
 
-  test('dropping to a single document rewrites the tree', () => {
-    // A one-document file is the document itself, so a file that goes from two
-    // documents to one changes shape. Documented rather than silently accepted.
+  test('dropping to a single manifest reads as one removal (#124)', () => {
+    // A lone Kubernetes manifest is now keyed by identity too, so going from two
+    // documents to one is exactly the removal it looks like — the surviving
+    // Deployment keeps its path instead of being re-pathed from scratch.
     const before = parseContent('manifest.yaml', `${DEPLOYMENT}---\n${SERVICE}`);
     const after = parseContent('manifest.yaml', DEPLOYMENT);
     const events = diffTrees(before, after);
-    assert.ok(events.some((e) => e.type === 'removed' && e.path === 'Deployment/api'));
-    assert.ok(events.some((e) => e.type === 'removed' && e.path === 'Service/api'));
-    assert.ok(events.some((e) => e.type === 'added' && e.path === 'kind'));
+    assert.equal(events.length, 1);
+    assert.equal(events[0].type, 'removed');
+    assert.equal(events[0].path, 'Service/api');
+  });
+
+  test('adding a second manifest reads as one addition (#124)', () => {
+    // The bug this fixes: a lone manifest used to be unwrapped, so adding a
+    // document beside it re-pathed every key and reported the untouched original
+    // as removed-and-re-added.
+    const before = parseContent('manifest.yaml', DEPLOYMENT);
+    const after = parseContent('manifest.yaml', `${DEPLOYMENT}---\n${SERVICE}`);
+    const events = diffTrees(before, after);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].type, 'added');
+    assert.equal(events[0].path, 'Service/api');
+  });
+
+  test('a lone manifest is keyed by identity, ordinary single-doc YAML is not (#124)', () => {
+    assert.deepEqual([...documentKeysOf(parseContent('d.yaml', DEPLOYMENT))], ['Deployment/api']);
+    // No apiVersion → not a manifest → untouched, bare, no document keys.
+    assert.deepEqual([...documentKeysOf(parseContent('c.yaml', 'kind: Widget\nname: x\nport: 3000\n'))], []);
+    assert.deepEqual([...documentKeysOf(parseContent('c.yaml', 'port: 3000\n'))], []);
+  });
+
+  test('a change inside a lone manifest reads on the same path as in a stream (#124)', () => {
+    const before = parseContent('d.yaml', DEPLOYMENT);
+    const after = parseContent('d.yaml', DEPLOYMENT.replace('replicas: 2', 'replicas: 5'));
+    const events = diffTrees(before, after);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].path, 'Deployment/api.spec.replicas');
   });
 
   test('index-keyed documents shift when one is inserted at the top', () => {

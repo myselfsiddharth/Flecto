@@ -23,9 +23,18 @@ policy packs and file patterns that match, printing what it found and why:
 |---|---|
 | `docker-compose.yml`, `docker-compose.yaml`, `compose.yml`, `compose.yaml` | Enables the [`compose`](policy-packs.md) pack and watches the compose file |
 | `package.json` | Enables the `node-runtime` pack and watches `package.json` |
+| A YAML document carrying `apiVersion` + `kind` | Enables the [`kubernetes`](kubernetes.md) pack and watches the manifests |
+| A file with a top-level SOPS metadata block, or `.sops.yaml` | Enables the [`sops`](encrypted-files.md) pack and watches the encrypted files |
 | `config/` | Adds `config/**/*.{yaml,yml,json,toml,ini}` to `files` |
 | `.env`, `.env.*`, `*.env` | Adds `.env`, `.env.*`, `*.env` to `files` |
 | `*.tf` | Reported only — no `terraform` pack ships yet, and `.tf` is not a parseable format, so nothing is enabled |
+
+The Kubernetes and SOPS signals are read from file **contents**, not names — a
+`deploy.yaml` only counts if it actually carries `apiVersion` + `kind`, so an
+ordinary config that happens to have a `kind:` field is left alone. Sniffing is
+bounded: it looks at the repo root and the conventional `k8s/`, `kubernetes/`,
+`manifests/`, and `deploy/` directories, caps how many files it reads, and skips
+any file over 256 KB. A large repo does not turn `init` into a full-tree scan.
 
 Detected packs also land in the `prod` profile, alongside `strict-prod`. Only
 built-in pack ids and formats Flecto can parse are ever written, so the generated
