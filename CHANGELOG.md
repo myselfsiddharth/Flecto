@@ -7,6 +7,21 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- The 3.0 integrations were verified against the real tools they integrate with,
+  not only fixtures ([#122]). The HTML report was opened in a real browser — both
+  themes render with no JS errors, and the filter, expand/collapse, and
+  disclosure triangle work. The encrypted-file path is now tested against output
+  from the real `age` binary (`test/fixtures/encrypted-real/`), confirming a real
+  age file is detected and never leaks ciphertext through a diff. The
+  `flecto-pr-risk` Action was statically reviewed (no runner here to execute a
+  live PR) and its flagged mechanics are correct. What was verified, and what
+  still needs a real runner / `terraform` / `sops`, is recorded in
+  [docs/integration-verification.md](docs/integration-verification.md) — which
+  also notes that `flecto report` has no `--mask-secrets` yet, so it renders
+  secret values in the clear (a follow-up). ([#122])
+
 ### Security
 
 - **Two denial-of-service vectors fixed, found while resuming the 3.0 security
@@ -669,6 +684,8 @@ fixed — those runs were never actually gated — but the failure is new.
 [#108]: https://github.com/myselfsiddharth/Flecto/pull/108
 [#109]: https://github.com/myselfsiddharth/Flecto/issues/109
 [#110]: https://github.com/myselfsiddharth/Flecto/issues/110
+[#122]: https://github.com/myselfsiddharth/Flecto/issues/122
+
 [#121]: https://github.com/myselfsiddharth/Flecto/issues/121
 
 [#119]: https://github.com/myselfsiddharth/Flecto/issues/119
