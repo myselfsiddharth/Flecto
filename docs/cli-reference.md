@@ -84,7 +84,12 @@ flecto ci "config/**/*.yaml" --snapshot-ref HEAD~1 --fail-on "policy,error"
 | `--no-array-id` | — | Diff arrays by index instead of identity |
 | `--array-ignore-order` | off | Treat array order as insignificant |
 | `--mask-secrets` | off | Mask secret-like values in CI output |
+| `--show-suppressed` | off | List inline-suppressed findings instead of only counting them |
 | `--allow-empty` | off | Succeed when no files were diffed |
+
+Inline suppressions (`# flecto-ignore-next-line <rule> — <reason>`) accept a
+single deliberate finding in place; a reason is mandatory. See
+[ci.md](ci.md#suppressing-one-finding-in-place).
 
 **Fail triggers:** `changed`, `added`, `removed`, `policy`, `error`, `warn`.
 

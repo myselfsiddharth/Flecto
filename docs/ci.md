@@ -64,6 +64,47 @@ diff — and tighten later.
 
 ---
 
+## Suppressing one finding in place
+
+When a single finding is deliberate, accept it *next to the thing being
+accepted* with an inline comment, rather than in a baseline file elsewhere:
+
+```yaml
+database:
+  # flecto-ignore-next-line pool-size-jump — provisioned for the Black Friday load test, reverting in December
+  pool_size: 200
+```
+
+The comment goes on the line above the flagged value and names the rule. **A
+reason is mandatory** — a suppression without one is refused, with a pointer to
+the file and line, so a repo never accumulates unexplained `# noqa`:
+
+```
+[error] Inline suppression is missing a required reason:
+  config/prod.yaml:12: flecto-ignore-next-line pool-size-jump needs a reason …
+```
+
+The reason follows the rule id after an em dash (`—`), `--`, `:`, or just a
+space. The directive works in every format Flecto parses that *has* comments —
+YAML, TOML, INI, and dotenv (`#`, or `;` in INI). **JSON has no comment syntax,**
+so use the [baseline](#adopting-on-an-existing-repo-the-baseline) for JSON.
+
+A suppression is scoped to the **next line and the named rule** — never a bare
+"ignore everything here"; `--ignore` and `severityRemap` already do that. It
+resolves to the exact key on that line (with its full nesting), so a suppression
+on one `pool_size` never hides an uncommented `pool_size` elsewhere in the file.
+Array items and multi-document YAML resolve to no path — use the baseline for
+those.
+
+Suppressed findings are still surfaced so the gate stays legible: a **count** by
+default, the full list with `--show-suppressed`, both on stderr.
+
+**Suppression vs. baseline.** They solve different problems. A baseline is "we
+are adopting Flecto and have 200 pre-existing findings." A suppression is "this
+one line is deliberate, and here is why." Suppressions apply first — a finding
+suppressed inline is gone before the baseline is consulted, so it is never
+counted twice.
+
 ## Adopting on an existing repo: the baseline
 
 Turn Flecto on in a repo that has been running for years and the first CI run is
