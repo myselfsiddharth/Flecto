@@ -74,6 +74,7 @@ import { containsSecret } from './secrets.js';
  *   source?: 'watch' | 'ci' | 'diff',
  *   policies?: string[],
  *   plugins?: string[],
+ *   packRoots?: string[],
  *   severityRemap?: Record<string, PolicySeverity | 'off'>
  * }} PolicyEvalOptions
  */
@@ -166,17 +167,34 @@ function validatePack(pack, path) {
 }
 
 /**
- * @param {string} cwd
+ * Every directory whose `policies/` is searched for a local pack, in order.
+ * The first entry is the primary cwd; later entries are fallbacks (the policy
+ * fixture harness runs from the fixture directory but packs are installed into
+ * the invoking project — see #114).
+ * @param {string | string[]} cwd
+ * @returns {string[]}
+ */
+function packRoots(cwd) {
+  const roots = (Array.isArray(cwd) ? cwd : [cwd])
+    .filter((root) => typeof root === 'string' && root)
+    .map((root) => resolve(root));
+  // Distinct roots only: a fixture run from the project root would otherwise
+  // search the same policies/ directory twice and report it twice on failure.
+  return [...new Set(roots)];
+}
+
+/**
+ * @param {string | string[]} cwd
  * @param {string} packId
  * @returns {string | null}
  */
 function resolvePackPath(cwd, packId) {
-  const localJson = resolve(cwd, 'policies', `${packId}.json`);
-  const localYaml = resolve(cwd, 'policies', `${packId}.yaml`);
-  const localYml = resolve(cwd, 'policies', `${packId}.yml`);
-  if (existsSync(localJson)) return localJson;
-  if (existsSync(localYaml)) return localYaml;
-  if (existsSync(localYml)) return localYml;
+  for (const root of packRoots(cwd)) {
+    for (const ext of ['.json', '.yaml', '.yml']) {
+      const localPath = resolve(root, 'policies', `${packId}${ext}`);
+      if (existsSync(localPath)) return localPath;
+    }
+  }
 
   const builtinJson = join(PACKS_DIR, `${packId}.json`);
   if (existsSync(builtinJson)) return builtinJson;
@@ -359,13 +377,16 @@ function validateComposition(clauses, name, location) {
 const packCache = new Map();
 
 /**
- * @param {string} cwd
+ * @param {string[]} roots  already-resolved search roots, in order
  * @param {string} path
  * @param {number} mtimeMs
  * @returns {string}
  */
-function packCacheKey(cwd, path, mtimeMs) {
-  return `${resolve(cwd)}\u0000${path}\u0000${mtimeMs}`;
+function packCacheKey(roots, path, mtimeMs) {
+  // Roots are NUL-joined for the same reason the other fields are
+  // NUL-separated: two different root lists must never concatenate into the
+  // same key.
+  return `${roots.join('\u0000')}\u0000${path}\u0000${mtimeMs}`;
 }
 
 /**
@@ -385,11 +406,21 @@ export function loadPack(packId, cwd = process.cwd()) {
   if (!id) throw new Error('Policy pack id is required');
   const path = resolvePackPath(cwd, id);
   if (!path) {
-    throw new Error(`Unknown policy pack "${id}". Add policies/${id}.json or use a built-in pack.`);
+    // Name the directories actually searched. The old message always said
+    // "Add policies/<id>.json", which was actively misleading when the pack
+    // existed but in a directory this lookup never consulted (#114).
+    const searched = packRoots(cwd)
+      .map((root) => join(root, 'policies'))
+      .concat(PACKS_DIR)
+      .join(', ');
+    throw new Error(
+      `Unknown policy pack "${id}". Searched: ${searched}.`
+      + ` Add policies/${id}.json in one of these, or use a built-in pack.`,
+    );
   }
 
   const mtimeMs = statSync(path).mtimeMs;
-  const cacheKey = packCacheKey(cwd, path, mtimeMs);
+  const cacheKey = packCacheKey(packRoots(cwd), path, mtimeMs);
   const cached = packCache.get(cacheKey);
   if (cached) return cached;
 
@@ -1020,10 +1051,15 @@ export async function evaluatePolicies(changes, options = {}) {
   const packIds = options.policies?.length ? options.policies : ['default'];
   const plugins = options.plugins ?? [];
   const severityRemap = options.severityRemap ?? {};
+  // Packs may resolve from additional roots (the fixture harness adds the
+  // invoking project, #114). Plugin resolution deliberately stays anchored to
+  // the single `cwd` below: widening where executable code loads from is not
+  // the same decision as widening where declarative packs load from.
+  const packSearchRoots = options.packRoots?.length ? [cwd, ...options.packRoots] : cwd;
 
   /** @type {PolicyFinding[]} */
   const findings = [];
-  const packs = packIds.map((packId) => loadPack(packId, cwd));
+  const packs = packIds.map((packId) => loadPack(packId, packSearchRoots));
   const knownRuleIds = new Set(packs.flatMap((pack) => pack.rules.map((rule) => String(rule.id))));
   for (const ruleId of Object.keys(severityRemap)) {
     if (!knownRuleIds.has(ruleId)) {
