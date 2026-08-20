@@ -75,6 +75,8 @@ flecto ci "config/**/*.yaml" --snapshot-ref HEAD~1 --fail-on "policy,error"
 | `--format <type>` | `json` | `json`, `ndjson`, `sarif`, `github-annotations`, or `pr-comment` |
 | `--pr-comment-post` | off | With `--format pr-comment`, upsert the sticky comment on the PR |
 | `--fail-on <rules>` | `changed,policy,error` | Comma-separated fail triggers |
+| `--baseline <file>` | — | Gate only on findings not already recorded in this file |
+| `--update-baseline` | off | Rewrite the `--baseline` file from the current findings |
 | `--ignore <keys>` | — | Comma-separated key paths to ignore |
 | `--policies <ids>` | `default` | Comma-separated policy pack ids |
 | `--plugins <paths>` | — | Comma-separated local ESM plugin paths |

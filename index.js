@@ -36,6 +36,13 @@ import { resolveWebhookFormat, WEBHOOK_FORMAT_CHOICES } from './src/notifiers.js
 import { createEnvelope } from './src/envelope.js';
 import { buildSarif } from './src/sarif.js';
 import {
+  loadBaseline,
+  applyBaseline,
+  buildBaselineFile,
+  writeBaselineFile,
+  baselineRelativePath,
+} from './src/baseline.js';
+import {
   evaluatePolicies,
   highestSeverity,
   listPolicyPacks,
@@ -823,6 +830,8 @@ program
   .option('--format <type>', 'Output format: json | ndjson | sarif | github-annotations | pr-comment', 'json')
   .option('--pr-comment-post', 'With --format pr-comment, upsert the comment on the PR (needs GITHUB_TOKEN + PR context)', false)
   .option('--fail-on <rules>', 'Comma-separated fail rules: changed,added,removed,policy,error,warn', 'changed,policy,error')
+  .option('--baseline <file>', 'Gate only on findings not already recorded in this baseline file')
+  .option('--update-baseline', 'Rewrite the --baseline file from the current findings (explicit, never automatic)', false)
   .option('--ignore <keys>', 'Comma-separated key paths to ignore')
   .option('--policies <ids>', 'Comma-separated policy pack ids')
   .option('--plugins <paths>', 'Comma-separated local ESM plugin paths')
@@ -856,9 +865,15 @@ program
       const maskSecrets = Boolean(effective.maskSecrets);
       const dOpts = diffOptionsFromEffective(effective, ignorePaths);
 
-      /** @type {any[]} */
-      const results = [];
-      let shouldFail = false;
+      const cwd = process.cwd();
+      const baselinePath = effective.baseline ? resolve(cwd, String(effective.baseline)) : null;
+      const updateBaseline = Boolean(effective.updateBaseline);
+      if (updateBaseline && !baselinePath) {
+        throw new Error('--update-baseline requires --baseline <file> naming the file to write.');
+      }
+
+      /** @type {Array<{ filepath: string, relFile: string, outboundChanges: any[], outboundFindings: any[], changesFail: boolean }>} */
+      const perFile = [];
       let diffed = 0;
 
       for (const filepath of targets) {
@@ -882,7 +897,7 @@ program
         }
         const events = diffTrees(before, after, dOpts);
         const policyFindings = await evaluatePolicies(events, {
-          cwd: process.cwd(),
+          cwd,
           file: filepath,
           profile: profile ?? null,
           source: 'ci',
@@ -890,20 +905,14 @@ program
           plugins,
           severityRemap,
         });
-        const outboundChanges = maybeMaskChanges(events, maskSecrets);
-        const outboundFindings = maybeMaskFindings(policyFindings, events, maskSecrets);
-        const envelope = createEnvelope({
-          source: 'ci',
-          file: filepath,
-          changes: outboundChanges,
-          policies: outboundFindings,
+        perFile.push({
+          filepath,
+          relFile: baselineRelativePath(filepath, cwd),
+          outboundChanges: maybeMaskChanges(events, maskSecrets),
+          outboundFindings: maybeMaskFindings(policyFindings, events, maskSecrets),
+          changesFail: shouldFailFromChanges(events, failOn),
         });
-        results.push({ file: filepath, envelope, policies: outboundFindings });
         diffed += 1;
-
-        if (shouldFailFromChanges(events, failOn) || shouldFailFromPolicy(policyFindings, failOn)) {
-          shouldFail = true;
-        }
       }
 
       if (diffed === 0 && !effective.allowEmpty) {
@@ -913,8 +922,79 @@ program
         );
       }
 
+      // Every finding this run produced, paired with its repo-relative file, so
+      // the baseline can be matched, updated, and stale-checked on stable keys.
+      const located = perFile.flatMap((f) =>
+        f.outboundFindings.map((finding) => ({ file: f.relFile, finding })));
+
+      // Without a baseline, every finding is active — behavior is unchanged.
+      let activeByFile = new Map(perFile.map((f) => [f.relFile, f.outboundFindings]));
+      let baselineSummary = null;
+      if (baselinePath) {
+        const { entries: recorded } = loadBaseline(baselinePath);
+
+        if (updateBaseline) {
+          // Recording the current state accepts all of it: the file is rewritten
+          // from every finding, and nothing is "new" relative to what was just
+          // written, so the gate passes on the policy axis.
+          writeBaselineFile(baselinePath, buildBaselineFile(located, recorded));
+          renderNote(
+            `Baseline updated: ${baselineRelativePath(baselinePath, cwd)} `
+            + `(${located.length} finding${located.length === 1 ? '' : 's'} recorded)`,
+          );
+          activeByFile = new Map();
+          baselineSummary = { active: 0, accepted: located.length, stale: [] };
+        } else {
+          const { active, accepted, stale } = applyBaseline(located, recorded);
+          const activeMap = new Map();
+          for (const { file, finding } of active) {
+            if (!activeMap.has(file)) activeMap.set(file, []);
+            activeMap.get(file).push(finding);
+          }
+          activeByFile = activeMap;
+          baselineSummary = { active: active.length, accepted: accepted.length, stale };
+        }
+      }
+
+      // Results reflect the *active* findings: with a baseline in effect, an
+      // accepted finding is suppressed from output as well as from the gate, so a
+      // green run is not buried under hundreds of already-accepted findings.
+      const results = perFile.map((f) => {
+        const active = activeByFile.get(f.relFile) ?? [];
+        return {
+          file: f.filepath,
+          envelope: createEnvelope({
+            source: 'ci',
+            file: f.filepath,
+            changes: f.outboundChanges,
+            policies: active,
+          }),
+          policies: active,
+        };
+      });
+
+      // With --update-baseline everything is now accepted, so there are no active
+      // findings to gate on; the policy gate simply passes. Change-based triggers
+      // are about the diff, not the findings, so they still apply.
+      const activeFindings = results.flatMap((r) => r.policies);
+      const shouldFail = perFile.some((f) => f.changesFail)
+        || shouldFailFromPolicy(activeFindings, failOn);
+
+      if (baselineSummary) {
+        const parts = [`${baselineSummary.active} new`, `${baselineSummary.accepted} baselined`];
+        if (baselineSummary.stale.length > 0) parts.push(`${baselineSummary.stale.length} stale`);
+        renderNote(`Baseline: ${parts.join(', ')}.`);
+        if (baselineSummary.stale.length > 0 && !updateBaseline) {
+          renderWarn(
+            `${baselineSummary.stale.length} baseline `
+            + `${baselineSummary.stale.length === 1 ? 'entry no longer occurs' : 'entries no longer occur'}; `
+            + 're-run with --update-baseline to prune.',
+          );
+        }
+      }
+
       if (format === 'pr-comment') {
-        const body = renderPrComment(results, { cwd: process.cwd(), failed: shouldFail });
+        const body = renderPrComment(results, { cwd, failed: shouldFail });
         console.log(body);
         await deliverPrCommentSafely(body, prCommentPost);
       } else {
