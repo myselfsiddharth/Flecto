@@ -9,6 +9,18 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ### Added
 
+- `flecto ci --format sarif` emits SARIF 2.1.0 for upload to GitHub code
+  scanning (`github/codeql-action/upload-sarif`). Policy findings render on the
+  pull request diff and in the Security tab, with GitHub handling dedup,
+  new-vs-existing, and fixed-finding tracking. Each pack rule maps to a
+  `reportingDescriptor` (id, short description, pack, level); `severity` maps to
+  SARIF `level` (`error`/`warning`/`note`). `--mask-secrets` applies, since a
+  SARIF file is uploaded and retained. Results are **file-level** for now —
+  Flecto reports a semantic path, not a source line, so each result anchors at
+  the top of the file and preserves the full path as a SARIF logical location;
+  GitHub still renders and tracks the alert. Recipe and required
+  `security-events: write` permission are in [docs/ci.md](docs/ci.md). ([#120])
+
 - `flecto init` now detects Kubernetes manifests and SOPS usage — the two file
   shapes 3.0 was built around — and enables the `kubernetes` and `sops` packs
   accordingly. Detection is content-based: a YAML document must actually carry
@@ -613,6 +625,8 @@ fixed — those runs were never actually gated — but the failure is new.
 [#108]: https://github.com/myselfsiddharth/Flecto/pull/108
 [#109]: https://github.com/myselfsiddharth/Flecto/issues/109
 [#110]: https://github.com/myselfsiddharth/Flecto/issues/110
+[#120]: https://github.com/myselfsiddharth/Flecto/issues/120
+
 [#123]: https://github.com/myselfsiddharth/Flecto/issues/123
 
 [#124]: https://github.com/myselfsiddharth/Flecto/issues/124
