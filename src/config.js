@@ -1,14 +1,33 @@
-import { existsSync, readFileSync, readdirSync, writeFileSync } from 'fs';
-import { resolve, sep } from 'path';
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'fs';
+import { join, relative, resolve, sep } from 'path';
 import fg from 'fast-glob';
 import yaml from 'js-yaml';
-import { isEnvFilename } from './parser.js';
+import { isEnvFilename, parseContent } from './parser.js';
+import { encryptionState } from './encrypted.js';
 
 const RC_CANDIDATES = ['.flectorc', '.flectorc.json', '.flectorc.yaml', '.flectorc.yml'];
 const COMPOSE_FILENAMES = ['docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml'];
 const CONFIG_DIR_PATTERN = 'config/**/*.{yaml,yml,json,toml,ini}';
 const ENV_FILE_PATTERNS = ['.env', '.env.*', '*.env'];
 const GENERIC_FILE_PATTERNS = [CONFIG_DIR_PATTERN, ...ENV_FILE_PATTERNS];
+
+// Conventional places a Kubernetes/SOPS repo keeps manifests, searched in
+// addition to the repo root. Detection is content-based (see sniffManifestDirs),
+// so these only bound *where* Flecto looks — a manifest named deploy.yaml still
+// has to actually carry `apiVersion` + `kind` to count.
+const MANIFEST_DIRS = ['k8s', 'kubernetes', 'manifests', 'deploy'];
+
+// Cost guards. `flecto init` must not read a large repo exhaustively: the issue
+// (#123) is explicit that reading every YAML file is the wrong trade. Sniffing
+// stops after this many files, and a single file larger than the byte cap is
+// skipped rather than read — a hand-written manifest is never megabytes, and a
+// generated blob that large is not what we want to gate on anyway.
+const MAX_SNIFF_FILES = 50;
+const MAX_SNIFF_BYTES = 256 * 1024;
+const SNIFF_EXTENSIONS = ['.yaml', '.yml', '.json'];
+
+const K8S_ROOT_PATTERN = '*.{yaml,yml}';
+const K8S_DIR_PATTERN = '**/*.{yaml,yml}';
 
 /**
  * @typedef {{
@@ -186,6 +205,185 @@ export async function resolveFiles(input) {
 }
 
 /**
+ * Collect candidate files to sniff: YAML/JSON at the repo root plus, one level
+ * of recursion deep, the conventional manifest directories. Bounded by
+ * MAX_SNIFF_FILES so a large repo never turns `init` into a full-tree read.
+ * @param {string} cwd
+ * @param {string[]} rootFileNames
+ * @param {Set<string>} dirNames
+ * @returns {string[]} absolute paths, root files first
+ */
+function sniffCandidates(cwd, rootFileNames, dirNames) {
+  /** @type {string[]} */
+  const candidates = [];
+  const push = (abs) => {
+    if (candidates.length < MAX_SNIFF_FILES) candidates.push(abs);
+  };
+
+  for (const name of rootFileNames) {
+    if (SNIFF_EXTENSIONS.includes(extLower(name))) push(resolve(cwd, name));
+  }
+
+  for (const dir of MANIFEST_DIRS) {
+    if (!dirNames.has(dir)) continue;
+    for (const abs of walkYamlish(resolve(cwd, dir))) {
+      push(abs);
+      if (candidates.length >= MAX_SNIFF_FILES) break;
+    }
+  }
+
+  return candidates.slice(0, MAX_SNIFF_FILES);
+}
+
+/**
+ * Depth-first list of sniffable files under a directory, skipping node_modules
+ * and dot directories, capped by MAX_SNIFF_FILES so a deep tree cannot run away.
+ * @param {string} root
+ * @returns {string[]}
+ */
+function walkYamlish(root) {
+  /** @type {string[]} */
+  const out = [];
+  /** @type {string[]} */
+  const stack = [root];
+  while (stack.length > 0 && out.length < MAX_SNIFF_FILES) {
+    const dir = stack.pop();
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue;
+        stack.push(join(dir, entry.name));
+      } else if (entry.isFile() && SNIFF_EXTENSIONS.includes(extLower(entry.name))) {
+        out.push(join(dir, entry.name));
+        if (out.length >= MAX_SNIFF_FILES) break;
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * @param {string} name
+ * @returns {string} lower-cased extension including the dot, or ''
+ */
+function extLower(name) {
+  const dot = name.lastIndexOf('.');
+  return dot === -1 ? '' : name.slice(dot).toLowerCase();
+}
+
+/**
+ * Parse a candidate file for detection, cheaply and defensively. Returns null
+ * for anything too large, unreadable, or unparseable — detection never fails a
+ * run, it just learns less. The byte cap is enforced before the read so a huge
+ * file is skipped rather than slurped.
+ * @param {string} abs
+ * @returns {unknown}
+ */
+function sniffParse(abs) {
+  try {
+    if (statSync(abs).size > MAX_SNIFF_BYTES) return null;
+    return parseContent(abs, readFileSync(abs, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * True when a parsed tree (single- or multi-document) contains a
+ * Kubernetes-shaped document: `apiVersion` + `kind`. A multi-document file is
+ * the identity-keyed wrapper, so its documents are one level down.
+ * @param {unknown} tree
+ * @returns {boolean}
+ */
+function hasKubernetesDocument(tree) {
+  if (!isPlainObjectLike(tree)) return false;
+  if (isKubernetesShaped(tree)) return true;
+  return Object.values(tree).some((value) => isKubernetesShaped(value));
+}
+
+/**
+ * @param {unknown} doc
+ * @returns {boolean}
+ */
+function isKubernetesShaped(doc) {
+  return isPlainObjectLike(doc)
+    && typeof doc.apiVersion === 'string' && doc.apiVersion.trim() !== ''
+    && typeof doc.kind === 'string' && doc.kind.trim() !== '';
+}
+
+/**
+ * @param {unknown} v
+ * @returns {v is Record<string, unknown>}
+ */
+function isPlainObjectLike(v) {
+  return v !== null && typeof v === 'object' && !Array.isArray(v);
+}
+
+/**
+ * Sniff the manifest locations for Kubernetes and SOPS signals. Content-based
+ * and cost-bounded; see MAX_SNIFF_FILES / MAX_SNIFF_BYTES. `.sops.yaml` is a
+ * plaintext creation-rules config, not an encrypted file, but its presence is
+ * still a reliable sign the repo uses SOPS, so it counts on its own.
+ * @param {string} cwd
+ * @param {string[]} rootFileNames
+ * @param {Set<string>} dirNames
+ * @returns {{
+ *   kubernetes: { files: string[] } | null,
+ *   sops: { files: string[], creationRules: boolean } | null
+ * }}
+ */
+function sniffManifestDirs(cwd, rootFileNames, dirNames) {
+  const candidates = sniffCandidates(cwd, rootFileNames, dirNames);
+
+  /** @type {Set<string>} */
+  const k8sRel = new Set();
+  /** @type {Set<string>} */
+  const sopsRel = new Set();
+  const creationRules = rootFileNames.some((name) => name === '.sops.yaml' || name === '.sops.yml');
+
+  for (const abs of candidates) {
+    const tree = sniffParse(abs);
+    if (tree == null) continue;
+    const rel = relative(cwd, abs).split(sep).join('/');
+    if (hasKubernetesDocument(tree)) k8sRel.add(rel);
+    if (encryptionState(tree) !== 'plaintext') sopsRel.add(rel);
+  }
+
+  return {
+    kubernetes: k8sRel.size > 0 ? { files: [...k8sRel].sort() } : null,
+    sops: sopsRel.size > 0 || creationRules
+      ? { files: [...sopsRel].sort(), creationRules }
+      : null,
+  };
+}
+
+/**
+ * Watch patterns for the directories that held Kubernetes manifests, plus the
+ * repo root when a manifest lived there. One pattern per conventional dir keeps
+ * the generated config short instead of listing every file.
+ * @param {string[]} relFiles
+ * @returns {string[]}
+ */
+function manifestWatchPatterns(relFiles) {
+  /** @type {Set<string>} */
+  const patterns = new Set();
+  for (const rel of relFiles) {
+    const top = rel.includes('/') ? rel.slice(0, rel.indexOf('/')) : null;
+    if (top && MANIFEST_DIRS.includes(top)) {
+      patterns.add(`${top}/${K8S_DIR_PATTERN}`);
+    } else {
+      patterns.add(K8S_ROOT_PATTERN);
+    }
+  }
+  return [...patterns].sort();
+}
+
+/**
  * Detect stack signals in a directory and map them to policy packs and file
  * patterns. Only built-in pack ids and patterns Flecto can actually parse are
  * ever returned, so a config built from this stays loadable by every command.
@@ -263,6 +461,45 @@ export function detectStack(cwd = process.cwd()) {
       evidence: envFiles,
       pack: null,
       summary: `Detected ${envFiles.join(', ')} → watched ${ENV_FILE_PATTERNS.join(', ')}`,
+    });
+  }
+
+  // Content-based signals for the two shapes 3.0 was built around. Sniffed, not
+  // guessed from filenames, and bounded (#123). Enabling `kubernetes` on a repo
+  // that is not Kubernetes would produce confusing findings on the first run, so
+  // a manifest must actually carry apiVersion + kind to count.
+  const manifests = sniffManifestDirs(cwd, fileNames, dirNames);
+
+  if (manifests.kubernetes) {
+    packs.push('kubernetes');
+    const watched = manifestWatchPatterns(manifests.kubernetes.files);
+    files.push(...watched);
+    const shown = manifests.kubernetes.files.slice(0, 3);
+    const more = manifests.kubernetes.files.length - shown.length;
+    const evidenceList = more > 0 ? `${shown.join(', ')}, +${more} more` : shown.join(', ');
+    signals.push({
+      id: 'kubernetes',
+      evidence: manifests.kubernetes.files,
+      pack: 'kubernetes',
+      summary: `Detected Kubernetes manifests (${evidenceList}) → enabled the \`kubernetes\` policy pack and watched ${watched.join(', ')}`,
+    });
+  }
+
+  if (manifests.sops) {
+    packs.push('sops');
+    if (manifests.sops.files.length > 0) files.push(...manifests.sops.files);
+    const evidence = [
+      ...(manifests.sops.creationRules ? ['.sops.yaml'] : []),
+      ...manifests.sops.files,
+    ];
+    const watchedNote = manifests.sops.files.length > 0
+      ? ` and watched ${manifests.sops.files.join(', ')}`
+      : ' (no encrypted files found yet; the pack applies when they appear)';
+    signals.push({
+      id: 'sops',
+      evidence,
+      pack: 'sops',
+      summary: `Detected SOPS usage (${evidence.join(', ')}) → enabled the \`sops\` policy pack${watchedNote}`,
     });
   }
 

@@ -1,9 +1,10 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'fs';
 import { join, resolve } from 'path';
 import { tmpdir } from 'os';
 import { spawnSync } from 'child_process';
+import { createHash } from 'crypto';
 
 import {
   SENSITIVE_VALUE,
@@ -741,6 +742,145 @@ describe('flecto plan CLI', () => {
       assert.equal(result.status, 0, result.stderr);
       assert.match(result.stderr, /Plan format version 2\.0 is newer/);
       assert.match(result.stdout, /\+ aws_sqs_queue\.jobs\.name: "jobs"/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('plan files are refused on the generic config path (#113)', () => {
+  const planPath = join(FIXTURES, 'sensitive-user-data.json');
+  const SECRETS = /BOOTSTRAPSENSITIVEBEFORE|BOOTSTRAPSENSITIVEAFTER/;
+
+  /**
+   * A baseline snapshot whose sensitive value differs, so a raw structural diff
+   * would emit a change event carrying it.
+   * @param {string} dir
+   * @returns {string}
+   */
+  function writeBaseline(dir) {
+    const plan = JSON.parse(readFileSync(planPath, 'utf8'));
+    plan.resource_changes[0].change.after.user_data = 'BASELINEPLACEHOLDER';
+    const path = join(dir, 'snap.json');
+    writeFileSync(path, JSON.stringify({ state: plan }), 'utf8');
+    return path;
+  }
+
+  test('flecto plan still redacts, which is the whole point of the guard', () => {
+    const run = spawnSync(process.execPath, [rootIndex, 'plan', planPath], { encoding: 'utf8' });
+    assert.equal(run.status, 0);
+    assert.doesNotMatch(run.stdout, SECRETS);
+    assert.match(run.stdout, /aws_instance\.app\.user_data/);
+    assert.match(run.stdout, /\(sensitive value\)/);
+  });
+
+  test('ci refuses a plan instead of printing its sensitive values', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'flecto-tf-ci-'));
+    try {
+      const run = spawnSync(
+        process.execPath,
+        [rootIndex, 'ci', planPath, '--snapshot-ref', writeBaseline(dir), '--format', 'json', '--mask-secrets'],
+        { encoding: 'utf8', cwd: dir },
+      );
+      assert.equal(run.status, 1);
+      assert.doesNotMatch(run.stdout + run.stderr, SECRETS);
+      assert.match(run.stderr, /is Terraform plan JSON/);
+      assert.match(run.stderr, /flecto plan/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('watch --diff refuses a plan against a snapshot taken before the guard', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'flecto-tf-watch-'));
+    try {
+      // Snapshotting a plan is refused now, so the only way to reach --diff is
+      // a snapshot written by an older version. Recreate that shape by hand.
+      const id = createHash('sha256').update(planPath.replaceAll('\\', '/')).digest('hex').slice(0, 16);
+      const snapshotDir = join(dir, '.flecto-snapshots');
+      mkdirSync(snapshotDir, { recursive: true });
+      const plan = JSON.parse(readFileSync(planPath, 'utf8'));
+      plan.resource_changes[0].change.after.user_data = 'BASELINEPLACEHOLDER';
+      writeFileSync(
+        join(snapshotDir, `${id}.json`),
+        JSON.stringify({ file: planPath, state: plan }),
+        'utf8',
+      );
+
+      const run = spawnSync(
+        process.execPath,
+        [rootIndex, 'watch', planPath, '--diff', '--mask-secrets'],
+        { encoding: 'utf8', cwd: dir },
+      );
+      assert.equal(run.status, 1);
+      assert.doesNotMatch(run.stdout + run.stderr, SECRETS);
+      assert.match(run.stderr, /is Terraform plan JSON/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('compare refuses a plan on either side', () => {
+    const run = spawnSync(
+      process.execPath,
+      [rootIndex, 'compare', planPath, planPath],
+      { encoding: 'utf8' },
+    );
+    assert.equal(run.status, 1);
+    assert.doesNotMatch(run.stdout + run.stderr, SECRETS);
+    assert.match(run.stderr, /is Terraform plan JSON/);
+  });
+
+  test('snapshotting a plan is refused, so report can never carry one', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'flecto-tf-snap-'));
+    try {
+      const run = spawnSync(
+        process.execPath,
+        [rootIndex, 'watch', planPath, '--snapshot'],
+        { encoding: 'utf8', cwd: dir },
+      );
+      assert.equal(run.status, 1);
+      assert.doesNotMatch(run.stdout + run.stderr, SECRETS);
+      assert.match(run.stderr, /is Terraform plan JSON/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('ordinary JSON config is untouched by the guard', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'flecto-tf-plain-'));
+    try {
+      const target = join(dir, 'config.json');
+      const snap = join(dir, 'snap.json');
+      writeFileSync(target, JSON.stringify({ pool_size: 20 }), 'utf8');
+      writeFileSync(snap, JSON.stringify({ state: { pool_size: 5 } }), 'utf8');
+      const run = spawnSync(
+        process.execPath,
+        [rootIndex, 'ci', target, '--snapshot-ref', snap, '--format', 'json', '--fail-on', ''],
+        { encoding: 'utf8', cwd: dir },
+      );
+      assert.equal(run.status, 0);
+      assert.match(run.stdout, /"pool_size"/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a JSON file that merely has format_version is not mistaken for a plan', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'flecto-tf-notplan-'));
+    try {
+      const target = join(dir, 'config.json');
+      const snap = join(dir, 'snap.json');
+      // Terraform *state* has format_version but no resource_changes array.
+      writeFileSync(target, JSON.stringify({ format_version: '1.2', replicas: 3 }), 'utf8');
+      writeFileSync(snap, JSON.stringify({ state: { format_version: '1.2', replicas: 1 } }), 'utf8');
+      const run = spawnSync(
+        process.execPath,
+        [rootIndex, 'ci', target, '--snapshot-ref', snap, '--format', 'json', '--fail-on', ''],
+        { encoding: 'utf8', cwd: dir },
+      );
+      assert.equal(run.status, 0);
+      assert.match(run.stdout, /"replicas"/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
