@@ -1,0 +1,29 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.9.5",
+  "resource_changes": [
+    {
+      "address": "aws_instance.app",
+      "mode": "managed",
+      "type": "aws_instance",
+      "name": "app",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": ["update"],
+        "before": {
+          "id": "i-0123456789abcdef0",
+          "instance_type": "t3.medium",
+          "user_data": "BOOTSTRAPSENSITIVEBEFORE"
+        },
+        "after": {
+          "id": "i-0123456789abcdef0",
+          "instance_type": "t3.large",
+          "user_data": "BOOTSTRAPSENSITIVEAFTER"
+        },
+        "after_unknown": {},
+        "before_sensitive": { "user_data": true },
+        "after_sensitive": { "user_data": true }
+      }
+    }
+  ]
+}

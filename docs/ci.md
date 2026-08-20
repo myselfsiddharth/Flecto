@@ -148,6 +148,41 @@ a build's config state or post-processing.
 One JSON object per line — for streaming into a log pipeline without buffering
 the whole run.
 
+### `sarif`
+
+SARIF 2.1.0, for upload to **GitHub code scanning**. Policy findings render on
+the pull request diff and in the Security tab, and GitHub handles dedup,
+new-vs-existing, and fixed-finding tracking across runs.
+
+```bash
+flecto ci "config/**/*.yaml" --snapshot-ref origin/main --format sarif > flecto.sarif
+```
+
+```yaml
+permissions:
+  contents: read
+  security-events: write   # required to upload SARIF
+steps:
+  - run: flecto ci "config/**/*.yaml" --snapshot-ref origin/main --format sarif > flecto.sarif
+  - uses: github/codeql-action/upload-sarif@v3
+    with:
+      sarif_file: flecto.sarif
+```
+
+Two things worth knowing:
+
+- **SARIF carries policy findings, not raw changes.** A SARIF result needs a
+  rule id; a bare change (`--fail-on changed`) has none. The run still exits
+  non-zero, and the diff is still in the `json` output — SARIF reports the gated
+  policy findings.
+- **Results are file-level for now.** Flecto reports a semantic *path*
+  (`Deployment/prod/api.spec.replicas`), not a source line, so each result
+  anchors at the top of the file and preserves the full path as a SARIF *logical
+  location*. GitHub still renders, dedupes, and tracks the alert; it just is not
+  yet pinned to the exact line.
+- **`--mask-secrets` applies.** A SARIF file is uploaded and retained, so mask
+  before you upload if findings could carry sensitive values.
+
 ### `pr-comment`
 
 A markdown risk summary for a pull request: change counts, policy findings

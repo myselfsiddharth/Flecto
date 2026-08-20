@@ -210,6 +210,14 @@ whole file — reordering the render then reads as a wall of changes. Renderers
 are stable in practice, but a template emitting documents conditionally can
 shift positions.
 
+**A single manifest is keyed by identity too.** A file holding one
+Kubernetes-shaped document (`apiVersion` + `kind` + `metadata.name`) is keyed
+`kind/namespace/name` exactly as it would be inside a multi-document file, so its
+paths look the same whether it stands alone or gains a sibling. This is what lets
+you add a `Service` next to an existing `Deployment` and see a single addition
+rather than the whole file re-pathing. Ordinary single-document YAML — anything
+without both `apiVersion` and `kind` — is untouched and keeps its bare paths.
+
 ---
 
 ## See also
