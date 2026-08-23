@@ -370,6 +370,7 @@ services doesn't read as a wall of changes.
 | `node-runtime` | Dropped engine requirements, TLS verification bypasses, debug/inspector flags |
 | `terraform` | Replaced and destroyed stateful resources, ingress opened to `0.0.0.0/0`, IAM wildcards, public S3, capacity jumps |
 | `sops` | Decryption recipients added or removed, a MAC that moved on its own, a file that stopped being encrypted |
+| `github-actions` | Changed workflow triggers, widened permissions, self-hosted runners, unpinned actions, pull-request head checkout, and secrets interpolated into `run` |
 
 ```bash
 flecto policies list          # see what resolves here, built-in and local

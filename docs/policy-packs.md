@@ -156,6 +156,26 @@ The built-in `sops` pack ships this and five more; `default` carries the two
 that catch a secret committed in the clear. →
 **[Encrypted files](encrypted-files.md#policy-rules)**
 
+## GitHub Actions workflows
+
+The built-in `github-actions` pack is enabled by `flecto init` when
+`.github/workflows/` exists. It watches `*.yml` and `*.yaml` workflows and
+reports changed-file risks such as:
+
+- adding `pull_request_target` or a new scheduled, manual, or reusable-workflow trigger;
+- removing the explicit `permissions` block or widening it to `write-all`;
+- changing a job to a self-hosted runner;
+- replacing a full-SHA action reference with a tag or branch;
+- checking out `github.event.pull_request.head.sha`; and
+- interpolating `secrets.*` into a `run` step.
+
+The pack uses `expandSubtrees` so a newly added step or `with` block is inspected
+at its leaf paths. The rules are deliberately conservative. They do not claim
+to derive complete privilege from every workflow graph, and they do not replace
+specialized static analyzers such as actionlint or zizmor. The fixture at
+`examples/fixtures/policies/github-actions/` records the supported cases and
+the non-claim.
+
 ## Exact values, truthiness, and coercion
 
 Flecto currently provides `afterEquals`, not `afterTruthy`. `afterEquals` uses JavaScript strict equality (`===`); it does not coerce strings, numbers, or booleans.

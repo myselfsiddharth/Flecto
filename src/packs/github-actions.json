@@ -1,0 +1,89 @@
+{
+  "id": "github-actions",
+  "expandSubtrees": true,
+  "rules": [
+    {
+      "id": "github-actions-pull-request-target",
+      "severity": "error",
+      "when": ["added"],
+      "match": { "pathEquals": "on.pull_request_target" },
+      "message": "A pull_request_target trigger was added. Do not run fork-controlled code in a privileged workflow; separate metadata checks from untrusted execution."
+    },
+    {
+      "id": "github-actions-permissions-removed",
+      "severity": "error",
+      "when": ["removed"],
+      "match": { "pathEquals": "permissions" },
+      "message": "The workflow permissions block was removed. GitHub may restore a broader default token scope; keep an explicit least-privilege block."
+    },
+    {
+      "id": "github-actions-permissions-write-all",
+      "severity": "error",
+      "when": ["added", "changed"],
+      "match": { "pathEquals": "permissions" },
+      "afterEquals": "write-all",
+      "message": "The workflow token was widened to write-all. Scope permissions to the specific resources and operations required by the job."
+    },
+    {
+      "id": "github-actions-permission-write-scope",
+      "severity": "warn",
+      "when": ["added", "changed"],
+      "match": { "path": "^permissions\\.[^.]+$" },
+      "afterEquals": "write",
+      "messageTemplate": "Workflow permission {path} was widened to write. Confirm the job and its trigger need write access."
+    },
+    {
+      "id": "github-actions-unpinned-action",
+      "severity": "error",
+      "when": ["changed"],
+      "match": { "path": "^jobs\\.[^.]+\\.steps\\[[0-9]+\\]\\.uses$" },
+      "afterMatches": "^.+@(?![0-9a-fA-F]{40}$).+$",
+      "messageTemplate": "Action {after} is not pinned to a full commit SHA at {path}. Pin third-party actions to an immutable SHA and keep the release in a comment."
+    },
+    {
+      "id": "github-actions-pull-request-head-checkout",
+      "severity": "error",
+      "when": ["added", "changed"],
+      "match": { "path": "^jobs\\.[^.]+\\.steps\\[[0-9]+\\]\\.with\\.ref$" },
+      "afterEquals": "github.event.pull_request.head.sha",
+      "message": "The workflow checks out the pull request head SHA. Recheck the trust boundary before combining this with pull_request_target or write permissions."
+    },
+    {
+      "id": "github-actions-secrets-in-run",
+      "severity": "error",
+      "when": ["added", "changed"],
+      "match": { "path": "^jobs\\.[^.]+\\.steps\\[[0-9]+\\]\\.run$" },
+      "afterMatches": "\\$\\{\\{\\s*secrets\\.[^}]+\\}\\}",
+      "message": "A GitHub secret is interpolated into a run step. Prefer an environment boundary and ensure untrusted pull-request code cannot reach the step."
+    },
+    {
+      "id": "github-actions-self-hosted-runner",
+      "severity": "error",
+      "when": ["added", "changed"],
+      "match": { "path": "^jobs\\.[^.]+\\.runs-on$" },
+      "afterMatches": "(^|[ ,])self-hosted([ ,]|$)",
+      "message": "A self-hosted runner is reachable from this workflow. Confirm that fork-controlled changes cannot execute on a runner with persistent credentials."
+    },
+    {
+      "id": "github-actions-schedule-exposed",
+      "severity": "warn",
+      "when": ["added"],
+      "match": { "pathEquals": "on.schedule" },
+      "message": "A scheduled trigger was added. Review which jobs and secrets become reachable without a pull request review."
+    },
+    {
+      "id": "github-actions-workflow-dispatch-exposed",
+      "severity": "warn",
+      "when": ["added"],
+      "match": { "pathEquals": "on.workflow_dispatch" },
+      "message": "A manual workflow trigger was added. Document who may run it and which permissions or secrets it can reach."
+    },
+    {
+      "id": "github-actions-workflow-call-exposed",
+      "severity": "warn",
+      "when": ["added"],
+      "match": { "pathEquals": "on.workflow_call" },
+      "message": "A reusable workflow trigger was added. Review its caller permissions and secret inheritance before treating it as a trusted boundary."
+    }
+  ]
+}
