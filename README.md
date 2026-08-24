@@ -200,6 +200,9 @@ steps:
   - uses: myselfsiddharth/Flecto/.github/actions/flecto-pr-risk@main
 ```
 
+GitLab and Bitbucket work the same way — Flecto detects the host from CI
+variables, or `--pr-provider` forces one. See [CI](docs/ci.md#providers).
+
 A fork's pull request gets a read-only token, so the comment is skipped with a
 warning there — the check itself still runs and still fails on risky changes.
 

@@ -24,6 +24,7 @@ import {
   maskSensitiveValue,
 } from './src/renderer.js';
 import { deliverPrComment, renderPrComment } from './src/pr-comment.js';
+import { PR_PROVIDER_IDS } from './src/pr-providers.js';
 import {
   diffTerraformPlan,
   formatPlanSummary,
@@ -431,11 +432,12 @@ function printCiOutput(results, format) {
  * delivery problem warns, and the exit code stays with the diff/policy result.
  * @param {string} body
  * @param {boolean} enabled
+ * @param {string} [provider] force a delivery adapter instead of detecting one
  */
-async function deliverPrCommentSafely(body, enabled) {
+async function deliverPrCommentSafely(body, enabled, provider) {
   if (!enabled) return;
   try {
-    const result = await deliverPrComment(body, { enabled: true });
+    const result = await deliverPrComment(body, { enabled: true, provider });
     if (result.posted) {
       renderNote(`PR comment ${result.action}${result.url ? `: ${result.url}` : ''}`);
       return;
@@ -815,7 +817,8 @@ program
   .option('-p, --profile <name>', 'Use profile from .flectorc (else FLECTO_PROFILE)')
   .option('--snapshot-ref <ref>', 'Snapshot reference: snapshot path or git ref')
   .option('--format <type>', 'Output format: json | ndjson | github-annotations | pr-comment', 'json')
-  .option('--pr-comment-post', 'With --format pr-comment, upsert the comment on the PR (needs GITHUB_TOKEN + PR context)', false)
+  .option('--pr-comment-post', 'With --format pr-comment, upsert the comment on the PR (needs a token + merge request context)', false)
+  .option('--pr-provider <name>', `Force the comment delivery target: ${PR_PROVIDER_IDS.join(' | ')} (default: detect from CI)`)
   .option('--fail-on <rules>', 'Comma-separated fail rules: changed,added,removed,policy,error,warn', 'changed,policy,error')
   .option('--ignore <keys>', 'Comma-separated key paths to ignore')
   .option('--policies <ids>', 'Comma-separated policy pack ids')
@@ -844,6 +847,9 @@ program
         throw new Error('--format must be json, ndjson, github-annotations, or pr-comment');
       }
       const prCommentPost = Boolean(effective.prCommentPost);
+      if (effective.prProvider && !PR_PROVIDER_IDS.includes(String(effective.prProvider))) {
+        throw new Error(`--pr-provider must be one of: ${PR_PROVIDER_IDS.join(', ')}`);
+      }
       if (prCommentPost && format !== 'pr-comment') {
         renderWarn('Ignoring --pr-comment-post: it only applies to --format pr-comment.');
       }
@@ -910,7 +916,7 @@ program
       if (format === 'pr-comment') {
         const body = renderPrComment(results, { cwd: process.cwd(), failed: shouldFail });
         console.log(body);
-        await deliverPrCommentSafely(body, prCommentPost);
+        await deliverPrCommentSafely(body, prCommentPost, effective.prProvider);
       } else {
         printCiOutput(results, format);
       }
@@ -926,7 +932,8 @@ program
   .description('Diff Terraform plan JSON (terraform show -json) and run policies on it')
   .option('-p, --profile <name>', 'Use profile from .flectorc (else FLECTO_PROFILE)')
   .option('--format <type>', 'Output format: human | json | ndjson | github-annotations | pr-comment', 'human')
-  .option('--pr-comment-post', 'With --format pr-comment, upsert the comment on the PR (needs GITHUB_TOKEN + PR context)', false)
+  .option('--pr-comment-post', 'With --format pr-comment, upsert the comment on the PR (needs a token + merge request context)', false)
+  .option('--pr-provider <name>', `Force the comment delivery target: ${PR_PROVIDER_IDS.join(' | ')} (default: detect from CI)`)
   .option('--fail-on <rules>', 'Comma-separated fail rules: changed,added,removed,policy,error,warn', PLAN_DEFAULT_FAIL_ON)
   .option('--ignore <keys>', 'Comma-separated key paths to ignore, e.g. "**.tags_all,**.#action"')
   .option('--policies <ids>', `Comma-separated policy pack ids (default: ${PLAN_DEFAULT_POLICIES})`)
@@ -955,6 +962,9 @@ program
         throw new Error('--format must be human, json, ndjson, github-annotations, or pr-comment');
       }
       const prCommentPost = Boolean(effective.prCommentPost);
+      if (effective.prProvider && !PR_PROVIDER_IDS.includes(String(effective.prProvider))) {
+        throw new Error(`--pr-provider must be one of: ${PR_PROVIDER_IDS.join(', ')}`);
+      }
       if (prCommentPost && format !== 'pr-comment') {
         renderWarn('Ignoring --pr-comment-post: it only applies to --format pr-comment.');
       }
@@ -1014,7 +1024,7 @@ program
       if (format === 'pr-comment') {
         const body = renderPrComment(results, { cwd: process.cwd(), failed: shouldFail });
         console.log(body);
-        await deliverPrCommentSafely(body, prCommentPost);
+        await deliverPrCommentSafely(body, prCommentPost, effective.prProvider);
       } else if (format !== 'human') {
         printCiOutput(results, format);
       }

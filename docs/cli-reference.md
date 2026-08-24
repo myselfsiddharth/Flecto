@@ -74,6 +74,7 @@ flecto ci "config/**/*.yaml" --snapshot-ref HEAD~1 --fail-on "policy,error"
 | `--snapshot-ref <ref>` | local snapshot | Baseline: a snapshot file path, or a git ref |
 | `--format <type>` | `json` | `json`, `ndjson`, `github-annotations`, or `pr-comment` |
 | `--pr-comment-post` | off | With `--format pr-comment`, upsert the sticky comment on the PR |
+| `--pr-provider <name>` | detect | Force the delivery target: `github`, `gitlab`, or `bitbucket` |
 | `--fail-on <rules>` | `changed,policy,error` | Comma-separated fail triggers |
 | `--ignore <keys>` | — | Comma-separated key paths to ignore |
 | `--policies <ids>` | `default` | Comma-separated policy pack ids |
@@ -167,7 +168,8 @@ Flecto never runs the `terraform` binary; it only reads the JSON you hand it.
 |---|---|---|
 | `-p, --profile <name>` | — | Use a profile from `.flectorc` (else `FLECTO_PROFILE`) |
 | `--format <type>` | `human` | `human`, `json`, `ndjson`, `github-annotations`, or `pr-comment` |
-| `--pr-comment-post` | off | With `--format pr-comment`, upsert the comment on the PR (needs `GITHUB_TOKEN` + PR context) |
+| `--pr-comment-post` | off | With `--format pr-comment`, upsert the comment on the PR (needs a token + merge request context) |
+| `--pr-provider <name>` | detect | Force the delivery target: `github`, `gitlab`, or `bitbucket` |
 | `--fail-on <rules>` | `error` | Comma-separated fail rules: `changed`, `added`, `removed`, `policy`, `error`, `warn` |
 | `--ignore <keys>` | — | Comma-separated key paths to ignore, e.g. `**.tags_all,**.#action` |
 | `--policies <ids>` | `terraform` | Comma-separated policy pack ids |
