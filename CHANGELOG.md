@@ -99,6 +99,30 @@ The format is based on [Keep a Changelog], and this project adheres to
   "unknown pack" error now names every directory it searched instead of
   suggesting a path that already existed. ([#114])
 
+- **`ci --format json` no longer truncates at 64 KB through a pipe** ([#155]).
+  Output was printed with `console.log` and followed immediately by
+  `process.exit()`, which does not flush a pending write — and Node writes to a
+  pipe asynchronously. Everything past the 64 KB pipe buffer was dropped, and
+  the command still exited with its normal status.
+
+  Redirecting to a file hid it, because Node writes to a file descriptor
+  synchronously. It appeared only through a pipe — which is how every consumer
+  that matters reads it: `| jq`, `$(...)` capture, and any CI harness collecting
+  stdout.
+
+  A truncated envelope stream that exits normally is the worst shape for a
+  consumer: it reads as a clean run over fewer files rather than as a failure.
+  With `ndjson` it is quieter still, since every line before the cut is valid
+  JSON, so a line-by-line reader consumes a clean prefix and never learns the
+  rest existed.
+
+  Affected `ci`, `plan`, and `diff`/`compare` on `--format json`, `ndjson`,
+  `sarif`, and `github-annotations`. A truncated SARIF document is rejected
+  outright by `upload-sarif`, but only after the gate has already reported
+  success. `--format pr-comment` was never affected — its body is capped at
+  60,000 characters to fit GitHub's comment limit, which lands under one pipe
+  buffer.
+
 ### Security
 
 - **Two denial-of-service vectors fixed, found while resuming the 3.0 security
@@ -697,6 +721,7 @@ fixed — those runs were never actually gated — but the failure is new.
 [#113]: https://github.com/myselfsiddharth/Flecto/issues/113
 
 [#114]: https://github.com/myselfsiddharth/Flecto/issues/114
+[#155]: https://github.com/myselfsiddharth/Flecto/issues/155
 [Keep a Changelog]: https://keepachangelog.com/en/1.1.0/
 [Semantic Versioning]: https://semver.org/spec/v2.0.0.html
 [GHSA-wq8m-fc3q-8m5x]: https://github.com/myselfsiddharth/Flecto/security/advisories/GHSA-wq8m-fc3q-8m5x
