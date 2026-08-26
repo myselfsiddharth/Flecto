@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, rmSync } from 'fs';
 import { join, resolve } from 'path';
 import { tmpdir } from 'os';
 import { spawnSync } from 'child_process';
-import { parseContent, parseYamlStream, CIRCULAR_SENTINEL } from '../src/parser.js';
+import { parseContent, parseYamlStream, parseJsonc, stripJsonComments, isSupported, CIRCULAR_SENTINEL } from '../src/parser.js';
 import { diffTrees } from '../src/differ.js';
 import { documentKeysOf, stripDocumentPrefix, withDocumentKeys } from '../src/documents.js';
 
@@ -445,4 +445,129 @@ test('ci reports a change inside a multi-document manifest', () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+describe('JSON with comments (JSONC)', () => {
+  test('line and block comments parse, as tsconfig.json is written', () => {
+    const raw = `{
+  // the house style for this file
+  "compilerOptions": {
+    "target": "ES2022" /* inline block */
+  },
+  "include": ["src"],
+}`;
+    assert.deepEqual(parseContent('tsconfig.json', raw), {
+      compilerOptions: { target: 'ES2022' },
+      include: ['src'],
+    });
+  });
+
+  test('a .jsonc extension is supported and parses the same way', () => {
+    assert.equal(isSupported('settings.jsonc'), true);
+    assert.deepEqual(parseContent('settings.jsonc', '{ // c\n "a": 1 }'), { a: 1 });
+  });
+
+  // The naive strip is wrong on exactly the values config files carry.
+  describe('strings are opaque', () => {
+    test('a URL is not mistaken for a line comment', () => {
+      assert.deepEqual(parseJsonc('{"url": "https://example.com"}'), {
+        url: 'https://example.com',
+      });
+    });
+
+    test('block comment markers inside a string survive', () => {
+      assert.deepEqual(parseJsonc('{"a": "/* not a comment */", "b": "*/"}'), {
+        a: '/* not a comment */',
+        b: '*/',
+      });
+    });
+
+    test('an escaped quote does not end the string early', () => {
+      assert.deepEqual(parseJsonc(String.raw`{"a": "he said \"//hi\" ok"}`), {
+        a: 'he said "//hi" ok',
+      });
+    });
+
+    test('a string ending in an escaped backslash ends there', () => {
+      assert.deepEqual(parseJsonc(String.raw`{"a": "c:\\", "b": "//x"}`), {
+        a: 'c:\\',
+        b: '//x',
+      });
+    });
+
+    test('commas and braces inside strings are not structure', () => {
+      assert.deepEqual(parseJsonc('[",", "]"]'), [',', ']']);
+      assert.deepEqual(parseJsonc('{"a": "}" ,}'), { a: '}' });
+    });
+
+    test('an unbalanced quote inside a comment is ignored', () => {
+      assert.deepEqual(parseJsonc('{ // it\'s "unclosed\n "a": 1 }'), { a: 1 });
+    });
+  });
+
+  describe('trailing commas', () => {
+    test('accepted in objects and arrays, including nested', () => {
+      assert.deepEqual(parseJsonc('{"a": [1,], "b": {"c": 2,},}'), {
+        a: [1],
+        b: { c: 2 },
+      });
+    });
+
+    test('accepted when a comment sits between the comma and the brace', () => {
+      assert.deepEqual(parseJsonc('{"a": 1, /* x */ }'), { a: 1 });
+    });
+
+    test('a doubled trailing comma is still a syntax error', () => {
+      assert.throws(() => parseJsonc('[1,,]'), SyntaxError);
+    });
+  });
+
+  describe('error positions stay true to the original file', () => {
+    test('the reported line is the line of the fault, not shifted by comments', () => {
+      // A block comment spanning three lines sits above the fault. Deleting it
+      // rather than blanking it would report line 3 instead of line 6.
+      const raw = '{\n  /* a\n     multi-line\n     banner */\n  "a": 1\n  "b": 2\n}';
+      assert.throws(
+        () => parseContent('broken.json', raw),
+        (err) => err.message.includes('(line 6)'),
+      );
+    });
+
+    test('stripping preserves length, so byte offsets are unchanged', () => {
+      const raw = '{\n  /* multi\n     line */ "a": 1\n}';
+      const stripped = stripJsonComments(raw);
+      assert.equal(stripped.length, raw.length);
+      assert.equal(
+        stripped.split('\n').length,
+        raw.split('\n').length,
+        'newlines inside a block comment must be kept',
+      );
+    });
+
+    test('an unterminated block comment reports the truncated document', () => {
+      assert.throws(() => parseJsonc('{"a": 1 /* oops'), SyntaxError);
+    });
+  });
+
+  test('CRLF files parse', () => {
+    assert.deepEqual(parseJsonc('{\r\n // c\r\n "a": 1\r\n}'), { a: 1 });
+  });
+
+  test('comment-free JSON parses identically to JSON.parse', () => {
+    // The stripper must be a no-op on ordinary JSON, including values made
+    // entirely of the characters it scans for.
+    const samples = [
+      '{"a":1,"b":[1,2,{"c":null}]}',
+      '{"s":"/ * \\\\ \\" , } {"}',
+      '[]',
+      '{}',
+      '"bare string"',
+      '3.14',
+      'null',
+    ];
+    for (const raw of samples) {
+      assert.deepEqual(parseJsonc(raw), JSON.parse(raw), raw);
+      assert.equal(stripJsonComments(raw), raw, raw);
+    }
+  });
 });

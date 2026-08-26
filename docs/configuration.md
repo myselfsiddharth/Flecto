@@ -176,6 +176,47 @@ position carries no meaning — use `--array-ignore-order`.
 
 ---
 
+## JSON with comments
+
+`tsconfig.json`, `.vscode/settings.json`, `jsconfig.json`, and
+`devcontainer.json` are JSONC by convention — TypeScript, VS Code, and the
+devcontainer spec all document comments as supported. Flecto reads `.json` (and
+`.jsonc`) in that dialect, so those files parse rather than failing:
+
+```jsonc
+{
+  // Comments are the house style for this file.
+  "compilerOptions": {
+    "target": "ES2022" /* block comments too */
+  },
+  "include": ["src"],   // a trailing comma is fine
+}
+```
+
+Both comment styles and trailing commas are accepted. Everything else is
+ordinary JSON — a real syntax error is still an error, and the line it reports
+is the line in **your** file, because comments are blanked in place rather than
+removed.
+
+Strings are left alone, so a value containing `//` or `/*` is not mistaken for
+a comment:
+
+```jsonc
+{ "url": "https://example.com" }   // parses as the URL, not as a comment
+```
+
+> **Comments are not part of the parsed value.** Flecto reads config and never
+> writes it back, so nothing in your file is rewritten — but a snapshot stores
+> the parsed structure, not the original text. A comment changed on its own is
+> not a semantic change and produces no diff.
+
+> **Inline suppressions do not apply to JSON**, even though it now has comments.
+> `flecto-ignore-next-line` is recognised in YAML, TOML, INI, and dotenv only —
+> a directive written in a `.json` file has no effect. Use
+> [`--baseline`](ci.md) to accept a finding there.
+
+---
+
 ## Multi-document YAML
 
 A YAML file may hold several `---`-separated documents — the usual shape of a
