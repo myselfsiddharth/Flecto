@@ -454,12 +454,17 @@ function escapeWorkflowCommandProperty(value) {
  *
  * The callback form fires when that specific chunk drains, and stream writes
  * are ordered, so awaiting the last one means every earlier one is out too.
+ *
+ * The trailing newline is appended unconditionally, which is exactly what
+ * `console.log` did. Adding it only when one is missing would silently drop a
+ * byte from any payload that already ends in a newline -- `--format pr-comment`
+ * does -- and the point of this change is that the rendered output is identical.
  * @param {string} text
  * @returns {Promise<void>}
  */
 function writeStdout(text) {
   return new Promise((resolveWrite) => {
-    process.stdout.write(text.endsWith('\n') ? text : `${text}\n`, () => resolveWrite());
+    process.stdout.write(`${text}\n`, () => resolveWrite());
   });
 }
 

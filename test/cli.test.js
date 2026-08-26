@@ -1440,6 +1440,31 @@ test('ci --format pr-comment arrives whole, because its body is capped first', (
   }
 });
 
+test('a payload that already ends in a newline keeps both newlines', () => {
+  // console.log appends a newline unconditionally, so a pr-comment body -- which
+  // ends in one -- was printed with two. Appending only when one is missing
+  // would silently drop a byte from that format. Caught by diffing real output
+  // against main; nothing else in the suite would have noticed.
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-flush-newline-'));
+  const file = join(dir, 'config.json');
+  const snapshot = join(dir, 'snapshot.json');
+  const rootIndex = resolve(process.cwd(), 'index.js');
+
+  try {
+    writeFileSync(file, JSON.stringify({ a: 2 }), 'utf8');
+    writeFileSync(snapshot, JSON.stringify({ state: { a: 1 } }), 'utf8');
+
+    const run = spawnSync(
+      process.execPath,
+      [rootIndex, 'ci', file, '--snapshot-ref', snapshot, '--format', 'pr-comment'],
+      { encoding: 'utf8' },
+    );
+    assert.ok(run.stdout.endsWith('\n\n'), JSON.stringify(run.stdout.slice(-12)));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('small output is byte-identical to what the previous writer produced', () => {
   // The payload is now assembled and written once instead of line by line.
   // That is a flush concern, not a formatting one: the bytes must not move.
