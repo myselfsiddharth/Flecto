@@ -59,6 +59,35 @@ The format is based on [Keep a Changelog], and this project adheres to
   cap on files read, and files over 256 KB skipped — so `init` never turns into
   a full-tree scan. The "detected nothing" generic fallback is unchanged. ([#123])
 
+- **`ci --changed-only`** ([#151]). `ci --format json` emitted an envelope for
+  every **scanned** file, not every **changed** one, so the output grew with the
+  size of the repository rather than the size of the change. Each envelope
+  carries `schema_version`, two UUIDs, an ISO timestamp, and an absolute path —
+  on 250 service configs with one file edited, roughly 88% of the output
+  described files that did not change.
+
+  For a human that is invisible, since the terminal renderer already prints only
+  what changed. It is the machine consumers that pay: webhook sinks, NDJSON
+  readers, and any agent handed the JSON.
+
+  | change (250 configs) | default | `--changed-only` | reduction |
+  |---|---|---|---|
+  | nothing changed | 112.8 KB | 13.3 KB | 88% |
+  | one file changed | 113.4 KB | 14.3 KB | 87% |
+  | every 10th file changed | 126.8 KB | 37.3 KB | 71% |
+
+  **The evidence that Flecto looked is kept.** An envelope for a scanned but
+  unchanged file tells a consumer diffing two runs that a file was *checked and
+  clean* rather than *not checked at all*, and dropping it would quietly weaken
+  a gate someone relies on. Those files collapse into a single `lifecycle`
+  envelope carrying the list of paths, so what is removed is the per-file
+  overhead rather than the signal.
+
+  **Off by default**, so `schema_version` stays `2.0` and existing consumers see
+  byte-for-byte identical output. A file with policy findings but no changes is
+  never collapsed. Settable as `changedOnly` in `.flectorc`. See
+  [CI usage](docs/ci.md#--changed-only).
+
 ### Changed
 
 - The 3.0 integrations were verified against the real tools they integrate with,
@@ -73,7 +102,6 @@ The format is based on [Keep a Changelog], and this project adheres to
   [docs/integration-verification.md](docs/integration-verification.md) — which
   also notes that `flecto report` has no `--mask-secrets` yet, so it renders
   secret values in the clear (a follow-up). ([#122])
-
 ### Fixed
 
 - Adding a second YAML document beside an existing one no longer re-paths the
@@ -721,6 +749,7 @@ fixed — those runs were never actually gated — but the failure is new.
 [#113]: https://github.com/myselfsiddharth/Flecto/issues/113
 
 [#114]: https://github.com/myselfsiddharth/Flecto/issues/114
+[#151]: https://github.com/myselfsiddharth/Flecto/issues/151
 [#155]: https://github.com/myselfsiddharth/Flecto/issues/155
 [Keep a Changelog]: https://keepachangelog.com/en/1.1.0/
 [Semantic Versioning]: https://semver.org/spec/v2.0.0.html

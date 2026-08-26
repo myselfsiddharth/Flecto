@@ -224,6 +224,66 @@ Two things worth knowing:
 - **`--mask-secrets` applies.** A SARIF file is uploaded and retained, so mask
   before you upload if findings could carry sensitive values.
 
+### `--changed-only`
+
+`json` and `ndjson` emit one envelope per **scanned** file, so the output grows
+with the size of the repository rather than the size of the change. On 250
+service configs with one file edited, roughly 88% of it describes files that did
+not change. For a human that is invisible — the terminal renderer already prints
+only what changed — but webhook sinks, NDJSON consumers, and any agent handed
+the JSON pay for it on every run.
+
+`--changed-only` replaces those envelopes with a single manifest:
+
+```bash
+flecto ci "config/**/*.yaml" --format json --changed-only
+```
+
+```json
+[
+  {
+    "file": "/repo/config/prod.yaml",
+    "envelope": { "event_type": "changes", "changes": [ ... ] }
+  },
+  {
+    "scanned": ["/repo/config/dev.yaml", "/repo/config/stage.yaml"],
+    "envelope": {
+      "event_type": "lifecycle",
+      "lifecycle": { "type": "scanned", "message": "2 files scanned with no changes and no policy findings" }
+    }
+  }
+]
+```
+
+| change (250 configs) | default | `--changed-only` | reduction |
+|---|---|---|---|
+| nothing changed | 112.8 KB | 13.3 KB | 88% |
+| one file changed | 113.4 KB | 14.3 KB | 87% |
+| every 10th file changed | 126.8 KB | 37.3 KB | 71% |
+
+**The evidence that Flecto looked is kept.** An envelope for a scanned but
+unchanged file tells a consumer diffing two runs that the file was *checked and
+clean*, rather than *not checked at all* — dropping it would quietly weaken a
+gate someone relies on. The manifest keeps that list; what it drops is the pair
+of UUIDs, timestamp, and repeated schema fields attached to each entry. In the
+one-file-changed row above, 11.1 KB of the remaining 14.3 KB **is** the path
+list, so nearly all of the per-file overhead is gone and nearly all of what is
+left is the evidence itself.
+
+Notes:
+
+- **Off by default.** `schema_version` stays `2.0` and the default output is
+  byte-for-byte unchanged, so no existing consumer is affected.
+- A file with **policy findings but no changes** is not collapsed — a finding is
+  something to report.
+- Discriminate on `envelope.event_type === "lifecycle"`; the manifest entry has
+  no `file`, since it is not about one file. The path list rides on the result
+  wrapper because schema 2.0 closes the envelope to extra properties.
+- The flag applies to `json` and `ndjson`. `sarif`, `github-annotations`, and
+  `pr-comment` already carry only what changed (or, for `sarif`, only
+  findings), and Flecto warns rather than accepting the flag and doing nothing.
+- Settable as `changedOnly: true` in `.flectorc` defaults or a profile.
+
 ### `pr-comment`
 
 A markdown risk summary for a pull request: change counts, policy findings
