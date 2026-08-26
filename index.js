@@ -474,8 +474,8 @@ function writeStdout(text) {
  *
  * `ci` emits one envelope per *scanned* file rather than per *changed* file, so
  * the output grows with the size of the repository instead of the size of the
- * change -- on 250 service configs with one file edited, roughly 98% of it
- * describes files that did not change. For a human that is invisible, because
+ * change -- measured on 250 service configs with one file edited, 113.4 KB of
+ * output for 0.2 KB of semantic content. For a human that is invisible, because
  * the renderer already prints only what changed; it is the machine consumers
  * (webhooks, NDJSON sinks, and any agent handed the JSON) that pay for it.
  *

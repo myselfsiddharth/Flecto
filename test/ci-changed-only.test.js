@@ -324,3 +324,80 @@ describe('ci --changed-only', () => {
     }
   });
 });
+
+describe('ci --changed-only composes with --baseline', () => {
+  // Both features shape the same results array: the baseline strips accepted
+  // findings, then the collapse removes files left with nothing to report. The
+  // order matters, so it is asserted rather than assumed.
+  function baselineProject() {
+    const dir = mkdtempSync(join(tmpdir(), 'flecto-changed-only-baseline-'));
+    mkdirSync(join(dir, 'config'));
+    // One file trips a policy on a real change; four are quiet.
+    writeFileSync(
+      join(dir, 'config', 'risky.yaml'),
+      'database:\n  pool_size: 100\nlogging:\n  debug: true\n',
+      'utf8',
+    );
+    for (let i = 0; i < 4; i += 1) {
+      writeFileSync(join(dir, 'config', `quiet-${i}.yaml`), `name: quiet-${i}\nport: ${8000 + i}\n`, 'utf8');
+    }
+    spawnSync(process.execPath, [rootIndex, 'watch', 'config/**/*.yaml', '--snapshot'], {
+      cwd: dir, encoding: 'utf8',
+    });
+    writeFileSync(
+      join(dir, 'config', 'risky.yaml'),
+      'database:\n  pool_size: 400\nlogging:\n  debug: true\n',
+      'utf8',
+    );
+    return dir;
+  }
+
+  const ci = (dir, extra) => spawnSync(
+    process.execPath,
+    [rootIndex, 'ci', 'config/**/*.yaml', '--allow-empty', '--format', 'json', ...extra],
+    { cwd: dir, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
+  );
+
+  test('an accepted finding does not keep its file out of the manifest', () => {
+    const dir = baselineProject();
+    try {
+      // Record the current findings, then revert the change so the file is both
+      // clean and fully accepted.
+      assert.equal(ci(dir, ['--baseline', '.flecto-baseline.json', '--update-baseline', '--fail-on', 'policy']).status, 0);
+      writeFileSync(
+        join(dir, 'config', 'risky.yaml'),
+        'database:\n  pool_size: 100\nlogging:\n  debug: true\n',
+        'utf8',
+      );
+
+      const run = ci(dir, ['--baseline', '.flecto-baseline.json', '--fail-on', 'policy', '--changed-only']);
+      const results = JSON.parse(run.stdout);
+      assert.equal(results.length, 1, `expected the manifest alone:\n${run.stdout}`);
+      assert.equal(results[0].envelope.event_type, 'lifecycle');
+      assert.equal(results[0].scanned.length, 5, 'the accepted file collapses with the rest');
+      assert.equal(run.status, 0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a file with changes still reports, even when its findings are accepted', () => {
+    const dir = baselineProject();
+    try {
+      assert.equal(ci(dir, ['--baseline', '.flecto-baseline.json', '--update-baseline', '--fail-on', 'policy']).status, 0);
+
+      const run = ci(dir, ['--baseline', '.flecto-baseline.json', '--fail-on', 'policy', '--changed-only']);
+      const results = JSON.parse(run.stdout);
+      const reported = results.filter((r) => r.envelope.event_type === 'changes');
+      assert.equal(reported.length, 1, `the changed file must survive:\n${run.stdout}`);
+      assert.match(reported[0].file, /risky\.yaml$/);
+      assert.ok(reported[0].envelope.changes.length > 0);
+      assert.equal(reported[0].envelope.policies.length, 0, 'its findings are accepted, so none are shown');
+
+      const manifest = results.find((r) => r.envelope.event_type === 'lifecycle');
+      assert.equal(manifest.scanned.length, 4);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
