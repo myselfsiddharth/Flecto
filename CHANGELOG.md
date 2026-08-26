@@ -74,6 +74,13 @@ The format is based on [Keep a Changelog], and this project adheres to
   also notes that `flecto report` has no `--mask-secrets` yet, so it renders
   secret values in the clear (a follow-up). ([#122])
 
+- **CI runs on Windows and macOS** ([#148]). The matrix varied the Node version
+  and nothing else, so every job ran on `ubuntu-latest` — for a tool whose
+  primary local mode is watching files by glob, the two platforms where that
+  behavior differs had never been tested. Linux keeps the full Node matrix;
+  Windows and macOS run one version each, since what they add is the operating
+  system rather than the runtime.
+
 ### Fixed
 
 - Adding a second YAML document beside an existing one no longer re-paths the
@@ -98,6 +105,20 @@ The format is based on [Keep a Changelog], and this project adheres to
   self-contained fixtures are unaffected; the project is a fallback. The
   "unknown pack" error now names every directory it searched instead of
   suggesting a path that already existed. ([#114])
+
+- **Glob patterns written with Windows separators now match** ([#148]).
+  `resolveFiles` passed user patterns straight to `fast-glob`, which requires
+  POSIX separators and reads `\\` as an escape character — so on Windows
+  `config\\*.yaml` asked for a file literally named `config*.yaml`, matched
+  nothing, and reported `No files matched`, blaming the user for a platform bug.
+  Since PowerShell and cmd tab-completion produce backslash paths, that was the
+  default way a Windows user would invoke Flecto.
+
+  Patterns are now rewritten to POSIX separators **on Windows only** — on Linux
+  and macOS a backslash is a legal filename character and a meaningful glob
+  escape, so rewriting there would break patterns that work today. `exclude`
+  patterns get the same rewrite, since an exclude that silently stops excluding
+  widens what Flecto reports on. Resolved paths stay native.
 
 ### Security
 
@@ -697,6 +718,7 @@ fixed — those runs were never actually gated — but the failure is new.
 [#113]: https://github.com/myselfsiddharth/Flecto/issues/113
 
 [#114]: https://github.com/myselfsiddharth/Flecto/issues/114
+[#148]: https://github.com/myselfsiddharth/Flecto/issues/148
 [Keep a Changelog]: https://keepachangelog.com/en/1.1.0/
 [Semantic Versioning]: https://semver.org/spec/v2.0.0.html
 [GHSA-wq8m-fc3q-8m5x]: https://github.com/myselfsiddharth/Flecto/security/advisories/GHSA-wq8m-fc3q-8m5x
