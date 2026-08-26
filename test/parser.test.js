@@ -523,14 +523,66 @@ describe('JSON with comments (JSONC)', () => {
   });
 
   describe('error positions stay true to the original file', () => {
-    test('the reported line is the line of the fault, not shifted by comments', () => {
-      // A block comment spanning three lines sits above the fault. Deleting it
-      // rather than blanking it would report line 3 instead of line 6.
+    test('a comment reports exactly where the same span of whitespace would', () => {
+      // The strongest statement of the contract, and the one that does not
+      // depend on the runtime: a comment must be indistinguishable from the
+      // whitespace it is replaced by. A three-line block comment sits above the
+      // fault, so deleting the span rather than blanking it would move the
+      // reported position.
+      //
+      // Asserted against a control rather than a literal message because V8
+      // only began appending "(line N column M)" to JSON.parse errors in Node
+      // 21; the byte offset it reports is there on every supported version.
+      const comment = '/* a\n     multi-line\n     banner */';
+      // Built independently of the implementation, so the two are provably the
+      // same span rather than the same span by hand-counting.
+      const blank = comment.replaceAll(/[^\n]/g, ' ');
+      const tail = '\n  "a": 1\n  "b": 2\n}';
+      const commented = `{\n  ${comment}${tail}`;
+      const blanked = `{\n  ${blank}${tail}`;
+      assert.equal(commented.length, blanked.length, 'the control must line up byte for byte');
+
+      const messageOf = (raw) => {
+        try {
+          parseContent('broken.json', raw);
+        } catch (err) {
+          return err.message;
+        }
+        return assert.fail('expected a parse error');
+      };
+
+      assert.equal(messageOf(commented), messageOf(blanked));
+      assert.match(messageOf(commented), new RegExp(`position ${commented.indexOf('"b"')}\\b`));
+    });
+
+    test('the reported line is the line of the fault, where the runtime reports lines', () => {
       const raw = '{\n  /* a\n     multi-line\n     banner */\n  "a": 1\n  "b": 2\n}';
-      assert.throws(
-        () => parseContent('broken.json', raw),
-        (err) => err.message.includes('(line 6)'),
-      );
+      // The fault is on line 6; the block comment above it spans lines 2-4.
+      // Node 21+ appends "(line N column M)"; Node 20 does not, and parser.js
+      // only adds its own "(line N)" when the runtime supplied one.
+      const runtimeReportsLines = (() => {
+        try {
+          JSON.parse('{\n"a" 1}');
+        } catch (err) {
+          return /line \d+/i.test(err.message);
+        }
+        return false;
+      })();
+
+      const message = (() => {
+        try {
+          parseContent('broken.json', raw);
+        } catch (err) {
+          return err.message;
+        }
+        return assert.fail('expected a parse error');
+      })();
+
+      if (runtimeReportsLines) {
+        assert.match(message, /\(line 6\)/);
+      } else {
+        assert.doesNotMatch(message, /\(line \d+\)/);
+      }
     });
 
     test('stripping preserves length, so byte offsets are unchanged', () => {
