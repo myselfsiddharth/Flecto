@@ -7,6 +7,29 @@ import { spawn, spawnSync } from 'child_process';
 import { createHash } from 'crypto';
 import { createServer } from 'http';
 
+/**
+ * Kill a spawned CLI process and wait for it to be gone.
+ *
+ * On POSIX the difference rarely shows: the directory unlinks whether or not
+ * the process has finished exiting. On Windows a directory cannot be removed
+ * while any process still holds a handle inside it, so tearing down straight
+ * after kill() fails with EPERM on timing alone.
+ * @param {import('child_process').ChildProcess | undefined | null} child
+ * @param {number} timeoutMs
+ */
+async function stopChild(child, timeoutMs = 5000) {
+  if (!child) return;
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  child.kill();
+  await new Promise((done) => {
+    const timer = setTimeout(done, timeoutMs);
+    child.once('exit', () => {
+      clearTimeout(timer);
+      done();
+    });
+  });
+}
+
 test('ci mode returns non-zero when fail-on changed', () => {
   const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-'));
   const file = join(dir, 'config.json');
@@ -1108,12 +1131,14 @@ test('watch --webhook-format slack posts a masked Block Kit payload', async () =
     assert.doesNotMatch(body, /s3cr3t-pw/);
     assert.match(body, /\*\*\*/);
   } finally {
-    child?.kill();
+    // Windows refuses to remove a directory a live process still has open, and
+    // kill() only signals -- it does not wait. Retrying the removal is a race
+    // against an unbounded delay; waiting for the child to actually exit is
+    // not. The timeout keeps a child that ignores the signal from hanging the
+    // suite instead of failing it.
+    await stopChild(child);
     await new Promise((done) => server.close(done));
-    // child.kill() signals; it does not wait. Windows refuses to remove a
-    // directory a live process still has open, so the first attempt can fail
-    // with EPERM purely on timing. Retrying is what rmSync's maxRetries is for.
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 });
 
