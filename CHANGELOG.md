@@ -106,6 +106,18 @@ The format is based on [Keep a Changelog], and this project adheres to
   "unknown pack" error now names every directory it searched instead of
   suggesting a path that already existed. ([#114])
 
+- **`--snapshot-ref <git-ref>` no longer fails on Windows** ([#148]). The
+  repository-relative path is derived by comparing `git rev-parse
+  --show-toplevel` against the file's own path, and Windows spells one directory
+  two ways: git reports the long form, while `os.tmpdir()` and many shells hand
+  Flecto the 8.3 short form (`C:\Users\RUNNER~1\...`). Node's JS `realpathSync`
+  reconciles neither, so the two compared as different directories and the
+  computed relative path climbed out of the repository — `git show` then failed
+  on a file that was plainly tracked. Canonicalization now prefers
+  `realpathSync.native`, which asks the OS for the final path and so resolves
+  short names and normalizes case. Linux and macOS are unaffected: the two calls
+  agree for any path that exists. Found by the new Windows runner.
+
 - **Glob patterns written with Windows separators now match** ([#148]).
   `resolveFiles` passed user patterns straight to `fast-glob`, which requires
   POSIX separators and reads `\\` as an escape character — so on Windows

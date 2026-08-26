@@ -184,9 +184,9 @@ export function resolvePolicyOptions(effective, provenance = {}) {
 /**
  * Convert a glob pattern to the separators `fast-glob` requires.
  *
- * fast-glob only understands POSIX separators and treats `\\` as an escape
- * character, so a Windows path used as a pattern matches nothing at all —
- * `config\\*.yaml` asks for a file literally named `config*.yaml`. Since
+ * fast-glob only understands POSIX separators and treats a backslash as an
+ * escape character, so a Windows path used as a pattern matches nothing at all:
+ * `config\*.yaml` asks for a file literally named `config*.yaml`. Since
  * PowerShell and cmd tab-completion produce backslash paths, that is the
  * default way a Windows user would invoke Flecto, and the failure looks like
  * "no files matched" rather than like a platform bug.

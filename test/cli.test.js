@@ -1110,7 +1110,10 @@ test('watch --webhook-format slack posts a masked Block Kit payload', async () =
   } finally {
     child?.kill();
     await new Promise((done) => server.close(done));
-    rmSync(dir, { recursive: true, force: true });
+    // child.kill() signals; it does not wait. Windows refuses to remove a
+    // directory a live process still has open, so the first attempt can fail
+    // with EPERM purely on timing. Retrying is what rmSync's maxRetries is for.
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   }
 });
 

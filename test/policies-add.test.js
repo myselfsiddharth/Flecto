@@ -98,7 +98,8 @@ describe('flecto policies add', () => {
       const run = runFlecto(dir, ['policies', 'add', 'deployment-safety']);
       assert.equal(run.status, 0, run.stderr);
       assert.match(run.stdout, /flecto-pack-deployment-safety@1\.2\.0/);
-      assert.match(run.stdout, /policies\/deployment-safety\.json \(1 rule\)/);
+      // The path is rendered with the platform's separator, so match either.
+      assert.match(run.stdout, /policies[/\\]deployment-safety\.json \(1 rule\)/);
 
       const written = JSON.parse(
         readFileSync(join(dir, 'policies', 'deployment-safety.json'), 'utf8'),
