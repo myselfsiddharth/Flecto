@@ -1,0 +1,18 @@
+{
+  "state": {
+    "name": "CI",
+    "on": { "pull_request": null },
+    "permissions": { "contents": "read" },
+    "jobs": {
+      "test": {
+        "runs-on": "ubuntu-latest",
+        "steps": [
+          {
+            "uses": "actions/checkout@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "with": { "ref": "main" }
+          }
+        ]
+      }
+    }
+  }
+}

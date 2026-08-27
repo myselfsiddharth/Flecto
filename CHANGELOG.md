@@ -111,6 +111,27 @@ The format is based on [Keep a Changelog], and this project adheres to
   never collapsed. Settable as `changedOnly` in `.flectorc`. See
   [CI usage](docs/ci.md#--changed-only).
 
+- **`github-actions` policy pack** ([#139]). Workflow YAML is the one config
+  file in most repositories where a bad change is a security incident rather
+  than an outage, and Flecto already parses it. Eleven declarative rules over
+  the CI-takeover shapes: `pull_request_target` added, a new scheduled, manual,
+  or reusable-workflow trigger, the `permissions` block removed or widened to
+  `write-all` or to `write` on one scope, an action referenced by mutable tag
+  instead of a commit SHA, a checkout of the pull-request head, `secrets.*`
+  interpolated into `run:`, and a job moved to a self-hosted runner. Enabled by
+  `flecto init` when `.github/workflows/` exists. No engine change — the pack
+  auto-registers from `src/packs/`.
+
+  It reports **what the pull request changed**, not what the workflow already
+  contained; `actionlint` and `zizmor` already lint the state well. Two limits
+  are documented rather than papered over: severity cannot depend on the
+  trigger, because a rule sees one change event and cannot consult the rest of
+  the document, and `runs-on` changing from a string to a list produces one
+  event whose value is an array, which no matcher inspects. Every rule carries
+  its reasoning in [policy packs](docs/policy-packs.md#github-actions-workflows),
+  and four fixtures pin the boundary — including one asserting **zero** findings
+  for changes that only look risky.
+
 ### Changed
 
 - The 3.0 integrations were verified against the real tools they integrate with,
@@ -809,6 +830,7 @@ fixed — those runs were never actually gated — but the failure is new.
 [#152]: https://github.com/myselfsiddharth/Flecto/issues/152
 [#151]: https://github.com/myselfsiddharth/Flecto/issues/151
 [#155]: https://github.com/myselfsiddharth/Flecto/issues/155
+[#139]: https://github.com/myselfsiddharth/Flecto/issues/139
 [Keep a Changelog]: https://keepachangelog.com/en/1.1.0/
 [Semantic Versioning]: https://semver.org/spec/v2.0.0.html
 [GHSA-wq8m-fc3q-8m5x]: https://github.com/myselfsiddharth/Flecto/security/advisories/GHSA-wq8m-fc3q-8m5x

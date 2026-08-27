@@ -67,6 +67,23 @@ describe('stack detection', () => {
     }
   });
 
+  test('GitHub workflow directory enables the github-actions pack', () => {
+    const dir = makeDir('flecto-init-github-actions-');
+    try {
+      mkdirSync(join(dir, '.github', 'workflows'), { recursive: true });
+      writeFileSync(join(dir, '.github', 'workflows', 'ci.yml'), 'name: CI\non: {}\n', 'utf8');
+
+      const detection = detectStack(dir);
+      assert.ok(detection.packs.includes('github-actions'));
+      assert.ok(detection.files.includes('.github/workflows/**/*.{yaml,yml}'));
+      const signal = detection.signals.find((item) => item.id === 'github-actions');
+      assert.equal(signal.pack, 'github-actions');
+      assert.deepEqual(signal.evidence, ['.github/workflows/']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('compose and node signals combine with config/ and dotenv patterns', () => {
     const dir = makeDir('flecto-init-both-');
     try {

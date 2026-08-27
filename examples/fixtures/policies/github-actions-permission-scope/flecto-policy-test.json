@@ -1,0 +1,9 @@
+{
+  "baseline": "baseline.json",
+  "current": "current.yml",
+  "policies": ["github-actions"],
+  "expected": [
+    { "id": "github-actions-permission-write-scope", "severity": "warn", "path": "permissions.packages" },
+    { "id": "github-actions-self-hosted-runner", "severity": "error", "path": "jobs.publish.runs-on[0]" }
+  ]
+}

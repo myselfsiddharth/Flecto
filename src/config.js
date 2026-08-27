@@ -10,6 +10,7 @@ const COMPOSE_FILENAMES = ['docker-compose.yml', 'docker-compose.yaml', 'compose
 const CONFIG_DIR_PATTERN = 'config/**/*.{yaml,yml,json,toml,ini}';
 const ENV_FILE_PATTERNS = ['.env', '.env.*', '*.env'];
 const GENERIC_FILE_PATTERNS = [CONFIG_DIR_PATTERN, ...ENV_FILE_PATTERNS];
+const GITHUB_ACTIONS_WORKFLOW_PATTERN = '.github/workflows/**/*.{yaml,yml}';
 
 // Conventional places a Kubernetes/SOPS repo keeps manifests, searched in
 // addition to the repo root. Detection is content-based (see sniffManifestDirs),
@@ -471,6 +472,18 @@ export function detectStack(cwd = process.cwd()) {
       evidence: ['package.json'],
       pack: 'node-runtime',
       summary: 'Detected package.json → enabled the `node-runtime` policy pack and watched it',
+    });
+  }
+
+  const githubWorkflowsDir = resolve(cwd, '.github', 'workflows');
+  if (dirNames.has('.github') && existsSync(githubWorkflowsDir) && statSync(githubWorkflowsDir).isDirectory()) {
+    packs.push('github-actions');
+    files.push(GITHUB_ACTIONS_WORKFLOW_PATTERN);
+    signals.push({
+      id: 'github-actions',
+      evidence: ['.github/workflows/'],
+      pack: 'github-actions',
+      summary: 'Detected .github/workflows/ → enabled the `github-actions` policy pack and watched workflow YAML',
     });
   }
 
