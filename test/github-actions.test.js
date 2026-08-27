@@ -71,6 +71,26 @@ test('self-hosted runners are reported when runs-on is a list', async () => {
   assert.deepEqual(paths, ['jobs.deploy.runs-on[0]', 'jobs.test.runs-on']);
 });
 
+test('a runs-on widened from a scalar to a list is reported, and a benign widening is not', async () => {
+  // The shape the pack used to miss entirely: adding a second label converts
+  // `runs-on` to a list in the same edit, so the differ reports one `changed`
+  // event with an array `after` and never descends to a per-element leaf.
+  const result = await testPolicyFixture(
+    resolve('examples/fixtures/policies/github-actions-runs-on-widened'),
+  );
+
+  assert.equal(result.findings.length, 1);
+  assert.deepEqual(summarize(result), [
+    'error github-actions-self-hosted-runner jobs.build.runs-on',
+  ]);
+  // The `lint` job widens the same way to `[ubuntu-latest, x64]`. Without it,
+  // a predicate that matched any list at all would pass this fixture too.
+  assert.ok(
+    result.changes.some((change) => change.path === 'jobs.lint.runs-on'),
+    'the benign widening must reach the pack as a change event',
+  );
+});
+
 test('a removed permissions block and a reusable-workflow trigger are reported', async () => {
   const result = await testPolicyFixture(
     resolve('examples/fixtures/policies/github-actions-permissions-removed'),
