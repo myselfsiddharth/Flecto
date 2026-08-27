@@ -159,22 +159,72 @@ that catch a secret committed in the clear. →
 ## GitHub Actions workflows
 
 The built-in `github-actions` pack is enabled by `flecto init` when
-`.github/workflows/` exists. It watches `*.yml` and `*.yaml` workflows and
-reports changed-file risks such as:
+`.github/workflows/` exists, and it watches `*.yml` and `*.yaml` workflows.
 
-- adding `pull_request_target` or a new scheduled, manual, or reusable-workflow trigger;
-- removing the explicit `permissions` block or widening it to `write-all`;
-- changing a job to a self-hosted runner;
-- replacing a full-SHA action reference with a tag or branch;
-- checking out `github.event.pull_request.head.sha`; and
-- interpolating `secrets.*` into a `run` step.
+Workflow YAML is the one config file in most repositories where a bad change is
+a **security incident rather than an outage**, so each rule below carries its
+reasoning. A reviewer who cannot see why a finding exists suppresses it.
 
-The pack uses `expandSubtrees` so a newly added step or `with` block is inspected
-at its leaf paths. The rules are deliberately conservative. They do not claim
-to derive complete privilege from every workflow graph, and they do not replace
-specialized static analyzers such as actionlint or zizmor. The fixture at
-`examples/fixtures/policies/github-actions/` records the supported cases and
-the non-claim.
+### Triggers
+
+| Rule | Severity | Fires when | Why it is a finding |
+|---|---|---|---|
+| `github-actions-pull-request-target` | error | `on.pull_request_target` is added | `pull_request_target` runs with the **base** repository's token and secrets while the pull request's own code is what changed. It is the canonical CI takeover vector: a fork opens a PR, the workflow runs privileged, and anything the PR controls that reaches execution inherits that privilege. |
+| `github-actions-schedule-exposed` | warn | `on.schedule` is added | A scheduled run reaches secrets and permissions with no pull request and no reviewer in the loop. The trigger itself is routine; what it makes reachable unattended is the thing to check. |
+| `github-actions-workflow-dispatch-exposed` | warn | `on.workflow_dispatch` is added | Manual dispatch is gated on write access to the repository, not on review. It widens who can reach the job's permissions and secrets, so it needs a documented owner. |
+| `github-actions-workflow-call-exposed` | warn | `on.workflow_call` is added | A reusable workflow inherits the **caller's** permissions and may inherit its secrets. The trust boundary moves to every caller, present and future, so it can no longer be read from this file alone. |
+
+### Token scope
+
+| Rule | Severity | Fires when | Why it is a finding |
+|---|---|---|---|
+| `github-actions-permissions-removed` | error | the `permissions` block is removed | Removing the block does not narrow the token — it hands scope selection back to the repository or organization default, which may be the legacy read/write default. A quiet deletion looks like cleanup in review and is a widening. |
+| `github-actions-permissions-write-all` | error | `permissions` is set to `write-all` | `write-all` grants every scope, including `contents: write` and `packages: write`. Any code the job runs can push commits, publish releases, or move tags. |
+| `github-actions-permission-write-scope` | warn | a single scope under `permissions` becomes `write` | This is how a least-privilege block regresses in practice: one scope at a time, in a diff that otherwise looks unrelated. `warn` rather than `error` because a single scope is often genuinely required — the point is that the reviewer sees it. |
+
+### Execution surface
+
+| Rule | Severity | Fires when | Why it is a finding |
+|---|---|---|---|
+| `github-actions-unpinned-action` | error | `uses` references anything other than a 40-character commit SHA | A tag or branch is mutable. `@v4` resolves to whatever the action's owner points it at today, so trusting it is trusting that account and everyone with push access to it, continuously — this is the shape of the `tj-actions/changed-files` compromise. Pin the SHA and keep the human-readable version in a trailing comment. |
+| `github-actions-pull-request-head-checkout` | error | a step checks out `github.event.pull_request.head.sha` | On its own this is fine — it is what a build of the PR must do. It is a finding because combined with `pull_request_target` or a write-scoped token it puts fork-controlled code inside a privileged job. Flecto reports it so the combination gets a second look. |
+| `github-actions-secrets-in-run` | error | `secrets.*` is interpolated into a `run:` block | Interpolation happens **before** the shell runs, so the secret is pasted into the command line, where it can be logged, leak through `set -x`, or be captured by anything the step invokes. Bind it through `env:` instead, which keeps it out of the command text. |
+| `github-actions-self-hosted-runner` | error | a job moves to a `self-hosted` runner | Self-hosted runners are not ephemeral by default. They keep state, credentials, and network position between jobs, so code that runs on one can read what an earlier job left behind and reach hosts a GitHub-hosted runner cannot. |
+
+### What the pack does not claim
+
+The pack is **changed-file oriented**. It reports what this pull request changed,
+not what the workflow already contained; scanning a workflow for pre-existing
+problems is a linter's job, and `actionlint` and `zizmor` do it well.
+
+Three limits are worth stating outright, because each is a case where a reader
+could reasonably expect a finding and not get one:
+
+- **Severity cannot depend on the trigger.** Widening `permissions` on a
+  `pull_request_target` workflow is critical; the same edit on a manually
+  dispatched workflow is routine. A rule matches one change event and cannot
+  consult the rest of the document, so each severity here is chosen for the
+  worst plausible context. That is a rule-engine limitation, recorded rather
+  than encoded as a flat severity that trains people to ignore the finding.
+- **`runs-on` changing from a string to a list is not reported.** `runs-on:
+  ubuntu-latest` → `runs-on: [self-hosted, linux]` produces a single `changed`
+  event whose value is an array, and no matcher inspects array contents. Every
+  other shape *is* covered: a plain string, a list on an added job, an element
+  changed within an existing list (`jobs.x.runs-on[0]`), and the runner-group
+  form (`jobs.x.runs-on.labels[0]`).
+- **A trigger added together with its sub-keys reports once, at the trigger.**
+  The trigger rules use `pathEquals`, so adding `workflow_call:` with an
+  `inputs:` block yields one finding rather than one per input.
+
+The pack sets `expandSubtrees`, so a step, `with:` block, or whole job that
+arrives at once is still inspected at its leaf paths — otherwise the newest code
+in a workflow would be the code no rule could see.
+
+Four fixtures record the boundary, and they are the specification:
+`examples/fixtures/policies/github-actions/` (triggering changes),
+`github-actions-permissions-removed/`, `github-actions-permission-scope/`, and
+`github-actions-benign/`, which asserts **zero** findings for changes that only
+look risky.
 
 ## Exact values, truthiness, and coercion
 

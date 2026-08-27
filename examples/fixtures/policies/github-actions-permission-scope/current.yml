@@ -1,0 +1,11 @@
+name: Deploy
+on:
+  push:
+permissions:
+  contents: read
+  packages: write
+jobs:
+  publish:
+    runs-on: [self-hosted, linux]
+    steps:
+      - run: npm publish
