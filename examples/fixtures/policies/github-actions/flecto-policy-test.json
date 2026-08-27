@@ -10,6 +10,9 @@
     { "id": "github-actions-self-hosted-runner", "severity": "error", "path": "jobs.test.runs-on" },
     { "id": "github-actions-unpinned-action", "severity": "error", "path": "jobs.test.steps[0].uses" },
     { "id": "github-actions-pull-request-head-checkout", "severity": "error", "path": "jobs.test.steps[0].with.ref" },
-    { "id": "github-actions-secrets-in-run", "severity": "error", "path": "jobs.test.steps[1].run" }
+    { "id": "github-actions-secrets-in-run", "severity": "error", "path": "jobs.test.steps[1].run" },
+    { "id": "github-actions-self-hosted-runner", "severity": "error", "path": "jobs.deploy.runs-on[0]" },
+    { "id": "github-actions-unpinned-action", "severity": "error", "path": "jobs.deploy.steps[0].uses" },
+    { "id": "github-actions-pull-request-head-checkout", "severity": "error", "path": "jobs.deploy.steps[0].with.ref" }
   ]
 }
