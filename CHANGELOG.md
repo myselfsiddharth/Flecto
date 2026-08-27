@@ -9,6 +9,23 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ### Added
 
+- **Merge request comments on GitLab and Bitbucket.** The sticky review comment
+  was GitHub-only: `src/pr-comment.js` and both composite actions spoke
+  `GITHUB_TOKEN`, `GITHUB_EVENT_PATH`, and the issue-comments API directly, so
+  the flagship review experience was unavailable to every team not on GitHub.
+
+  Delivery is now an adapter (`src/pr-providers.js`); everything upstream of it —
+  the differ, the policy engine, the envelope, and the rendered markdown body —
+  was already provider-agnostic. The host is detected from CI variables and
+  `--pr-provider github|gitlab|bitbucket` forces one. All three upsert a single
+  sticky comment by marker, skip the write when the body is unchanged, redact
+  the token from error text, and leave the exit code to the diff and policy
+  result.
+
+  **GitLab's `CI_JOB_TOKEN` cannot post merge request notes.** Flecto does not
+  attempt it, because the resulting 401 reads like a broken setup rather than a
+  missing permission; it names `FLECTO_GITLAB_TOKEN` and the `api` scope
+  instead. See [CI](docs/ci.md#providers). ([#138])
 - Inline suppressions: `# flecto-ignore-next-line <rule> — <reason>` on the line
   above a deliberate finding accepts that one finding in place, the companion to
   the baseline's bulk acceptance. **A reason is mandatory** — a directive without
@@ -847,5 +864,6 @@ fixed — those runs were never actually gated — but the failure is new.
 [#139]: https://github.com/myselfsiddharth/Flecto/issues/139
 [#137]: https://github.com/myselfsiddharth/Flecto/issues/137
 [Keep a Changelog]: https://keepachangelog.com/en/1.1.0/
+[#138]: https://github.com/myselfsiddharth/Flecto/issues/138
 [Semantic Versioning]: https://semver.org/spec/v2.0.0.html
 [GHSA-wq8m-fc3q-8m5x]: https://github.com/myselfsiddharth/Flecto/security/advisories/GHSA-wq8m-fc3q-8m5x
