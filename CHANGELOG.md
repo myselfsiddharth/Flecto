@@ -59,6 +59,29 @@ The format is based on [Keep a Changelog], and this project adheres to
   cap on files read, and files over 256 KB skipped — so `init` never turns into
   a full-tree scan. The "detected nothing" generic fallback is unchanged. ([#123])
 
+- **JSON with comments and trailing commas is parsed** ([#152]). `.json` was
+  read with bare `JSON.parse`, so a single `//` failed the whole file — and a
+  config watcher installed into a JavaScript repository could not read the
+  `tsconfig.json`, `.vscode/settings.json`, `jsconfig.json`, or
+  `devcontainer.json` sitting next to it. Worse, it failed with a *parse error*
+  rather than an unsupported-format skip, so it looked broken rather than out of
+  scope.
+
+  Both comment styles and trailing commas are now accepted, and `.jsonc` is a
+  recognised extension. No new dependency: comments are blanked in place, one
+  space per stripped character, with newlines kept — so byte offsets and line
+  numbers in a genuine syntax error still point at the line in your file.
+
+  The strip tracks string state, because the naive version corrupts exactly the
+  values config files carry: `{"url": "https://example.com"}` is a URL, not a
+  comment. Comments are not preserved on the parsed value; Flecto never rewrites
+  config, and a comment-only edit is not a semantic change. See
+  [JSON with comments](docs/configuration.md#json-with-comments).
+
+  Note that **inline suppressions still do not apply to JSON.**
+  `flecto-ignore-next-line` remains YAML/TOML/INI/dotenv only, so a directive
+  written in a `.json` file has no effect; use `--baseline` there. Now that JSON
+  carries comments, that gap is worth closing separately.
 - **`ci --changed-only`** ([#151]). `ci --format json` emitted an envelope for
   every **scanned** file, not every **changed** one, so the output grew with the
   size of the repository rather than the size of the change. Each envelope
@@ -749,6 +772,7 @@ fixed — those runs were never actually gated — but the failure is new.
 [#113]: https://github.com/myselfsiddharth/Flecto/issues/113
 
 [#114]: https://github.com/myselfsiddharth/Flecto/issues/114
+[#152]: https://github.com/myselfsiddharth/Flecto/issues/152
 [#151]: https://github.com/myselfsiddharth/Flecto/issues/151
 [#155]: https://github.com/myselfsiddharth/Flecto/issues/155
 [Keep a Changelog]: https://keepachangelog.com/en/1.1.0/

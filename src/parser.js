@@ -7,7 +7,7 @@ import { isArmoredAgeFile, normalizeEncrypted, opaqueFileState } from './encrypt
 import { documentKeysOf, withDocumentKeys } from './documents.js';
 import { assertNotTerraformPlan } from './terraform.js';
 
-const SUPPORTED_EXT = ['.json', '.yaml', '.yml', '.toml', '.env', '.ini', '.age'];
+const SUPPORTED_EXT = ['.json', '.jsonc', '.yaml', '.yml', '.toml', '.env', '.ini', '.age'];
 
 // Upper bound on nodes produced when normalizing a parsed tree. Well above any
 // real config (a 5,000-key file is 5,000 nodes) and below where alias expansion
@@ -70,6 +70,101 @@ export function parseIni(raw) {
     }
   }
   return out;
+}
+
+/**
+ * Parse JSON that may carry line and block comments and trailing commas —
+ * the JSONC dialect `tsconfig.json`, `.vscode/settings.json`, `jsconfig.json`,
+ * and `devcontainer.json` are written in by convention.
+ *
+ * Comments are blanked rather than removed: every stripped character is
+ * replaced by a space, and newlines inside a block comment are kept as
+ * newlines. That keeps byte offsets and line/column numbers identical to the
+ * original file, so the position `JSON.parse` reports on a real syntax error
+ * still points at the line the author has open. Deleting the spans instead
+ * would silently shift every error after the first comment.
+ *
+ * The scan tracks string state, because the naive strip is wrong on exactly
+ * the values config files are full of: `"https://example.com"` contains `//`,
+ * and a `/*` may sit inside a string just as legitimately. Backslash escapes
+ * are consumed as a pair so a `\"` never looks like the end of a string.
+ *
+ * Note that comments are not preserved on the parsed value. Flecto only ever
+ * reads config, so nothing is written back — but a snapshot records the parsed
+ * structure, not the file, and comments are not part of it.
+ * @param {string} raw
+ * @returns {unknown}
+ */
+export function parseJsonc(raw) {
+  return JSON.parse(stripJsonComments(raw));
+}
+
+/**
+ * Blank out JSONC comments and trailing commas, preserving every byte offset.
+ * Exported for tests; {@link parseJsonc} is the parsing entry point.
+ * @param {string} raw
+ * @returns {string}
+ */
+export function stripJsonComments(raw) {
+  const text = String(raw);
+  const out = text.split('');
+  const blank = (from, to) => {
+    for (let k = from; k < to; k += 1) {
+      // Keep line breaks so line numbers in parse errors stay true.
+      if (out[k] !== '\n' && out[k] !== '\r') out[k] = ' ';
+    }
+  };
+
+  // Index of a comma that has seen nothing but whitespace since, or -1. When a
+  // closing brace or bracket arrives it is a trailing comma and gets blanked.
+  let pendingComma = -1;
+  let i = 0;
+
+  while (i < text.length) {
+    const ch = text[i];
+
+    if (ch === '"') {
+      // A string is opaque: scan to its unescaped closing quote.
+      pendingComma = -1;
+      i += 1;
+      while (i < text.length) {
+        if (text[i] === '\\') { i += 2; continue; }
+        if (text[i] === '"') { i += 1; break; }
+        i += 1;
+      }
+      continue;
+    }
+
+    if (ch === '/' && text[i + 1] === '/') {
+      let end = i + 2;
+      while (end < text.length && text[end] !== '\n' && text[end] !== '\r') end += 1;
+      blank(i, end);
+      i = end;
+      continue;
+    }
+
+    if (ch === '/' && text[i + 1] === '*') {
+      const closed = text.indexOf('*/', i + 2);
+      // An unterminated block comment runs to end of input. Blanking it leaves
+      // JSON.parse to report the truncated document, which is the real error.
+      const end = closed === -1 ? text.length : closed + 2;
+      blank(i, end);
+      i = end;
+      continue;
+    }
+
+    if (ch === ',') {
+      pendingComma = i;
+    } else if (ch === '}' || ch === ']') {
+      if (pendingComma !== -1) out[pendingComma] = ' ';
+      pendingComma = -1;
+    } else if (ch !== ' ' && ch !== '\t' && ch !== '\n' && ch !== '\r') {
+      pendingComma = -1;
+    }
+    i += 1;
+  }
+
+  return out.join('');
 }
 
 function isPlainObject(v) {
@@ -323,8 +418,8 @@ export function parseContent(filepath, raw) {
       parsed = dotenv.parse(raw);
     } else if (iniLike) {
       parsed = parseIni(raw);
-    } else if (ext === '.json') {
-      parsed = JSON.parse(raw);
+    } else if (ext === '.json' || ext === '.jsonc') {
+      parsed = parseJsonc(raw);
     } else if (ext === '.yaml' || ext === '.yml') {
       parsed = parseYamlStream(raw);
     } else if (ext === '.toml') {
