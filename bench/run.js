@@ -12,6 +12,8 @@
  *   2. the same pipeline in-process, with per-phase attribution
  *   3. `flecto watch --snapshot`, the batch baseline-writing path
  *   4. differ and policy microbenchmarks that isolate suspected hot spots
+ *   5. context savings: the size of the semantic diff against the size of the
+ *      config it describes, across three mutation rates
  *
  * Usage:
  *   npm run bench
@@ -36,7 +38,7 @@ import { diffTrees } from '../src/differ.js';
 import { createEnvelope } from '../src/envelope.js';
 import { parseFile, isSupported } from '../src/parser.js';
 import { evaluatePack, evaluatePolicies, loadPack } from '../src/policy.js';
-import { arrayPair, writeRepo } from './fixtures.js';
+import { MUTATE_EVERY, arrayPair, writeRepo } from './fixtures.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLI = resolve(HERE, '..', 'index.js');
@@ -209,6 +211,14 @@ async function attributePhases(repoDir, packIds) {
   phases.changes = changeCount;
   phases.findings = findingCount;
   phases.outputBytes = json.length;
+  // Measured after `total` so the extra serialization never lands in a timing.
+  // Isolates the semantic payload from the per-file envelope `ci` emits for
+  // every scanned file, changed or not.
+  phases.changedOutputBytes = JSON.stringify(
+    results.filter((result) => result.envelope.changes.length > 0),
+    null,
+    2,
+  ).length;
   return phases;
 }
 
@@ -306,6 +316,117 @@ async function benchmarkScales(options) {
  * @param {number} runs
  * @returns {{ n: number, min: number, median: number, p95: number, max: number }}
  */
+/**
+ * Context savings: how much smaller is the semantic diff than the config it
+ * describes?
+ *
+ * Two denominators are reported, because they answer different questions:
+ *
+ *   corpus  — every config byte in the repo. This is what something that had
+ *             to read the repo to find out what changed would consume.
+ *   changed — only the files that actually changed. This is the honest floor:
+ *             it assumes the reader already knows which files to open, and it
+ *             is the number to quote when comparing against a reader that is
+ *             handed the file list for free.
+ *
+ * The ratio is governed almost entirely by how much of the corpus a change
+ * touches, so all three mutation rates are measured rather than the flattering
+ * one. `every file changed` is the worst case the design can produce.
+ *
+ * The corpus here excludes the 5,000-item array fixtures the timing sections
+ * use. They are a differ stress test, they are ~90% of the corpus by byte
+ * count, and leaving them in would mean reporting a ratio for a repo nobody
+ * has rather than for ordinary service config.
+ * @param {{ root: string, fileCount: number }} options
+ */
+async function benchmarkContext(options) {
+  const { root, fileCount } = options;
+  const repoDir = join(root, `context-${fileCount}`);
+
+  const scenarios = [
+    { label: 'one file changed', mutateEvery: fileCount },
+    { label: `every ${MUTATE_EVERY}th file changed`, mutateEvery: MUTATE_EVERY },
+    { label: 'every file changed', mutateEvery: 1 },
+  ];
+
+  const rows = [];
+  for (const scenario of scenarios) {
+    process.stderr.write(`[bench] context: ${fileCount} files, ${scenario.label}...\n`);
+    rmSync(repoDir, { recursive: true, force: true });
+    mkdirSync(repoDir, { recursive: true });
+
+    const shape = { dir: repoDir, fileCount, mutateEvery: scenario.mutateEvery, bigArrays: false };
+    writeRepo({ ...shape, mutate: false });
+    runCli(['watch', '--snapshot'], repoDir);
+    const mutated = writeRepo({ ...shape, mutate: true });
+
+    // Same envelope `flecto ci --format json` prints, serialized the same way,
+    // so the byte count is what a consumer would actually receive.
+    const phases = await attributePhases(repoDir, ['default']);
+
+    rows.push({
+      label: scenario.label,
+      changedFiles: mutated.files.filter((file) => file.mutated).length,
+      corpusBytes: mutated.bytes,
+      changedBytes: mutated.changedBytes,
+      envelopeBytes: phases.outputBytes,
+      payloadBytes: phases.changedOutputBytes,
+      changes: phases.changes,
+    });
+  }
+
+  rmSync(repoDir, { recursive: true, force: true });
+  return { fileCount, rows };
+}
+
+/**
+ * Where the semantic diff starts paying off.
+ *
+ * The context-savings claim is really about one shape: a small change inside a
+ * large file. This isolates that variable — exactly one key changes, and the
+ * file it lives in grows — and reports the file size at which reading the diff
+ * becomes cheaper than reading the file.
+ *
+ * The envelope is built exactly as `flecto ci --format json` builds it, one
+ * file's worth, so the byte count is directly comparable.
+ * @returns {{ keys: number, fileBytes: number, payloadBytes: number, changes: number }[]}
+ */
+function benchmarkCrossover() {
+  const diffOptions = { ignorePaths: [], arrayIdKey: null, arrayIdentity: true, arrayIgnoreOrder: false };
+  const file = '/srv/repo/config/services.json';
+  const rows = [];
+
+  for (const keys of [10, 50, 200, 1000, 5000]) {
+    /** @type {Record<string, unknown>} */
+    const before = {};
+    for (let i = 0; i < keys; i++) {
+      before[`service_${i}`] = {
+        host: `svc-${i}.internal.example.com`,
+        pool_size: 8,
+        timeout_ms: 3000,
+        retries: 3,
+        tls: true,
+      };
+    }
+    const after = JSON.parse(JSON.stringify(before));
+    // Exactly one key changes, whatever the file size.
+    after.service_0.pool_size = 32;
+
+    const changes = diffTrees(before, after, diffOptions);
+    const envelope = createEnvelope({ source: 'ci', file, changes, policies: [] });
+    const payload = JSON.stringify([{ file, envelope, policies: [] }], null, 2);
+
+    rows.push({
+      keys,
+      fileBytes: Buffer.byteLength(JSON.stringify(before, null, 2)),
+      payloadBytes: payload.length,
+      changes: changes.length,
+    });
+  }
+
+  return rows;
+}
+
 function timeIt(fn, runs) {
   fn();
   const samples = [];
@@ -484,6 +605,10 @@ async function main() {
     const scaleResults = await benchmarkScales({ scales, runs, root, snapshotRuns });
     const arrays = benchmarkArrays(runs, arraySizes);
     const policy = await benchmarkPolicy(runs);
+    // Scale-invariant (it is a per-file property), so it runs once, at the
+    // largest configured scale.
+    const context = await benchmarkContext({ root, fileCount: scales[scales.length - 1] });
+    const crossover = benchmarkCrossover();
 
     const report = {
       node: process.version,
@@ -497,6 +622,8 @@ async function main() {
       scales: scaleResults,
       arrays,
       policy,
+      context,
+      crossover,
       durationS: Math.round((Date.now() - startedAt) / 1000),
     };
 
@@ -611,7 +738,78 @@ function printReport(report) {
   ));
   lines.push('');
 
+  lines.push('## 5. Context savings');
+  lines.push('');
+  lines.push(`Semantic diff size against the config it describes — ${report.context.fileCount} files, \`--format json\`.`);
+  lines.push('');
+  lines.push(table(
+    ['change', 'files', 'changes', 'corpus', 'changed files', '`ci` output', 'payload only', 'payload vs changed'],
+    report.context.rows.map((row) => [
+      row.label,
+      String(row.changedFiles),
+      String(row.changes),
+      kb(row.corpusBytes),
+      kb(row.changedBytes),
+      kb(row.envelopeBytes),
+      kb(row.payloadBytes),
+      ratio(row.changedBytes, row.payloadBytes),
+    ]),
+  ));
+  lines.push('');
+  lines.push('`ci` output is everything `flecto ci --format json` prints. It carries one envelope');
+  lines.push('per **scanned** file — schema version, two UUIDs, a timestamp, an absolute path —');
+  lines.push('whether or not that file changed, so it grows with repo size rather than with the');
+  lines.push('size of the change. `payload only` counts the envelopes that actually carry changes.');
+  lines.push('');
+  lines.push('The gap between those two columns is the cost of the current output shape, and at');
+  lines.push('these scales it dominates: the boilerplate for unchanged files is far larger than');
+  lines.push('the semantic content. Any claim about a semantic diff being cheaper to read than');
+  lines.push('the config must be made about `payload only`, and must state the mutation rate —');
+  lines.push('the ratio collapses as more of the corpus changes, and inverts once a change');
+  lines.push('touches most keys, because a change event costs more bytes than the value it describes.');
+  lines.push('');
+  lines.push('### Where a diff starts paying off');
+  lines.push('');
+  lines.push('One key changed, in a file that grows. This is the shape the claim is actually about.');
+  lines.push('');
+  lines.push(table(
+    ['keys in file', 'file', 'one-file `ci` payload', 'payload vs file'],
+    report.crossover.map((row) => [
+      String(row.keys),
+      kb(row.fileBytes),
+      kb(row.payloadBytes),
+      ratio(row.fileBytes, row.payloadBytes),
+    ]),
+  ));
+  lines.push('');
+  lines.push('A single change event plus its envelope costs a fixed ~600 bytes, so the diff only');
+  lines.push('wins once the file is bigger than that — and then it wins by more and more, because');
+  lines.push('the payload stays flat while the file grows. That fixed floor, not the change itself,');
+  lines.push('is what decides whether reading a diff is cheaper than reading the file.');
+  lines.push('');
+
   process.stdout.write(`${lines.join('\n')}\n`);
+}
+
+/**
+ * @param {number} bytes
+ * @returns {string}
+ */
+function kb(bytes) {
+  if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${(bytes / 1024).toFixed(1)} KB`;
+}
+
+/**
+ * Size ratio, rendered as the multiple a reader saves. Below 1x the diff is
+ * larger than what it describes, which the worst case can genuinely produce.
+ * @param {number} from
+ * @param {number} to
+ * @returns {string}
+ */
+function ratio(from, to) {
+  if (!to) return '—';
+  return `${(from / to).toFixed(1)}x`;
 }
 
 main().catch((error) => {
