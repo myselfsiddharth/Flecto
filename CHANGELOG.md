@@ -82,6 +82,34 @@ The format is based on [Keep a Changelog], and this project adheres to
   `flecto-ignore-next-line` remains YAML/TOML/INI/dotenv only, so a directive
   written in a `.json` file has no effect; use `--baseline` there. Now that JSON
   carries comments, that gap is worth closing separately.
+- **`ci --changed-only`** ([#151]). `ci --format json` emitted an envelope for
+  every **scanned** file, not every **changed** one, so the output grew with the
+  size of the repository rather than the size of the change. Each envelope
+  carries `schema_version`, two UUIDs, an ISO timestamp, and an absolute path —
+  on 250 service configs with one file edited, roughly 88% of the output
+  described files that did not change.
+
+  For a human that is invisible, since the terminal renderer already prints only
+  what changed. It is the machine consumers that pay: webhook sinks, NDJSON
+  readers, and any agent handed the JSON.
+
+  | change (250 configs) | default | `--changed-only` | reduction |
+  |---|---|---|---|
+  | nothing changed | 112.8 KB | 13.3 KB | 88% |
+  | one file changed | 113.4 KB | 14.3 KB | 87% |
+  | every 10th file changed | 126.8 KB | 37.3 KB | 71% |
+
+  **The evidence that Flecto looked is kept.** An envelope for a scanned but
+  unchanged file tells a consumer diffing two runs that a file was *checked and
+  clean* rather than *not checked at all*, and dropping it would quietly weaken
+  a gate someone relies on. Those files collapse into a single `lifecycle`
+  envelope carrying the list of paths, so what is removed is the per-file
+  overhead rather than the signal.
+
+  **Off by default**, so `schema_version` stays `2.0` and existing consumers see
+  byte-for-byte identical output. A file with policy findings but no changes is
+  never collapsed. Settable as `changedOnly` in `.flectorc`. See
+  [CI usage](docs/ci.md#--changed-only).
 
 ### Changed
 
@@ -97,7 +125,6 @@ The format is based on [Keep a Changelog], and this project adheres to
   [docs/integration-verification.md](docs/integration-verification.md) — which
   also notes that `flecto report` has no `--mask-secrets` yet, so it renders
   secret values in the clear (a follow-up). ([#122])
-
 ### Fixed
 
 - Adding a second YAML document beside an existing one no longer re-paths the
@@ -122,6 +149,30 @@ The format is based on [Keep a Changelog], and this project adheres to
   self-contained fixtures are unaffected; the project is a fallback. The
   "unknown pack" error now names every directory it searched instead of
   suggesting a path that already existed. ([#114])
+
+- **`ci --format json` no longer truncates at 64 KB through a pipe** ([#155]).
+  Output was printed with `console.log` and followed immediately by
+  `process.exit()`, which does not flush a pending write — and Node writes to a
+  pipe asynchronously. Everything past the 64 KB pipe buffer was dropped, and
+  the command still exited with its normal status.
+
+  Redirecting to a file hid it, because Node writes to a file descriptor
+  synchronously. It appeared only through a pipe — which is how every consumer
+  that matters reads it: `| jq`, `$(...)` capture, and any CI harness collecting
+  stdout.
+
+  A truncated envelope stream that exits normally is the worst shape for a
+  consumer: it reads as a clean run over fewer files rather than as a failure.
+  With `ndjson` it is quieter still, since every line before the cut is valid
+  JSON, so a line-by-line reader consumes a clean prefix and never learns the
+  rest existed.
+
+  Affected `ci`, `plan`, and `diff`/`compare` on `--format json`, `ndjson`,
+  `sarif`, and `github-annotations`. A truncated SARIF document is rejected
+  outright by `upload-sarif`, but only after the gate has already reported
+  success. `--format pr-comment` was never affected — its body is capped at
+  60,000 characters to fit GitHub's comment limit, which lands under one pipe
+  buffer.
 
 ### Security
 
@@ -722,6 +773,8 @@ fixed — those runs were never actually gated — but the failure is new.
 
 [#114]: https://github.com/myselfsiddharth/Flecto/issues/114
 [#152]: https://github.com/myselfsiddharth/Flecto/issues/152
+[#151]: https://github.com/myselfsiddharth/Flecto/issues/151
+[#155]: https://github.com/myselfsiddharth/Flecto/issues/155
 [Keep a Changelog]: https://keepachangelog.com/en/1.1.0/
 [Semantic Versioning]: https://semver.org/spec/v2.0.0.html
 [GHSA-wq8m-fc3q-8m5x]: https://github.com/myselfsiddharth/Flecto/security/advisories/GHSA-wq8m-fc3q-8m5x
