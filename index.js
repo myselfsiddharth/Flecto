@@ -359,10 +359,28 @@ function gitRepoRelativePath(filePath) {
 /**
  * Resolve symlinks where possible, falling back to the input when the path does
  * not exist on disk.
+ *
+ * `realpathSync.native` is tried first because on Windows it asks the OS for the
+ * final path, which resolves 8.3 short names and normalizes case. Those are not
+ * cosmetic here: `git rev-parse --show-toplevel` reports the long form, while
+ * `os.tmpdir()` and many shells hand Flecto the short one
+ * (`C:\Users\RUNNER~1\...`). The JS `realpathSync` leaves both as written, so
+ * the two spellings of one directory compare as different and `relative()`
+ * produces a path that climbs out of the repository -- making
+ * `--snapshot-ref <git-ref>` fail on a file that is plainly tracked.
+ *
+ * On Linux and macOS the two agree for any path that exists, so this only ever
+ * changes the Windows result.
  * @param {string} path
  * @returns {string}
  */
 function canonicalPath(path) {
+  try {
+    return realpathSync.native(path);
+  } catch {
+    // Falls back for a path that does not exist yet, and for the rare platform
+    // where the native call is unavailable.
+  }
   try {
     return realpathSync(path);
   } catch {
