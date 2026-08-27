@@ -1,0 +1,18 @@
+name: CI
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        with:
+          ref: ${{ github.base_ref }}
+      - uses: ./.github/actions/setup
+      - run: echo "${{ env.BUILD_ID }}"
+  lint:
+    runs-on: [ubuntu-latest]
+    steps:
+      - uses: actions/checkout@cccccccccccccccccccccccccccccccccccccccc

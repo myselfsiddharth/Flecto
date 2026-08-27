@@ -1,0 +1,9 @@
+{
+  "baseline": "baseline.json",
+  "current": "current.yml",
+  "policies": ["github-actions"],
+  "expected": [
+    { "id": "github-actions-permissions-removed", "severity": "error", "path": "permissions" },
+    { "id": "github-actions-workflow-call-exposed", "severity": "warn", "path": "on.workflow_call" }
+  ]
+}

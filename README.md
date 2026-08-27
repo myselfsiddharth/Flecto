@@ -373,6 +373,7 @@ services doesn't read as a wall of changes.
 | `node-runtime` | Dropped engine requirements, TLS verification bypasses, debug/inspector flags |
 | `terraform` | Replaced and destroyed stateful resources, ingress opened to `0.0.0.0/0`, IAM wildcards, public S3, capacity jumps |
 | `sops` | Decryption recipients added or removed, a MAC that moved on its own, a file that stopped being encrypted |
+| `github-actions` | Changed workflow triggers, widened permissions, self-hosted runners, unpinned actions, pull-request head checkout, and secrets interpolated into `run` |
 
 ```bash
 flecto policies list          # see what resolves here, built-in and local
@@ -404,12 +405,17 @@ and runs no code from the package. →
 
 | Format | Extensions |
 |---|---|
-| JSON | `.json` |
+| JSON / JSONC | `.json`, `.jsonc` |
 | YAML | `.yaml`, `.yml` |
 | TOML | `.toml` |
 | INI | `.ini` |
 | dotenv | `.env`, `.env.*`, `*.env` |
 | age (armored) | `.age`, or any file whose contents are one armored blob |
+
+`.json` accepts comments and trailing commas, so `tsconfig.json`,
+`.vscode/settings.json`, `jsconfig.json`, and `devcontainer.json` are read as
+written. →
+**[JSON with comments](docs/configuration.md#json-with-comments)**
 
 Terraform plan JSON (`terraform show -json`) is read by **`flecto plan`**, which
 applies Terraform's own sensitivity marking. Point `plan` at it rather than `ci`
@@ -514,6 +520,7 @@ Explicit CLI flags win over profiles, which win over `defaults`.
 | **[Configuration](docs/configuration.md)** | `.flectorc`, profiles, ignore patterns, array identity, masking |
 | **[Encrypted files](docs/encrypted-files.md)** | SOPS and age: what is detected, what is reported, why nothing is decrypted |
 | **[CI](docs/ci.md)** | Baselines, fail triggers, output formats, the bundled GitHub Actions |
+| **[Performance](docs/performance.md)** | Where time goes at scale, and how much smaller a diff is than the config |
 | **[Kubernetes](docs/kubernetes.md)** | Diffing rendered Helm/Kustomize manifests before they reach a cluster |
 | **[Terraform plans](docs/terraform.md)** | Reviewing `terraform show -json` output and the `terraform` pack |
 | **[Webhooks and commands](docs/webhooks.md)** | Envelope shape, delivery modes, command environment |

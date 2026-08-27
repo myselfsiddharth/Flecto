@@ -417,6 +417,34 @@ export function assertTerraformPlan(value, label) {
 }
 
 /**
+ * The inverse guard: refuse a Terraform plan on the *generic config* path.
+ *
+ * Terraform's `before_sensitive` / `after_sensitive` redaction is applied by
+ * diffTerraformPlan(), which only `flecto plan` calls. A plan file is ordinary
+ * JSON, so every other command would read it as a plain config tree and print
+ * the values Terraform itself refuses to print. `--mask-secrets` is not a
+ * backstop: it only fires when an attribute name matches the secret pattern,
+ * and `user_data` does not (#113).
+ *
+ * Failing closed rather than skipping is deliberate and matches how the rest of
+ * Flecto behaves — a plan file swept up by a repo-wide glob is a real
+ * misconfiguration, and silently omitting the file would leave an operator
+ * believing it had been gated.
+ * @param {unknown} value
+ * @param {string} label
+ */
+export function assertNotTerraformPlan(value, label) {
+  if (!isTerraformPlan(value)) return;
+  throw new Error(
+    `"${label}" is Terraform plan JSON, which this command cannot read safely.\n`
+    + 'Terraform marks sensitive attributes in before_sensitive/after_sensitive, and that\n'
+    + 'redaction is only applied by "flecto plan". Reading the plan as a plain config file\n'
+    + 'would print those values.\n'
+    + `Use: flecto plan ${label}`,
+  );
+}
+
+/**
  * Read and validate a Terraform plan JSON file.
  * @param {string} filepath
  * @returns {Record<string, unknown>}

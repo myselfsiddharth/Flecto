@@ -1,0 +1,6 @@
+{
+  "baseline": "baseline.json",
+  "current": "current.yml",
+  "policies": ["github-actions"],
+  "expected": []
+}

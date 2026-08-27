@@ -1,0 +1,13 @@
+{
+  "state": {
+    "name": "Release",
+    "on": { "pull_request": null },
+    "permissions": { "contents": "read", "id-token": "none" },
+    "jobs": {
+      "build": {
+        "runs-on": "ubuntu-latest",
+        "steps": [{ "run": "npm ci" }]
+      }
+    }
+  }
+}

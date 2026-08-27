@@ -72,10 +72,12 @@ flecto ci "config/**/*.yaml" --snapshot-ref HEAD~1 --fail-on "policy,error"
 |---|---|---|
 | `-p, --profile <name>` | — | Use a profile from `.flectorc` (else `FLECTO_PROFILE`) |
 | `--snapshot-ref <ref>` | local snapshot | Baseline: a snapshot file path, or a git ref |
-| `--format <type>` | `json` | `json`, `ndjson`, `github-annotations`, or `pr-comment` |
+| `--format <type>` | `json` | `json`, `ndjson`, `sarif`, `github-annotations`, or `pr-comment` |
 | `--pr-comment-post` | off | With `--format pr-comment`, upsert the sticky comment on the PR |
 | `--pr-provider <name>` | detect | Force the delivery target: `github`, `gitlab`, or `bitbucket` |
 | `--fail-on <rules>` | `changed,policy,error` | Comma-separated fail triggers |
+| `--baseline <file>` | — | Gate only on findings not already recorded in this file |
+| `--update-baseline` | off | Rewrite the `--baseline` file from the current findings |
 | `--ignore <keys>` | — | Comma-separated key paths to ignore |
 | `--policies <ids>` | `default` | Comma-separated policy pack ids |
 | `--plugins <paths>` | — | Comma-separated local ESM plugin paths |
@@ -83,7 +85,12 @@ flecto ci "config/**/*.yaml" --snapshot-ref HEAD~1 --fail-on "policy,error"
 | `--no-array-id` | — | Diff arrays by index instead of identity |
 | `--array-ignore-order` | off | Treat array order as insignificant |
 | `--mask-secrets` | off | Mask secret-like values in CI output |
+| `--show-suppressed` | off | List inline-suppressed findings instead of only counting them |
 | `--allow-empty` | off | Succeed when no files were diffed |
+
+Inline suppressions (`# flecto-ignore-next-line <rule> — <reason>`) accept a
+single deliberate finding in place; a reason is mandatory. See
+[ci.md](ci.md#suppressing-one-finding-in-place).
 
 **Fail triggers:** `changed`, `added`, `removed`, `policy`, `error`, `warn`.
 

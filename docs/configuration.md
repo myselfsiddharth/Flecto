@@ -23,9 +23,18 @@ policy packs and file patterns that match, printing what it found and why:
 |---|---|
 | `docker-compose.yml`, `docker-compose.yaml`, `compose.yml`, `compose.yaml` | Enables the [`compose`](policy-packs.md) pack and watches the compose file |
 | `package.json` | Enables the `node-runtime` pack and watches `package.json` |
+| A YAML document carrying `apiVersion` + `kind` | Enables the [`kubernetes`](kubernetes.md) pack and watches the manifests |
+| A file with a top-level SOPS metadata block, or `.sops.yaml` | Enables the [`sops`](encrypted-files.md) pack and watches the encrypted files |
 | `config/` | Adds `config/**/*.{yaml,yml,json,toml,ini}` to `files` |
 | `.env`, `.env.*`, `*.env` | Adds `.env`, `.env.*`, `*.env` to `files` |
 | `*.tf` | Reported only — no `terraform` pack ships yet, and `.tf` is not a parseable format, so nothing is enabled |
+
+The Kubernetes and SOPS signals are read from file **contents**, not names — a
+`deploy.yaml` only counts if it actually carries `apiVersion` + `kind`, so an
+ordinary config that happens to have a `kind:` field is left alone. Sniffing is
+bounded: it looks at the repo root and the conventional `k8s/`, `kubernetes/`,
+`manifests/`, and `deploy/` directories, caps how many files it reads, and skips
+any file over 256 KB. A large repo does not turn `init` into a full-tree scan.
 
 Detected packs also land in the `prod` profile, alongside `strict-prod`. Only
 built-in pack ids and formats Flecto can parse are ever written, so the generated
@@ -164,6 +173,47 @@ position carries no meaning — use `--array-ignore-order`.
 > **Upgrading from 2.0:** identity matching is on by default as of 2.1, so diff
 > paths may change from `services[0].…` to `services["api"].…`. Review any
 > automation that consumes diff paths. See the [changelog](../CHANGELOG.md).
+
+---
+
+## JSON with comments
+
+`tsconfig.json`, `.vscode/settings.json`, `jsconfig.json`, and
+`devcontainer.json` are JSONC by convention — TypeScript, VS Code, and the
+devcontainer spec all document comments as supported. Flecto reads `.json` (and
+`.jsonc`) in that dialect, so those files parse rather than failing:
+
+```jsonc
+{
+  // Comments are the house style for this file.
+  "compilerOptions": {
+    "target": "ES2022" /* block comments too */
+  },
+  "include": ["src"],   // a trailing comma is fine
+}
+```
+
+Both comment styles and trailing commas are accepted. Everything else is
+ordinary JSON — a real syntax error is still an error, and the line it reports
+is the line in **your** file, because comments are blanked in place rather than
+removed.
+
+Strings are left alone, so a value containing `//` or `/*` is not mistaken for
+a comment:
+
+```jsonc
+{ "url": "https://example.com" }   // parses as the URL, not as a comment
+```
+
+> **Comments are not part of the parsed value.** Flecto reads config and never
+> writes it back, so nothing in your file is rewritten — but a snapshot stores
+> the parsed structure, not the original text. A comment changed on its own is
+> not a semantic change and produces no diff.
+
+> **Inline suppressions do not apply to JSON**, even though it now has comments.
+> `flecto-ignore-next-line` is recognised in YAML, TOML, INI, and dotenv only —
+> a directive written in a `.json` file has no effect. Use
+> [`--baseline`](ci.md) to accept a finding there.
 
 ---
 

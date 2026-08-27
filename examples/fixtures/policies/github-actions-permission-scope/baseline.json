@@ -1,0 +1,13 @@
+{
+  "state": {
+    "name": "Deploy",
+    "on": { "push": null },
+    "permissions": { "contents": "read", "packages": "read" },
+    "jobs": {
+      "publish": {
+        "runs-on": ["ubuntu-latest"],
+        "steps": [{ "run": "npm publish" }]
+      }
+    }
+  }
+}

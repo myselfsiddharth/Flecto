@@ -35,6 +35,19 @@ import { redactSecretString } from './src/secrets.js';
 import { fireAlerts } from './src/alerter.js';
 import { resolveWebhookFormat, WEBHOOK_FORMAT_CHOICES } from './src/notifiers.js';
 import { createEnvelope } from './src/envelope.js';
+import { buildSarif } from './src/sarif.js';
+import {
+  loadBaseline,
+  applyBaseline,
+  buildBaselineFile,
+  writeBaselineFile,
+  baselineRelativePath,
+} from './src/baseline.js';
+import {
+  suppressionFormat,
+  parseSuppressions,
+  applySuppressions,
+} from './src/suppressions.js';
 import {
   evaluatePolicies,
   highestSeverity,
@@ -347,10 +360,28 @@ function gitRepoRelativePath(filePath) {
 /**
  * Resolve symlinks where possible, falling back to the input when the path does
  * not exist on disk.
+ *
+ * `realpathSync.native` is tried first because on Windows it asks the OS for the
+ * final path, which resolves 8.3 short names and normalizes case. Those are not
+ * cosmetic here: `git rev-parse --show-toplevel` reports the long form, while
+ * `os.tmpdir()` and many shells hand Flecto the short one
+ * (`C:\Users\RUNNER~1\...`). The JS `realpathSync` leaves both as written, so
+ * the two spellings of one directory compare as different and `relative()`
+ * produces a path that climbs out of the repository -- making
+ * `--snapshot-ref <git-ref>` fail on a file that is plainly tracked.
+ *
+ * On Linux and macOS the two agree for any path that exists, so this only ever
+ * changes the Windows result.
  * @param {string} path
  * @returns {string}
  */
 function canonicalPath(path) {
+  try {
+    return realpathSync.native(path);
+  } catch {
+    // Falls back for a path that does not exist yet, and for the rare platform
+    // where the native call is unavailable.
+  }
   try {
     return realpathSync(path);
   } catch {
@@ -377,6 +408,34 @@ function shouldFailFromPolicy(findings, failOn) {
   return false;
 }
 
+/**
+ * Parse a file's inline suppressions and split its findings into active and
+ * suppressed. A directive missing its mandatory reason is a hard error: applying
+ * it would hide a finding with no justification, and skipping it silently would
+ * fail the build confusingly. JSON (no comment syntax) has no suppressions.
+ * @param {string} filepath
+ * @param {import('./src/policy.js').PolicyFinding[]} findings
+ * @returns {{ active: any[], suppressed: Array<{ finding: any, reason: string }> }}
+ */
+function resolveSuppressed(filepath, findings) {
+  const format = suppressionFormat(filepath);
+  if (!format) return { active: findings, suppressed: [] };
+
+  let raw;
+  try {
+    raw = readFileSync(filepath, 'utf8');
+  } catch {
+    return { active: findings, suppressed: [] };
+  }
+  const { suppressions, errors } = parseSuppressions(raw, format);
+  if (errors.length > 0) {
+    const rel = relative(process.cwd(), filepath) || filepath;
+    const detail = errors.map((e) => `  ${rel}:${e.line}: ${e.message}`).join('\n');
+    throw new Error(`Inline suppression is missing a required reason:\n${detail}`);
+  }
+  return applySuppressions(findings, suppressions);
+}
+
 function shouldFailFromChanges(events, failOn) {
   if (events.length === 0) return false;
   if (failOn.has('changed') && events.some((e) => e.type === 'changed')) return true;
@@ -398,32 +457,143 @@ function escapeWorkflowCommandProperty(value) {
     .replaceAll(',', '%2C');
 }
 
-function printCiOutput(results, format) {
+/**
+ * Write to stdout and resolve only once the bytes have actually left.
+ *
+ * `process.exit()` does not flush a pending stdout write, and Node writes to a
+ * pipe asynchronously. So `flecto ci --format json | jq`, or any CI harness
+ * capturing stdout, silently lost everything past the 64 KB pipe buffer -- and
+ * still saw exit 0. A truncated envelope stream that reports success is the
+ * worst shape a machine consumer can be handed: it does not look like a
+ * failure, it looks like a clean run over fewer files.
+ *
+ * Redirecting to a file hid this, because Node writes to a file descriptor
+ * synchronously. It only appeared through a pipe, which is how every consumer
+ * that matters reads it.
+ *
+ * The callback form fires when that specific chunk drains, and stream writes
+ * are ordered, so awaiting the last one means every earlier one is out too.
+ *
+ * The trailing newline is appended unconditionally, which is exactly what
+ * `console.log` did. Adding it only when one is missing would silently drop a
+ * byte from any payload that already ends in a newline -- `--format pr-comment`
+ * does -- and the point of this change is that the rendered output is identical.
+ * @param {string} text
+ * @returns {Promise<void>}
+ */
+function writeStdout(text) {
+  return new Promise((resolveWrite) => {
+    process.stdout.write(`${text}\n`, () => resolveWrite());
+  });
+}
+
+/**
+ * Collapse the envelopes for files that were scanned and had nothing to report
+ * into a single manifest entry.
+ *
+ * `ci` emits one envelope per *scanned* file rather than per *changed* file, so
+ * the output grows with the size of the repository instead of the size of the
+ * change -- measured on 250 service configs with one file edited, 113.4 KB of
+ * output for 0.2 KB of semantic content. For a human that is invisible, because
+ * the renderer already prints only what changed; it is the machine consumers
+ * (webhooks, NDJSON sinks, and any agent handed the JSON) that pay for it.
+ *
+ * Dropping those files outright is not safe. An envelope for a scanned but
+ * unchanged file is *evidence Flecto looked*, and a consumer diffing two runs
+ * can tell "checked and clean" from "not checked at all" -- silently removing
+ * that distinction would weaken a gate someone relies on, in the same way a
+ * silently skipped plugin would. So the evidence is kept, in the one place it
+ * costs almost nothing: a single `lifecycle` envelope carrying the list of
+ * paths, instead of a full envelope with its own pair of UUIDs, timestamp, and
+ * absolute path for every file.
+ *
+ * The path list rides on the result wrapper rather than the envelope, which is
+ * closed by schemas/flecto-envelope-2.0.json -- the same arrangement `baseline`
+ * already uses. Nothing about schema 2.0 changes, and the default output is
+ * untouched, so this is opt-in rather than a reshaping of a documented contract.
+ *
+ * Each envelope keeps its own `batch_id`: that field is documented as grouping
+ * the events from one file change, not one run.
+ * @param {any[]} results
+ * @returns {any[]}
+ */
+function collapseUnchangedResults(results) {
+  const reported = [];
+  /** @type {string[]} */
+  const scanned = [];
+
+  for (const result of results) {
+    const hasChanges = (result.envelope.changes?.length ?? 0) > 0;
+    const hasFindings = (result.envelope.policies?.length ?? 0) > 0;
+    if (hasChanges || hasFindings) reported.push(result);
+    else scanned.push(result.file);
+  }
+
+  if (scanned.length === 0) return reported;
+  return [
+    ...reported,
+    {
+      // No `file`: this entry is not about one file. Consumers discriminate on
+      // `envelope.event_type === "lifecycle"`, which schema 2.0 already carries.
+      scanned,
+      envelope: createEnvelope({
+        source: 'ci',
+        file: '',
+        lifecycle: {
+          type: 'scanned',
+          message:
+            `${scanned.length} file${scanned.length === 1 ? '' : 's'} scanned `
+            + 'with no changes and no policy findings',
+        },
+      }),
+      policies: [],
+    },
+  ];
+}
+
+/**
+ * Render the machine-readable CI output and wait for it to flush.
+ *
+ * The payload is assembled and written once rather than line by line, so a
+ * caller has a single write to await -- see {@link writeStdout} for why that
+ * matters. The rendered bytes are unchanged.
+ * @param {any[]} results
+ * @param {string} format
+ * @returns {Promise<void>}
+ */
+async function printCiOutput(results, format) {
   if (format === 'json') {
-    console.log(JSON.stringify(results, null, 2));
+    await writeStdout(JSON.stringify(results, null, 2));
     return;
   }
   if (format === 'ndjson') {
-    for (const result of results) {
-      console.log(JSON.stringify(result));
-    }
+    if (results.length === 0) return;
+    await writeStdout(results.map((result) => JSON.stringify(result)).join('\n'));
+    return;
+  }
+  if (format === 'sarif') {
+    const sarif = buildSarif(results, { cwd: process.cwd(), toolVersion: PKG.version });
+    await writeStdout(JSON.stringify(sarif, null, 2));
     return;
   }
   if (format === 'github-annotations') {
+    const lines = [];
     for (const result of results) {
       for (const event of result.envelope.changes) {
         const title = `flecto ${event.type}`;
         const detail = event.note ? `${event.path} (${event.note})` : event.path;
-        console.log(`::warning file=${escapeWorkflowCommandProperty(result.file)},title=${escapeWorkflowCommandProperty(title)}::${escapeWorkflowCommandData(detail)}`);
+        lines.push(`::warning file=${escapeWorkflowCommandProperty(result.file)},title=${escapeWorkflowCommandProperty(title)}::${escapeWorkflowCommandData(detail)}`);
       }
       for (const finding of result.policies) {
         const level = finding.severity === 'error' ? 'error' : 'warning';
         const pack = finding.pack ? ` [${finding.pack}]` : '';
         const title = `flecto policy ${finding.id}${pack}`;
         const detail = `${finding.path}: ${finding.message}`;
-        console.log(`::${level} file=${escapeWorkflowCommandProperty(result.file)},title=${escapeWorkflowCommandProperty(title)}::${escapeWorkflowCommandData(detail)}`);
+        lines.push(`::${level} file=${escapeWorkflowCommandProperty(result.file)},title=${escapeWorkflowCommandProperty(title)}::${escapeWorkflowCommandData(detail)}`);
       }
     }
+    if (lines.length === 0) return;
+    await writeStdout(lines.join('\n'));
   }
 }
 
@@ -816,10 +986,12 @@ program
   .description('Run semantic diff in CI mode')
   .option('-p, --profile <name>', 'Use profile from .flectorc (else FLECTO_PROFILE)')
   .option('--snapshot-ref <ref>', 'Snapshot reference: snapshot path or git ref')
-  .option('--format <type>', 'Output format: json | ndjson | github-annotations | pr-comment', 'json')
+  .option('--format <type>', 'Output format: json | ndjson | sarif | github-annotations | pr-comment', 'json')
   .option('--pr-comment-post', 'With --format pr-comment, upsert the comment on the PR (needs a token + merge request context)', false)
   .option('--pr-provider <name>', `Force the comment delivery target: ${PR_PROVIDER_IDS.join(' | ')} (default: detect from CI)`)
   .option('--fail-on <rules>', 'Comma-separated fail rules: changed,added,removed,policy,error,warn', 'changed,policy,error')
+  .option('--baseline <file>', 'Gate only on findings not already recorded in this baseline file')
+  .option('--update-baseline', 'Rewrite the --baseline file from the current findings (explicit, never automatic)', false)
   .option('--ignore <keys>', 'Comma-separated key paths to ignore')
   .option('--policies <ids>', 'Comma-separated policy pack ids')
   .option('--plugins <paths>', 'Comma-separated local ESM plugin paths')
@@ -827,6 +999,8 @@ program
   .option('--no-array-id', 'Diff arrays by index instead of object identity')
   .option('--array-ignore-order', 'Treat array order as insignificant', false)
   .option('--mask-secrets', 'Mask secret-like values in CI output', false)
+  .option('--show-suppressed', 'List inline-suppressed findings instead of only counting them', false)
+  .option('--changed-only', 'With --format json|ndjson, replace envelopes for unchanged files with one scanned manifest', false)
   .option('--allow-empty', 'Allow CI to succeed when no files were diffed', false)
   .action(async (files, opts, command) => {
     try {
@@ -843,8 +1017,8 @@ program
       const ignorePaths = parseCsv(effective.ignore);
       const failOn = parseFailOn(effective.failOn ?? 'changed,policy,error');
       const format = String(effective.format ?? 'json');
-      if (!['json', 'ndjson', 'github-annotations', 'pr-comment'].includes(format)) {
-        throw new Error('--format must be json, ndjson, github-annotations, or pr-comment');
+      if (!['json', 'ndjson', 'sarif', 'github-annotations', 'pr-comment'].includes(format)) {
+        throw new Error('--format must be json, ndjson, sarif, github-annotations, or pr-comment');
       }
       const prCommentPost = Boolean(effective.prCommentPost);
       if (effective.prProvider && !PR_PROVIDER_IDS.includes(String(effective.prProvider))) {
@@ -854,11 +1028,27 @@ program
         renderWarn('Ignoring --pr-comment-post: it only applies to --format pr-comment.');
       }
       const maskSecrets = Boolean(effective.maskSecrets);
+      const showSuppressed = Boolean(effective.showSuppressed);
+      const changedOnly = Boolean(effective.changedOnly);
+      // github-annotations and pr-comment already render only what changed, so
+      // there is nothing for the flag to collapse there. Say so rather than
+      // accepting it and quietly doing nothing.
+      if (changedOnly && format !== 'json' && format !== 'ndjson') {
+        renderWarn(`Ignoring --changed-only: it only applies to --format json or ndjson (got ${format}).`);
+      }
       const dOpts = diffOptionsFromEffective(effective, ignorePaths);
 
-      /** @type {any[]} */
-      const results = [];
-      let shouldFail = false;
+      const cwd = process.cwd();
+      const baselinePath = effective.baseline ? resolve(cwd, String(effective.baseline)) : null;
+      const updateBaseline = Boolean(effective.updateBaseline);
+      if (updateBaseline && !baselinePath) {
+        throw new Error('--update-baseline requires --baseline <file> naming the file to write.');
+      }
+
+      /** @type {Array<{ filepath: string, relFile: string, outboundChanges: any[], outboundFindings: any[], changesFail: boolean }>} */
+      const perFile = [];
+      /** @type {Array<{ file: string, finding: any, reason: string }>} */
+      const allSuppressed = [];
       let diffed = 0;
 
       for (const filepath of targets) {
@@ -881,8 +1071,8 @@ program
           );
         }
         const events = diffTrees(before, after, dOpts);
-        const policyFindings = await evaluatePolicies(events, {
-          cwd: process.cwd(),
+        const rawFindings = await evaluatePolicies(events, {
+          cwd,
           file: filepath,
           profile: profile ?? null,
           source: 'ci',
@@ -890,20 +1080,24 @@ program
           plugins,
           severityRemap,
         });
-        const outboundChanges = maybeMaskChanges(events, maskSecrets);
-        const outboundFindings = maybeMaskFindings(policyFindings, events, maskSecrets);
-        const envelope = createEnvelope({
-          source: 'ci',
-          file: filepath,
-          changes: outboundChanges,
-          policies: outboundFindings,
-        });
-        results.push({ file: filepath, envelope, policies: outboundFindings });
-        diffed += 1;
 
-        if (shouldFailFromChanges(events, failOn) || shouldFailFromPolicy(policyFindings, failOn)) {
-          shouldFail = true;
+        // Inline suppressions run first: a deliberately-accepted finding is
+        // removed before the baseline, the gate, and the output ever see it, so
+        // it is never also counted by a baseline. A directive missing its
+        // mandatory reason is refused loudly rather than applied.
+        const { active: policyFindings, suppressed } = resolveSuppressed(filepath, rawFindings);
+        for (const item of suppressed) {
+          allSuppressed.push({ file: filepath, finding: item.finding, reason: item.reason });
         }
+
+        perFile.push({
+          filepath,
+          relFile: baselineRelativePath(filepath, cwd),
+          outboundChanges: maybeMaskChanges(events, maskSecrets),
+          outboundFindings: maybeMaskFindings(policyFindings, events, maskSecrets),
+          changesFail: shouldFailFromChanges(events, failOn),
+        });
+        diffed += 1;
       }
 
       if (diffed === 0 && !effective.allowEmpty) {
@@ -913,12 +1107,100 @@ program
         );
       }
 
+      // Suppressed findings are still surfaced — a count by default, the full
+      // list with --show-suppressed — so a gate you cannot see the shape of does
+      // not quietly grow. All of this goes to stderr, leaving machine output clean.
+      if (allSuppressed.length > 0) {
+        renderNote(
+          `${allSuppressed.length} finding${allSuppressed.length === 1 ? '' : 's'} suppressed inline`
+          + `${showSuppressed ? ':' : ' (use --show-suppressed to list them).'}`,
+        );
+        if (showSuppressed) {
+          for (const { file, finding, reason } of allSuppressed) {
+            const rel = relative(cwd, file) || file;
+            renderNote(`  ${rel} ${finding.path}: ${finding.id} — ${reason}`);
+          }
+        }
+      }
+
+      // Every finding this run produced, paired with its repo-relative file, so
+      // the baseline can be matched, updated, and stale-checked on stable keys.
+      const located = perFile.flatMap((f) =>
+        f.outboundFindings.map((finding) => ({ file: f.relFile, finding })));
+
+      // Without a baseline, every finding is active — behavior is unchanged.
+      let activeByFile = new Map(perFile.map((f) => [f.relFile, f.outboundFindings]));
+      let baselineSummary = null;
+      if (baselinePath) {
+        const { entries: recorded } = loadBaseline(baselinePath);
+
+        if (updateBaseline) {
+          // Recording the current state accepts all of it: the file is rewritten
+          // from every finding, and nothing is "new" relative to what was just
+          // written, so the gate passes on the policy axis.
+          writeBaselineFile(baselinePath, buildBaselineFile(located, recorded));
+          renderNote(
+            `Baseline updated: ${baselineRelativePath(baselinePath, cwd)} `
+            + `(${located.length} finding${located.length === 1 ? '' : 's'} recorded)`,
+          );
+          activeByFile = new Map();
+          baselineSummary = { active: 0, accepted: located.length, stale: [] };
+        } else {
+          const { active, accepted, stale } = applyBaseline(located, recorded);
+          const activeMap = new Map();
+          for (const { file, finding } of active) {
+            if (!activeMap.has(file)) activeMap.set(file, []);
+            activeMap.get(file).push(finding);
+          }
+          activeByFile = activeMap;
+          baselineSummary = { active: active.length, accepted: accepted.length, stale };
+        }
+      }
+
+      // Results reflect the *active* findings: with a baseline in effect, an
+      // accepted finding is suppressed from output as well as from the gate, so a
+      // green run is not buried under hundreds of already-accepted findings.
+      const results = perFile.map((f) => {
+        const active = activeByFile.get(f.relFile) ?? [];
+        return {
+          file: f.filepath,
+          envelope: createEnvelope({
+            source: 'ci',
+            file: f.filepath,
+            changes: f.outboundChanges,
+            policies: active,
+          }),
+          policies: active,
+        };
+      });
+
+      // With --update-baseline everything is now accepted, so there are no active
+      // findings to gate on; the policy gate simply passes. Change-based triggers
+      // are about the diff, not the findings, so they still apply.
+      const activeFindings = results.flatMap((r) => r.policies);
+      const shouldFail = perFile.some((f) => f.changesFail)
+        || shouldFailFromPolicy(activeFindings, failOn);
+
+      if (baselineSummary) {
+        const parts = [`${baselineSummary.active} new`, `${baselineSummary.accepted} baselined`];
+        if (baselineSummary.stale.length > 0) parts.push(`${baselineSummary.stale.length} stale`);
+        renderNote(`Baseline: ${parts.join(', ')}.`);
+        if (baselineSummary.stale.length > 0 && !updateBaseline) {
+          renderWarn(
+            `${baselineSummary.stale.length} baseline `
+            + `${baselineSummary.stale.length === 1 ? 'entry no longer occurs' : 'entries no longer occur'}; `
+            + 're-run with --update-baseline to prune.',
+          );
+        }
+      }
+
       if (format === 'pr-comment') {
-        const body = renderPrComment(results, { cwd: process.cwd(), failed: shouldFail });
-        console.log(body);
+        const body = renderPrComment(results, { cwd, failed: shouldFail });
+        await writeStdout(body);
         await deliverPrCommentSafely(body, prCommentPost, effective.prProvider);
       } else {
-        printCiOutput(results, format);
+        const collapsible = changedOnly && (format === 'json' || format === 'ndjson');
+        await printCiOutput(collapsible ? collapseUnchangedResults(results) : results, format);
       }
       process.exit(shouldFail ? 1 : 0);
     } catch (err) {
@@ -1023,10 +1305,10 @@ program
 
       if (format === 'pr-comment') {
         const body = renderPrComment(results, { cwd: process.cwd(), failed: shouldFail });
-        console.log(body);
+        await writeStdout(body);
         await deliverPrCommentSafely(body, prCommentPost, effective.prProvider);
       } else if (format !== 'human') {
-        printCiOutput(results, format);
+        await printCiOutput(results, format);
       }
       process.exit(shouldFail ? 1 : 0);
     } catch (err) {
@@ -1109,7 +1391,7 @@ program
         // Same envelope and printer as `ci`, so machine consumers see one shape.
         // `baseline` rides on the result wrapper rather than the envelope, which
         // is closed by schemas/flecto-envelope-2.0.json.
-        printCiOutput(
+        await printCiOutput(
           [{ file: targetPath, baseline: baselinePath, envelope, policies: outboundFindings }],
           format,
         );

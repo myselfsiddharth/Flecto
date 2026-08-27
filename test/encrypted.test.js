@@ -612,3 +612,29 @@ describe('ordinary files are untouched', () => {
     ]);
   });
 });
+
+describe('real age output, captured from the age CLI (#122)', () => {
+  // These fixtures were produced by the real `age` binary
+  // (age -r <recipient> -a), not hand-written to the documented armor format.
+  // They lock in that Flecto's detection matches what the tool actually emits.
+  const dir = join(dirname(FIXTURES), 'encrypted-real');
+  const v1 = join(dir, 'real-age-v1.age');
+  const v2 = join(dir, 'real-age-v2.age');
+
+  test('a real age-armored file is recognized and reduced to a sentinel', () => {
+    const tree = parseFile(v1);
+    assert.equal(typeof tree, 'string');
+    assert.match(tree, /^<encrypted:age:[0-9a-f]+>$/);
+    assert.equal(encryptionState(tree), 'age');
+  });
+
+  test('diffing two real age files never leaks the armored ciphertext', () => {
+    const events = diffTrees(parseFile(v1), parseFile(v2));
+    const serialized = JSON.stringify(events);
+    // No armor header, no base64 body — only the opaque sentinels.
+    assert.doesNotMatch(serialized, /BEGIN AGE|-----|age-encryption\.org/);
+    assert.doesNotMatch(serialized.replace(/encrypted:age:[0-9a-f]+/g, ''), /[A-Za-z0-9+/]{40}/);
+    // The change is still reported — a rotated secret must not read as "no change".
+    assert.ok(events.some((e) => e.type === 'changed'));
+  });
+});

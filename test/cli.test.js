@@ -7,6 +7,29 @@ import { spawn, spawnSync } from 'child_process';
 import { createHash } from 'crypto';
 import { createServer } from 'http';
 
+/**
+ * Kill a spawned CLI process and wait for it to be gone.
+ *
+ * On POSIX the difference rarely shows: the directory unlinks whether or not
+ * the process has finished exiting. On Windows a directory cannot be removed
+ * while any process still holds a handle inside it, so tearing down straight
+ * after kill() fails with EPERM on timing alone.
+ * @param {import('child_process').ChildProcess | undefined | null} child
+ * @param {number} timeoutMs
+ */
+async function stopChild(child, timeoutMs = 5000) {
+  if (!child) return;
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  child.kill();
+  await new Promise((done) => {
+    const timer = setTimeout(done, timeoutMs);
+    child.once('exit', () => {
+      clearTimeout(timer);
+      done();
+    });
+  });
+}
+
 test('ci mode returns non-zero when fail-on changed', () => {
   const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-'));
   const file = join(dir, 'config.json');
@@ -798,7 +821,7 @@ test('policies list discovers built-ins and local overrides from cwd', () => {
     const builtinPacks = JSON.parse(builtins.stdout);
     assert.deepEqual(
       builtinPacks.map((pack) => pack.id),
-      ['compose', 'default', 'kubernetes', 'node-runtime', 'sops', 'strict-prod', 'terraform'],
+      ['compose', 'default', 'github-actions', 'kubernetes', 'node-runtime', 'sops', 'strict-prod', 'terraform'],
     );
     assert.ok(builtinPacks.every((pack) => pack.source === 'builtin'));
     assert.ok(builtinPacks.every((pack) => !pack.overridesBuiltin));
@@ -1108,9 +1131,14 @@ test('watch --webhook-format slack posts a masked Block Kit payload', async () =
     assert.doesNotMatch(body, /s3cr3t-pw/);
     assert.match(body, /\*\*\*/);
   } finally {
-    child?.kill();
+    // Windows refuses to remove a directory a live process still has open, and
+    // kill() only signals -- it does not wait. Retrying the removal is a race
+    // against an unbounded delay; waiting for the child to actually exit is
+    // not. The timeout keeps a child that ignores the signal from hanging the
+    // suite instead of failing it.
+    await stopChild(child);
     await new Promise((done) => server.close(done));
-    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 });
 
@@ -1275,7 +1303,222 @@ test('ci rejects an unknown format', () => {
     );
 
     assert.equal(run.status, 1);
-    assert.match(run.stderr, /--format must be json, ndjson, github-annotations, or pr-comment/);
+    assert.match(run.stderr, /--format must be json, ndjson, sarif, github-annotations, or pr-comment/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+/**
+ * A config large enough that its rendered output exceeds one pipe buffer.
+ * `spawnSync` captures through a pipe, which is how CI harnesses and `| jq`
+ * read Flecto -- and the only way this failure shows up.
+ * @param {string} prefix
+ * @param {number} keys
+ * @returns {{ dir: string, file: string, snapshot: string }}
+ */
+function largeChangeProject(prefix, keys = 3000) {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  const file = join(dir, 'config.json');
+  const snapshot = join(dir, 'snapshot.json');
+  const after = {};
+  const before = {};
+  for (let i = 0; i < keys; i += 1) {
+    after[`setting_number_${i}`] = i + 1;
+    before[`setting_number_${i}`] = i;
+  }
+  writeFileSync(file, JSON.stringify(after), 'utf8');
+  writeFileSync(snapshot, JSON.stringify({ state: before }), 'utf8');
+  return { dir, file, snapshot };
+}
+
+test('ci --format json does not truncate large output through a pipe', () => {
+  // process.exit() does not flush a pending stdout write, and Node writes to a
+  // pipe asynchronously -- so output past the 64 KB pipe buffer was silently
+  // lost while the command still exited 1 for "changes found". A truncated
+  // envelope stream that reports normally is the worst shape for a consumer:
+  // it reads as a clean run over fewer files rather than as a failure.
+  const { dir, file, snapshot } = largeChangeProject('flecto-flush-json-');
+  const rootIndex = resolve(process.cwd(), 'index.js');
+
+  try {
+    const run = spawnSync(
+      process.execPath,
+      [rootIndex, 'ci', file, '--snapshot-ref', snapshot, '--format', 'json'],
+      { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
+    );
+
+    assert.ok(
+      Buffer.byteLength(run.stdout, 'utf8') > 65536,
+      'fixture must exceed one pipe buffer or the test proves nothing',
+    );
+    const parsed = JSON.parse(run.stdout);
+    assert.equal(parsed.length, 1);
+    assert.equal(parsed[0].envelope.changes.length, 3000);
+    assert.equal(run.status, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('ci --format ndjson does not truncate large output through a pipe', () => {
+  const { dir, file, snapshot } = largeChangeProject('flecto-flush-ndjson-');
+  const rootIndex = resolve(process.cwd(), 'index.js');
+
+  try {
+    const run = spawnSync(
+      process.execPath,
+      [rootIndex, 'ci', file, '--snapshot-ref', snapshot, '--format', 'ndjson'],
+      { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
+    );
+
+    assert.ok(Buffer.byteLength(run.stdout, 'utf8') > 65536);
+    const lines = run.stdout.trim().split('\n');
+    assert.equal(lines.length, 1);
+    assert.equal(JSON.parse(lines[0]).envelope.changes.length, 3000);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('ci --format github-annotations does not truncate large output', () => {
+  const { dir, file, snapshot } = largeChangeProject('flecto-flush-annot-');
+  const rootIndex = resolve(process.cwd(), 'index.js');
+
+  try {
+    const run = spawnSync(
+      process.execPath,
+      [rootIndex, 'ci', file, '--snapshot-ref', snapshot, '--format', 'github-annotations'],
+      { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
+    );
+
+    assert.ok(Buffer.byteLength(run.stdout, 'utf8') > 65536);
+    const lines = run.stdout.trim().split('\n');
+    assert.equal(lines.length, 3000);
+    assert.ok(lines.every((line) => line.startsWith('::warning file=')));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('ci --format sarif does not truncate large output through a pipe', () => {
+  // SARIF is uploaded to GitHub code scanning, so a truncated document is
+  // rejected by the upload action rather than merely losing findings -- but
+  // only after the gate has already reported success.
+  // SARIF carries policy findings rather than change events, so the fixture
+  // needs findings: a plugin raises one per change.
+  const { dir, file, snapshot } = largeChangeProject('flecto-flush-sarif-');
+  const rootIndex = resolve(process.cwd(), 'index.js');
+
+  try {
+    const plugin = join(dir, 'one-per-change.mjs');
+    writeFileSync(
+      plugin,
+      'export function evaluate(changes) {\n'
+      + '  return changes.map((change) => ({\n'
+      + "    id: 'one-per-change',\n"
+      + "    severity: 'warn',\n"
+      + '    path: change.path,\n'
+      + '    message: `${change.path} moved from ${change.before} to ${change.after}.`,\n'
+      + '  }));\n'
+      + '}\n',
+      'utf8',
+    );
+
+    const run = spawnSync(
+      process.execPath,
+      [rootIndex, 'ci', file, '--snapshot-ref', snapshot, '--format', 'sarif', '--plugins', plugin],
+      { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
+    );
+
+    assert.ok(
+      Buffer.byteLength(run.stdout, 'utf8') > 65536,
+      `fixture must exceed one pipe buffer, got ${Buffer.byteLength(run.stdout, 'utf8')}`,
+    );
+    const sarif = JSON.parse(run.stdout);
+    assert.equal(sarif.version, '2.1.0');
+    assert.equal(sarif.runs[0].results.length, 3000);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('ci --format pr-comment arrives whole, because its body is capped first', () => {
+  // pr-comment was never exposed to this: the renderer caps the body at 60,000
+  // characters to fit GitHub's comment limit, which lands under one pipe
+  // buffer. Pinned so that raising the cap past 64 KB cannot silently
+  // reintroduce truncation on a path that looks unrelated to it.
+  const { dir, file, snapshot } = largeChangeProject('flecto-flush-prc-');
+  const rootIndex = resolve(process.cwd(), 'index.js');
+
+  try {
+    const run = spawnSync(
+      process.execPath,
+      [rootIndex, 'ci', file, '--snapshot-ref', snapshot, '--format', 'pr-comment'],
+      { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
+    );
+
+    assert.match(run.stdout, /Report truncated to fit GitHub's comment size limit\./);
+    assert.ok(
+      Buffer.byteLength(run.stdout, 'utf8') < 65536,
+      'a pr-comment body over one pipe buffer would need the flush path too',
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a payload that already ends in a newline keeps both newlines', () => {
+  // console.log appends a newline unconditionally, so a pr-comment body -- which
+  // ends in one -- was printed with two. Appending only when one is missing
+  // would silently drop a byte from that format. Caught by diffing real output
+  // against main; nothing else in the suite would have noticed.
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-flush-newline-'));
+  const file = join(dir, 'config.json');
+  const snapshot = join(dir, 'snapshot.json');
+  const rootIndex = resolve(process.cwd(), 'index.js');
+
+  try {
+    writeFileSync(file, JSON.stringify({ a: 2 }), 'utf8');
+    writeFileSync(snapshot, JSON.stringify({ state: { a: 1 } }), 'utf8');
+
+    const run = spawnSync(
+      process.execPath,
+      [rootIndex, 'ci', file, '--snapshot-ref', snapshot, '--format', 'pr-comment'],
+      { encoding: 'utf8' },
+    );
+    assert.ok(run.stdout.endsWith('\n\n'), JSON.stringify(run.stdout.slice(-12)));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('small output is byte-identical to what the previous writer produced', () => {
+  // The payload is now assembled and written once instead of line by line.
+  // That is a flush concern, not a formatting one: the bytes must not move.
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-flush-shape-'));
+  const file = join(dir, 'config.json');
+  const snapshot = join(dir, 'snapshot.json');
+  const rootIndex = resolve(process.cwd(), 'index.js');
+
+  try {
+    writeFileSync(file, JSON.stringify({ a: 2, b: 3 }), 'utf8');
+    writeFileSync(snapshot, JSON.stringify({ state: { a: 1, b: 3 } }), 'utf8');
+
+    const json = spawnSync(
+      process.execPath,
+      [rootIndex, 'ci', file, '--snapshot-ref', snapshot, '--format', 'json'],
+      { encoding: 'utf8' },
+    );
+    assert.equal(json.stdout, `${JSON.stringify(JSON.parse(json.stdout), null, 2)}\n`);
+
+    const ndjson = spawnSync(
+      process.execPath,
+      [rootIndex, 'ci', file, '--snapshot-ref', snapshot, '--format', 'ndjson'],
+      { encoding: 'utf8' },
+    );
+    assert.ok(ndjson.stdout.endsWith('\n'));
+    assert.equal(ndjson.stdout.trim().split('\n').length, 1);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

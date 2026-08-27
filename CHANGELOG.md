@@ -26,6 +26,265 @@ The format is based on [Keep a Changelog], and this project adheres to
   attempt it, because the resulting 401 reads like a broken setup rather than a
   missing permission; it names `FLECTO_GITLAB_TOKEN` and the `api` scope
   instead. See [CI](docs/ci.md#providers). ([#138])
+- Inline suppressions: `# flecto-ignore-next-line <rule> — <reason>` on the line
+  above a deliberate finding accepts that one finding in place, the companion to
+  the baseline's bulk acceptance. **A reason is mandatory** — a directive without
+  one is refused with a pointer to the file and line, never silently applied or
+  dropped — so a repo does not accumulate unexplained suppressions. It is scoped
+  to the next line and the named rule, and resolves to that line's full key path
+  (nesting for YAML, section/table for INI/TOML, flat for dotenv), so a
+  suppression on one `pool_size` cannot hide an uncommented `pool_size` elsewhere
+  in the file. Works in every commented format Flecto parses (YAML, TOML, INI,
+  dotenv); JSON has no comments, so use the baseline there. Suppressed findings
+  are still surfaced — a count by default, the full list with `--show-suppressed`
+  — so the gate stays legible. ([#119])
+
+- Adoption baseline for `flecto ci`: `--baseline <file>` gates only on findings
+  not already recorded, and `--update-baseline` rewrites the file from the
+  current findings. This is how a repo with years of pre-existing config turns on
+  enforcement without first fixing everything or silencing rules it still wants
+  on new config. A finding is keyed on `(rule id, file, path)` — not its value —
+  so an accepted `pool-size-jump` stays accepted as the number drifts, and the
+  file does not churn. Recorded findings are suppressed from the gate and the
+  output; new ones still fail. The file is diff-friendly (one sorted entry per
+  finding, with severity, message, `acceptedAt`, and an optional hand-written
+  `reason` that updates preserve). Stale entries — recorded findings that no
+  longer occur — are reported so the file shrinks; updating is always explicit,
+  never automatic, so a run cannot launder new risk into the accepted set.
+  Change-based `--fail-on` triggers still fire, since the baseline accepts policy
+  findings, not the diff. ([#118])
+
+- `flecto ci --format sarif` emits SARIF 2.1.0 for upload to GitHub code
+  scanning (`github/codeql-action/upload-sarif`). Policy findings render on the
+  pull request diff and in the Security tab, with GitHub handling dedup,
+  new-vs-existing, and fixed-finding tracking. Each pack rule maps to a
+  `reportingDescriptor` (id, short description, pack, level); `severity` maps to
+  SARIF `level` (`error`/`warning`/`note`). `--mask-secrets` applies, since a
+  SARIF file is uploaded and retained. Results are **file-level** for now —
+  Flecto reports a semantic path, not a source line, so each result anchors at
+  the top of the file and preserves the full path as a SARIF logical location;
+  GitHub still renders and tracks the alert. Recipe and required
+  `security-events: write` permission are in [docs/ci.md](docs/ci.md). ([#120])
+
+- `flecto init` now detects Kubernetes manifests and SOPS usage — the two file
+  shapes 3.0 was built around — and enables the `kubernetes` and `sops` packs
+  accordingly. Detection is content-based: a YAML document must actually carry
+  `apiVersion` + `kind` to count as a manifest (a config with a bare `kind:`
+  field does not), and SOPS is recognized from a top-level metadata block or a
+  `.sops.yaml` creation-rules file. Sniffing is bounded — the repo root plus the
+  conventional `k8s/` / `kubernetes/` / `manifests/` / `deploy/` directories, a
+  cap on files read, and files over 256 KB skipped — so `init` never turns into
+  a full-tree scan. The "detected nothing" generic fallback is unchanged. ([#123])
+
+- **JSON with comments and trailing commas is parsed** ([#152]). `.json` was
+  read with bare `JSON.parse`, so a single `//` failed the whole file — and a
+  config watcher installed into a JavaScript repository could not read the
+  `tsconfig.json`, `.vscode/settings.json`, `jsconfig.json`, or
+  `devcontainer.json` sitting next to it. Worse, it failed with a *parse error*
+  rather than an unsupported-format skip, so it looked broken rather than out of
+  scope.
+
+  Both comment styles and trailing commas are now accepted, and `.jsonc` is a
+  recognised extension. No new dependency: comments are blanked in place, one
+  space per stripped character, with newlines kept — so byte offsets and line
+  numbers in a genuine syntax error still point at the line in your file.
+
+  The strip tracks string state, because the naive version corrupts exactly the
+  values config files carry: `{"url": "https://example.com"}` is a URL, not a
+  comment. Comments are not preserved on the parsed value; Flecto never rewrites
+  config, and a comment-only edit is not a semantic change. See
+  [JSON with comments](docs/configuration.md#json-with-comments).
+
+  Note that **inline suppressions still do not apply to JSON.**
+  `flecto-ignore-next-line` remains YAML/TOML/INI/dotenv only, so a directive
+  written in a `.json` file has no effect; use `--baseline` there. Now that JSON
+  carries comments, that gap is worth closing separately.
+- **`ci --changed-only`** ([#151]). `ci --format json` emitted an envelope for
+  every **scanned** file, not every **changed** one, so the output grew with the
+  size of the repository rather than the size of the change. Each envelope
+  carries `schema_version`, two UUIDs, an ISO timestamp, and an absolute path —
+  on 250 service configs with one file edited, roughly 88% of the output
+  described files that did not change.
+
+  For a human that is invisible, since the terminal renderer already prints only
+  what changed. It is the machine consumers that pay: webhook sinks, NDJSON
+  readers, and any agent handed the JSON.
+
+  | change (250 configs) | default | `--changed-only` | reduction |
+  |---|---|---|---|
+  | nothing changed | 112.8 KB | 13.3 KB | 88% |
+  | one file changed | 113.4 KB | 14.3 KB | 87% |
+  | every 10th file changed | 126.8 KB | 37.3 KB | 71% |
+
+  **The evidence that Flecto looked is kept.** An envelope for a scanned but
+  unchanged file tells a consumer diffing two runs that a file was *checked and
+  clean* rather than *not checked at all*, and dropping it would quietly weaken
+  a gate someone relies on. Those files collapse into a single `lifecycle`
+  envelope carrying the list of paths, so what is removed is the per-file
+  overhead rather than the signal.
+
+  **Off by default**, so `schema_version` stays `2.0` and existing consumers see
+  byte-for-byte identical output. A file with policy findings but no changes is
+  never collapsed. Settable as `changedOnly` in `.flectorc`. See
+  [CI usage](docs/ci.md#--changed-only).
+
+- **`github-actions` policy pack** ([#139]). Workflow YAML is the one config
+  file in most repositories where a bad change is a security incident rather
+  than an outage, and Flecto already parses it. Eleven declarative rules over
+  the CI-takeover shapes: `pull_request_target` added, a new scheduled, manual,
+  or reusable-workflow trigger, the `permissions` block removed or widened to
+  `write-all` or to `write` on one scope, an action referenced by mutable tag
+  instead of a commit SHA, a checkout of the pull-request head, `secrets.*`
+  interpolated into `run:`, and a job moved to a self-hosted runner. Enabled by
+  `flecto init` when `.github/workflows/` exists. No engine change — the pack
+  auto-registers from `src/packs/`.
+
+  It reports **what the pull request changed**, not what the workflow already
+  contained; `actionlint` and `zizmor` already lint the state well. Two limits
+  are documented rather than papered over: severity cannot depend on the
+  trigger, because a rule sees one change event and cannot consult the rest of
+  the document, and `runs-on` changing from a string to a list produces one
+  event whose value is an array, which no matcher inspects. Every rule carries
+  its reasoning in [policy packs](docs/policy-packs.md#github-actions-workflows),
+  and four fixtures pin the boundary — including one asserting **zero** findings
+  for changes that only look risky.
+
+- **Context-savings measurement in the benchmark harness.** Section 5 of
+  `npm run bench` reports the size of the semantic diff against the size of the
+  config it describes, in bytes, at three mutation rates plus a single-file
+  crossover table. Published in [performance](docs/performance.md#context-savings).
+
+  The result is more qualified than the claim it was written to check. A sparse
+  change in a large file is 50x to 1270x cheaper to read as a diff than as the
+  file, and the advantage compounds because a change event plus its envelope
+  costs a fixed ~600 bytes while the file grows. But a *dense* change is not
+  cheaper at all — at roughly a quarter of a file's keys the payload runs about
+  3x the size of the files it covers — and `ci --format json` currently emits an
+  envelope for every **scanned** file rather than every changed one, so with one
+  file changed out of 250 roughly 98% of the output is boilerplate for files that
+  did not change. ([#137])
+
+### Changed
+- The 3.0 integrations were verified against the real tools they integrate with,
+  not only fixtures ([#122]). The HTML report was opened in a real browser — both
+  themes render with no JS errors, and the filter, expand/collapse, and
+  disclosure triangle work. The encrypted-file path is now tested against output
+  from the real `age` binary (`test/fixtures/encrypted-real/`), confirming a real
+  age file is detected and never leaks ciphertext through a diff. The
+  `flecto-pr-risk` Action was statically reviewed (no runner here to execute a
+  live PR) and its flagged mechanics are correct. What was verified, and what
+  still needs a real runner / `terraform` / `sops`, is recorded in
+  [docs/integration-verification.md](docs/integration-verification.md) — which
+  also notes that `flecto report` has no `--mask-secrets` yet, so it renders
+  secret values in the clear (a follow-up). ([#122])
+
+- **CI runs on Windows and macOS** ([#148]). The matrix varied the Node version
+  and nothing else, so every job ran on `ubuntu-latest` — for a tool whose
+  primary local mode is watching files by glob, the two platforms where that
+  behavior differs had never been tested. Linux keeps the full Node matrix;
+  Windows and macOS run one version each, since what they add is the operating
+  system rather than the runtime.
+
+### Fixed
+
+- Adding a second YAML document beside an existing one no longer re-paths the
+  whole file. A lone Kubernetes-shaped document (`apiVersion` + `kind` +
+  `metadata.name`) is now keyed by identity — `kind/namespace/name` — exactly as
+  it is inside a multi-document file, so a `Service` added next to a `Deployment`
+  reads as one addition instead of reporting the untouched Deployment as removed
+  and re-added. Ordinary single-document YAML (anything without both
+  `apiVersion` and `kind`) is unchanged. ([#124])
+
+  **Migration:** paths for a *single*-document manifest change from bare
+  (`spec.replicas`) to identity-prefixed (`Deployment/prod/api.spec.replicas`).
+  Snapshots and CI baselines taken of a single manifest before this release will
+  show one-time churn on the next diff; `--ignore` entries and custom pack path
+  regexes written against the bare paths need the prefix. Multi-document files
+  and non-manifest config are unaffected.
+
+- `flecto policies test` now resolves packs installed by `flecto policies add`.
+  The harness searched only the fixture directory's `policies/`, while
+  `policies add` writes to the invoking project's — so the two commands added in
+  the same release did not compose. A fixture's own `policies/` still wins, so
+  self-contained fixtures are unaffected; the project is a fallback. The
+  "unknown pack" error now names every directory it searched instead of
+  suggesting a path that already existed. ([#114])
+
+- **`--snapshot-ref <git-ref>` no longer fails on Windows** ([#148]). The
+  repository-relative path is derived by comparing `git rev-parse
+  --show-toplevel` against the file's own path, and Windows spells one directory
+  two ways: git reports the long form, while `os.tmpdir()` and many shells hand
+  Flecto the 8.3 short form (`C:\Users\RUNNER~1\...`). Node's JS `realpathSync`
+  reconciles neither, so the two compared as different directories and the
+  computed relative path climbed out of the repository — `git show` then failed
+  on a file that was plainly tracked. Canonicalization now prefers
+  `realpathSync.native`, which asks the OS for the final path and so resolves
+  short names and normalizes case. Linux and macOS are unaffected: the two calls
+  agree for any path that exists. Found by the new Windows runner.
+
+- **Glob patterns written with Windows separators now match** ([#148]).
+  `resolveFiles` passed user patterns straight to `fast-glob`, which requires
+  POSIX separators and reads `\\` as an escape character — so on Windows
+  `config\\*.yaml` asked for a file literally named `config*.yaml`, matched
+  nothing, and reported `No files matched`, blaming the user for a platform bug.
+  Since PowerShell and cmd tab-completion produce backslash paths, that was the
+  default way a Windows user would invoke Flecto.
+
+  Patterns are now rewritten to POSIX separators **on Windows only** — on Linux
+  and macOS a backslash is a legal filename character and a meaningful glob
+  escape, so rewriting there would break patterns that work today. `exclude`
+  patterns get the same rewrite, since an exclude that silently stops excluding
+  widens what Flecto reports on. Resolved paths stay native.
+- **`ci --format json` no longer truncates at 64 KB through a pipe** ([#155]).
+  Output was printed with `console.log` and followed immediately by
+  `process.exit()`, which does not flush a pending write — and Node writes to a
+  pipe asynchronously. Everything past the 64 KB pipe buffer was dropped, and
+  the command still exited with its normal status.
+
+  Redirecting to a file hid it, because Node writes to a file descriptor
+  synchronously. It appeared only through a pipe — which is how every consumer
+  that matters reads it: `| jq`, `$(...)` capture, and any CI harness collecting
+  stdout.
+
+  A truncated envelope stream that exits normally is the worst shape for a
+  consumer: it reads as a clean run over fewer files rather than as a failure.
+  With `ndjson` it is quieter still, since every line before the cut is valid
+  JSON, so a line-by-line reader consumes a clean prefix and never learns the
+  rest existed.
+
+  Affected `ci`, `plan`, and `diff`/`compare` on `--format json`, `ndjson`,
+  `sarif`, and `github-annotations`. A truncated SARIF document is rejected
+  outright by `upload-sarif`, but only after the gate has already reported
+  success. `--format pr-comment` was never affected — its body is capped at
+  60,000 characters to fit GitHub's comment limit, which lands under one pipe
+  buffer.
+
+### Security
+
+- **Two denial-of-service vectors fixed, found while resuming the 3.0 security
+  review** ([#121]). (1) Secret detection (`src/secrets.js`), which runs on every
+  changed string value under the `default` pack, had two `O(n²)` regexes — the
+  PEM private-key and URL-credential patterns — so a single ~500 KB value in a
+  pull request could hang the CI job. Both are now linear; 1 MB scans in under a
+  second, and detection of real (including unterminated) keys is unchanged. (2) A
+  YAML alias bomb ("billion laughs") — a few hundred bytes of nested aliases that
+  `normalizeParsedValue` expanded into an exponentially large tree — now fails
+  fast against a node budget instead of exhausting memory. Regression tests for
+  both in `test/security.test.js`. The review's findings and its "checked, solid"
+  list are recorded in [docs/security-review.md](docs/security-review.md); a
+  residual limitation (attacker-supplied regexes in custom packs, which Node
+  cannot time out) is noted in [SECURITY.md](SECURITY.md).
+
+- **Terraform plan JSON is refused by every command except `flecto plan`.**
+  Terraform's `before_sensitive` / `after_sensitive` redaction is applied only by
+  `flecto plan`; a plan file is ordinary JSON, so `ci`, `watch`, `compare`,
+  `report`, and snapshot writes read it as a plain config tree and printed the
+  values Terraform itself refuses to print. `--mask-secrets` was not a backstop —
+  it fires on the attribute *name*, and `user_data` does not match. Realistic
+  ways to hit it: `flecto ci "**/*.json"`, a committed `tfplan.json`, or
+  `.flectorc` `files` patterns that sweep JSON. Those commands now fail with a
+  pointer to `flecto plan`, mirroring the guard `flecto plan` already had in the
+  other direction. ([#113])
 
 ## [3.0.1] - 2026-08-07
 
@@ -581,6 +840,29 @@ fixed — those runs were never actually gated — but the failure is new.
 [#108]: https://github.com/myselfsiddharth/Flecto/pull/108
 [#109]: https://github.com/myselfsiddharth/Flecto/issues/109
 [#110]: https://github.com/myselfsiddharth/Flecto/issues/110
+[#122]: https://github.com/myselfsiddharth/Flecto/issues/122
+
+[#121]: https://github.com/myselfsiddharth/Flecto/issues/121
+
+[#119]: https://github.com/myselfsiddharth/Flecto/issues/119
+
+[#118]: https://github.com/myselfsiddharth/Flecto/issues/118
+
+[#120]: https://github.com/myselfsiddharth/Flecto/issues/120
+
+[#123]: https://github.com/myselfsiddharth/Flecto/issues/123
+
+[#124]: https://github.com/myselfsiddharth/Flecto/issues/124
+
+[#113]: https://github.com/myselfsiddharth/Flecto/issues/113
+
+[#114]: https://github.com/myselfsiddharth/Flecto/issues/114
+[#148]: https://github.com/myselfsiddharth/Flecto/issues/148
+[#152]: https://github.com/myselfsiddharth/Flecto/issues/152
+[#151]: https://github.com/myselfsiddharth/Flecto/issues/151
+[#155]: https://github.com/myselfsiddharth/Flecto/issues/155
+[#139]: https://github.com/myselfsiddharth/Flecto/issues/139
+[#137]: https://github.com/myselfsiddharth/Flecto/issues/137
 [Keep a Changelog]: https://keepachangelog.com/en/1.1.0/
 [#138]: https://github.com/myselfsiddharth/Flecto/issues/138
 [Semantic Versioning]: https://semver.org/spec/v2.0.0.html

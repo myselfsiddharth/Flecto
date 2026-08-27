@@ -67,6 +67,23 @@ describe('stack detection', () => {
     }
   });
 
+  test('GitHub workflow directory enables the github-actions pack', () => {
+    const dir = makeDir('flecto-init-github-actions-');
+    try {
+      mkdirSync(join(dir, '.github', 'workflows'), { recursive: true });
+      writeFileSync(join(dir, '.github', 'workflows', 'ci.yml'), 'name: CI\non: {}\n', 'utf8');
+
+      const detection = detectStack(dir);
+      assert.ok(detection.packs.includes('github-actions'));
+      assert.ok(detection.files.includes('.github/workflows/**/*.{yaml,yml}'));
+      const signal = detection.signals.find((item) => item.id === 'github-actions');
+      assert.equal(signal.pack, 'github-actions');
+      assert.deepEqual(signal.evidence, ['.github/workflows/']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('compose and node signals combine with config/ and dotenv patterns', () => {
     const dir = makeDir('flecto-init-both-');
     try {
@@ -118,6 +135,129 @@ describe('stack detection', () => {
     try {
       const detection = detectStack(dir);
       assert.deepEqual(detection, { signals: [], packs: ['default'], files: [] });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('Kubernetes and SOPS detection (#123)', () => {
+  const DEPLOYMENT = 'apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: api\nspec:\n  replicas: 3\n';
+
+  test('a Kubernetes manifest at the root enables the kubernetes pack', () => {
+    const dir = makeDir('flecto-init-k8s-root-');
+    try {
+      writeFileSync(join(dir, 'deploy.yaml'), DEPLOYMENT, 'utf8');
+      const detection = detectStack(dir);
+      assert.ok(detection.packs.includes('kubernetes'));
+      assert.ok(detection.files.includes('*.{yaml,yml}'));
+      const signal = detection.signals.find((s) => s.id === 'kubernetes');
+      assert.equal(signal.pack, 'kubernetes');
+      assert.deepEqual(signal.evidence, ['deploy.yaml']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('manifests in a conventional subdirectory are watched by a dir glob', () => {
+    const dir = makeDir('flecto-init-k8s-dir-');
+    try {
+      mkdirSync(join(dir, 'manifests', 'base'), { recursive: true });
+      writeFileSync(join(dir, 'manifests', 'base', 'deploy.yaml'), DEPLOYMENT, 'utf8');
+      const detection = detectStack(dir);
+      assert.ok(detection.packs.includes('kubernetes'));
+      assert.ok(detection.files.includes('manifests/**/*.{yaml,yml}'));
+      assert.ok(!detection.files.includes('*.{yaml,yml}'), 'no stray root glob');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a YAML with kind but no apiVersion is not treated as a manifest', () => {
+    const dir = makeDir('flecto-init-notk8s-');
+    try {
+      // A form definition, not Kubernetes. Enabling the pack here would produce
+      // confusing findings on the first run — worse than enabling nothing.
+      writeFileSync(join(dir, 'form.yaml'), 'kind: contact-form\nname: signup\nfields:\n  - email\n', 'utf8');
+      const detection = detectStack(dir);
+      assert.ok(!detection.packs.includes('kubernetes'));
+      assert.equal(detection.signals.find((s) => s.id === 'kubernetes'), undefined);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a .sops.yaml creation-rules file alone enables the sops pack', () => {
+    const dir = makeDir('flecto-init-sops-rules-');
+    try {
+      // .sops.yaml is plaintext config, not an encrypted file, but it is a
+      // reliable sign the repo uses SOPS.
+      writeFileSync(join(dir, '.sops.yaml'), 'creation_rules:\n  - path_regex: secrets/.*\n', 'utf8');
+      const detection = detectStack(dir);
+      assert.ok(detection.packs.includes('sops'));
+      const signal = detection.signals.find((s) => s.id === 'sops');
+      assert.ok(signal.evidence.includes('.sops.yaml'));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a SOPS-encrypted file is detected by content and watched', () => {
+    const dir = makeDir('flecto-init-sops-enc-');
+    try {
+      writeFileSync(
+        join(dir, 'secrets.enc.yaml'),
+        'db_password: ENC[AES256_GCM,data:Tr7o=,iv:x,tag:y,type:str]\n'
+        + 'sops:\n    mac: ENC[AES256_GCM,data:abc,type:str]\n    version: 3.9.0\n'
+        + '    lastmodified: "2026-08-01T00:00:00Z"\n',
+        'utf8',
+      );
+      const detection = detectStack(dir);
+      assert.ok(detection.packs.includes('sops'));
+      assert.ok(detection.files.includes('secrets.enc.yaml'));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('an ordinary config that pins sops.version is not mistaken for encrypted', () => {
+    const dir = makeDir('flecto-init-sops-version-');
+    try {
+      writeFileSync(join(dir, 'app.yaml'), 'sops:\n  version: 3.9.0\nport: 3000\n', 'utf8');
+      const detection = detectStack(dir);
+      assert.ok(!detection.packs.includes('sops'), 'a version pin is not a metadata block');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('kubernetes and sops signals coexist with the generic ones', () => {
+    const dir = makeDir('flecto-init-mixed-');
+    try {
+      writeFileSync(join(dir, 'package.json'), '{"name":"app"}', 'utf8');
+      mkdirSync(join(dir, 'k8s'), { recursive: true });
+      writeFileSync(join(dir, 'k8s', 'deploy.yaml'), DEPLOYMENT, 'utf8');
+      writeFileSync(join(dir, '.sops.yaml'), 'creation_rules: []\n', 'utf8');
+      const detection = detectStack(dir);
+      assert.deepEqual(
+        [...detection.packs].sort(),
+        ['default', 'kubernetes', 'node-runtime', 'sops'],
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('sniffing is bounded and never reads a giant file', () => {
+    const dir = makeDir('flecto-init-bound-');
+    try {
+      // A 300 KB YAML is over the byte cap and must be skipped, not slurped —
+      // even though it is a valid manifest.
+      const big = 'apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: big\ndata:\n'
+        + '  blob: ' + JSON.stringify('x'.repeat(300 * 1024)) + '\n';
+      writeFileSync(join(dir, 'big.yaml'), big, 'utf8');
+      const detection = detectStack(dir);
+      assert.ok(!detection.packs.includes('kubernetes'), 'the oversized file was skipped');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
