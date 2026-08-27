@@ -132,8 +132,22 @@ The format is based on [Keep a Changelog], and this project adheres to
   and four fixtures pin the boundary — including one asserting **zero** findings
   for changes that only look risky.
 
-### Changed
+- **Context-savings measurement in the benchmark harness.** Section 5 of
+  `npm run bench` reports the size of the semantic diff against the size of the
+  config it describes, in bytes, at three mutation rates plus a single-file
+  crossover table. Published in [performance](docs/performance.md#context-savings).
 
+  The result is more qualified than the claim it was written to check. A sparse
+  change in a large file is 50x to 1270x cheaper to read as a diff than as the
+  file, and the advantage compounds because a change event plus its envelope
+  costs a fixed ~600 bytes while the file grows. But a *dense* change is not
+  cheaper at all — at roughly a quarter of a file's keys the payload runs about
+  3x the size of the files it covers — and `ci --format json` currently emits an
+  envelope for every **scanned** file rather than every changed one, so with one
+  file changed out of 250 roughly 98% of the output is boilerplate for files that
+  did not change. ([#137])
+
+### Changed
 - The 3.0 integrations were verified against the real tools they integrate with,
   not only fixtures ([#122]). The HTML report was opened in a real browser — both
   themes render with no JS errors, and the filter, expand/collapse, and
@@ -831,6 +845,7 @@ fixed — those runs were never actually gated — but the failure is new.
 [#151]: https://github.com/myselfsiddharth/Flecto/issues/151
 [#155]: https://github.com/myselfsiddharth/Flecto/issues/155
 [#139]: https://github.com/myselfsiddharth/Flecto/issues/139
+[#137]: https://github.com/myselfsiddharth/Flecto/issues/137
 [Keep a Changelog]: https://keepachangelog.com/en/1.1.0/
 [Semantic Versioning]: https://semver.org/spec/v2.0.0.html
 [GHSA-wq8m-fc3q-8m5x]: https://github.com/myselfsiddharth/Flecto/security/advisories/GHSA-wq8m-fc3q-8m5x

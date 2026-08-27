@@ -517,6 +517,7 @@ Explicit CLI flags win over profiles, which win over `defaults`.
 | **[Configuration](docs/configuration.md)** | `.flectorc`, profiles, ignore patterns, array identity, masking |
 | **[Encrypted files](docs/encrypted-files.md)** | SOPS and age: what is detected, what is reported, why nothing is decrypted |
 | **[CI](docs/ci.md)** | Baselines, fail triggers, output formats, the bundled GitHub Actions |
+| **[Performance](docs/performance.md)** | Where time goes at scale, and how much smaller a diff is than the config |
 | **[Kubernetes](docs/kubernetes.md)** | Diffing rendered Helm/Kustomize manifests before they reach a cluster |
 | **[Terraform plans](docs/terraform.md)** | Reviewing `terraform show -json` output and the `terraform` pack |
 | **[Webhooks and commands](docs/webhooks.md)** | Envelope shape, delivery modes, command environment |
