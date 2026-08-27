@@ -33,7 +33,7 @@ const BITBUCKET_API_URL = 'https://api.bitbucket.org/2.0';
  *   updateUrl: (context: any, id: string | number) => string,
  *   updateMethod: string,
  *   payload: (body: string) => object,
- *   readOne: (payload: any) => { url?: string },
+ *   readOne: (payload: any, context: any) => { url?: string },
  * }} PrProvider
  */
 
@@ -111,7 +111,7 @@ const github = {
   },
 
   authHeaders: (token) => ({ Authorization: `Bearer ${token}`, 'X-GitHub-Api-Version': '2022-11-28' }),
-  listUrl: (c, page) => `${c.apiUrl}/repos/${c.repo}/issues/${c.prNumber}/comments?per_page=100&page=${page}`,
+  listUrl: (c, page) => `${c.apiUrl}/repos/${c.repo}/issues/${c.prNumber}/comments?per_page=${github.perPage}&page=${page}`,
   readList: (payload) => (Array.isArray(payload) ? payload : []).map((c) => ({ id: c?.id, body: c?.body, url: c?.html_url })),
   createUrl: (c) => `${c.apiUrl}/repos/${c.repo}/issues/${c.prNumber}/comments`,
   updateUrl: (c, id) => `${c.apiUrl}/repos/${c.repo}/issues/comments/${id}`,
@@ -164,13 +164,15 @@ const gitlab = {
   },
 
   authHeaders: (token) => ({ 'PRIVATE-TOKEN': token }),
-  listUrl: (c, page) => `${gitlabNotesBase(c)}?per_page=100&page=${page}`,
+  listUrl: (c, page) => `${gitlabNotesBase(c)}?per_page=${gitlab.perPage}&page=${page}`,
   readList: (payload) => (Array.isArray(payload) ? payload : []).map((n) => ({ id: n?.id, body: n?.body })),
   createUrl: (c) => gitlabNotesBase(c),
   updateUrl: (c, id) => `${gitlabNotesBase(c)}/${id}`,
   updateMethod: 'PUT',
   payload: (body) => ({ body }),
-  readOne: () => ({}),
+  readOne: (payload, c) => (c?.webUrl && payload?.id
+    ? { url: `${c.webUrl}/-/merge_requests/${c.prNumber}#note_${payload.id}` }
+    : {}),
 };
 
 /** Notes collection for the merge request. Project ids may be paths, so encode. */
@@ -214,7 +216,7 @@ const bitbucket = {
   },
 
   authHeaders: (token) => ({ Authorization: `Bearer ${token}` }),
-  listUrl: (c, page) => `${bitbucketCommentsBase(c)}?pagelen=100&page=${page}`,
+  listUrl: (c, page) => `${bitbucketCommentsBase(c)}?pagelen=${bitbucket.perPage}&page=${page}`,
   readList: (payload) => (Array.isArray(payload?.values) ? payload.values : []).map((c) => ({
     id: c?.id,
     body: c?.content?.raw,

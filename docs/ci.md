@@ -426,6 +426,11 @@ flecto:
 
 A self-managed instance is picked up automatically from `CI_API_V4_URL`.
 
+GitLab's note API returns no web URL for the note it just created, so the link
+Flecto prints after posting is built from `CI_MERGE_REQUEST_PROJECT_URL`. That
+variable is exported by merge request pipelines; without it the run still posts
+normally and simply reports the action with no link.
+
 ### Bitbucket
 
 ```yaml

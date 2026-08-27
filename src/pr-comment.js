@@ -1,7 +1,7 @@
 import { readFileSync } from 'fs';
+import { isAbsolute, relative } from 'path';
 
 import { PR_PROVIDERS, selectPrProvider } from './pr-providers.js';
-import { isAbsolute, relative } from 'path';
 
 /**
  * Hidden marker embedded in every rendered body. Flecto finds its own comment by
@@ -10,21 +10,23 @@ import { isAbsolute, relative } from 'path';
  */
 export const PR_COMMENT_MARKER = '<!-- flecto:pr-comment -->';
 
-const DEFAULT_API_URL = 'https://api.github.com';
 const DEFAULT_TIMEOUT_MS = 10_000;
 /** GitHub rejects comment bodies longer than 65536 characters. */
 const MAX_BODY_CHARS = 60_000;
 const MAX_INLINE_CHANGES = 10;
 const MAX_VALUE_CHARS = 120;
 const MAX_COMMENT_PAGES = 10;
-const COMMENTS_PER_PAGE = 100;
 const SEVERITY_ORDER = ['error', 'warn', 'info'];
 const SEVERITY_HEADINGS = { error: 'Errors', warn: 'Warnings', info: 'Notices' };
 const SEVERITY_NOUNS = { error: 'error', warn: 'warning', info: 'notice' };
 
 /**
  * @typedef {{ file: string, envelope: import('./envelope.js').FlectoEnvelope, policies?: import('./policy.js').PolicyFinding[] }} CiResult
- * @typedef {{ repo: string, prNumber: number, token: string, apiUrl: string }} PrCommentContext
+ * @typedef {{ provider?: string, prNumber: number, token: string, apiUrl: string,
+ *   repo?: string, projectId?: string, webUrl?: string, workspace?: string, repoSlug?: string
+ * }} PrCommentContext The fields a delivery adapter resolved; which ones are
+ *   present depends on the provider. A context built by hand carries no
+ *   `provider` and is treated as GitHub.
  */
 
 /**
@@ -235,11 +237,6 @@ export function renderPrComment(results, options = {}) {
 }
 
 /**
- * @param {Record<string, string | undefined>} env
- * @param {(path: string) => string} readEventFile
- * @returns {number | null}
- */
-/**
  * Resolve the API context needed to post a merge request comment.
  *
  * The provider is detected from CI environment variables, or forced with
@@ -340,7 +337,7 @@ async function apiRequest({ fetchImpl, provider, url, method, token, body, timeo
  * Find the sticky Flecto comment on a pull request, if one exists.
  * @param {PrCommentContext} context
  * @param {{ fetchImpl: typeof fetch, marker: string, timeoutMs: number }} options
- * @returns {Promise<{ id: number, body?: string, html_url?: string } | null>}
+ * @returns {Promise<{ id: string | number, body?: string, url?: string } | null>}
  */
 async function findStickyComment(context, { fetchImpl, marker, timeoutMs }) {
   const provider = providerFor(context);
@@ -387,7 +384,7 @@ export async function upsertPrComment(body, context, options = {}) {
       timeoutMs,
     });
     const created = await response.json().catch(() => ({}));
-    return { action: 'created', url: provider.readOne(created).url };
+    return { action: 'created', url: provider.readOne(created, context).url };
   }
 
   // Rendering is deterministic, so an identical body means nothing moved since
@@ -406,12 +403,12 @@ export async function upsertPrComment(body, context, options = {}) {
     timeoutMs,
   });
   const updated = await response.json().catch(() => ({}));
-  return { action: 'updated', url: provider.readOne(updated).url ?? existing.url };
+  return { action: 'updated', url: provider.readOne(updated, context).url ?? existing.url };
 }
 
 /**
  * Post the sticky comment when — and only when — posting was explicitly enabled
- * and a complete GitHub pull request context is present.
+ * and a complete merge request context is present.
  *
  * Never throws and never reports the token: a delivery problem must not change
  * the CI exit code, which belongs to the diff and policy result alone.
@@ -422,7 +419,8 @@ export async function upsertPrComment(body, context, options = {}) {
  *   fetchImpl?: typeof fetch,
  *   marker?: string,
  *   timeoutMs?: number,
- *   readEventFile?: (path: string) => string
+ *   readEventFile?: (path: string) => string,
+ *   provider?: string
  * }} [options]
  * @returns {Promise<{ posted: boolean, action?: 'created' | 'updated' | 'unchanged', url?: string, reason?: string }>}
  */

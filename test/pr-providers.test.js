@@ -145,6 +145,36 @@ test('gitlab updates the sticky note in place with PUT', async () => {
   assert.equal(calls.filter((c) => c.method === 'POST').length, 0);
 });
 
+test('gitlab links the created note when the pipeline exports a project URL', async () => {
+  const { fetchImpl } = recordingFetch((url, init) => {
+    if (init.method === 'POST') return response(201, { id: 900 });
+    return response(200, []);
+  });
+
+  const { context } = resolvePrCommentContext({
+    ...GITLAB_ENV,
+    CI_MERGE_REQUEST_PROJECT_URL: 'https://gitlab.example.test/acme/widgets/',
+  });
+  const outcome = await upsertPrComment(BODY, context, { fetchImpl });
+
+  // A note payload carries no web URL, so the anchor is built from the project
+  // URL the pipeline already exports.
+  assert.equal(outcome.url, 'https://gitlab.example.test/acme/widgets/-/merge_requests/17#note_900');
+});
+
+test('gitlab reports the action with no link when no project URL is exported', async () => {
+  const { fetchImpl } = recordingFetch((url, init) => {
+    if (init.method === 'POST') return response(201, { id: 900 });
+    return response(200, []);
+  });
+
+  const { context } = resolvePrCommentContext(GITLAB_ENV);
+  const outcome = await upsertPrComment(BODY, context, { fetchImpl });
+
+  assert.equal(outcome.action, 'created');
+  assert.equal(outcome.url, undefined);
+});
+
 test('a gitlab project path is url-encoded rather than splitting the route', () => {
   const { context } = resolvePrCommentContext({ ...GITLAB_ENV, CI_PROJECT_ID: 'acme/group/widgets' });
   const { provider } = selectPrProvider(GITLAB_ENV);
