@@ -183,25 +183,66 @@ export function resolvePolicyOptions(effective, provenance = {}) {
 }
 
 /**
+ * Convert a glob pattern to the separators `fast-glob` requires.
+ *
+ * fast-glob only understands POSIX separators and treats a backslash as an
+ * escape character, so a Windows path used as a pattern matches nothing at all:
+ * `config\*.yaml` asks for a file literally named `config*.yaml`. Since
+ * PowerShell and cmd tab-completion produce backslash paths, that is the
+ * default way a Windows user would invoke Flecto, and the failure looks like
+ * "no files matched" rather than like a platform bug.
+ *
+ * The rewrite is deliberately **Windows-only**. On POSIX a backslash is a legal
+ * character in a filename *and* a meaningful glob escape, so rewriting there
+ * would break patterns that work today. On Windows a backslash can only ever be
+ * a separator — the filesystem forbids it in a name — so there is nothing to
+ * lose.
+ *
+ * Only patterns are rewritten. Resolved paths stay native, which is what every
+ * `fs` call and the snapshot key derivation expect.
+ * @param {string} pattern
+ * @param {NodeJS.Platform} [platform] Injectable so the Windows behavior is
+ *   testable from any host.
+ * @returns {string}
+ */
+export function normalizeGlobPattern(pattern, platform = process.platform) {
+  if (platform !== 'win32') return pattern;
+  return String(pattern).replaceAll('\\', '/');
+}
+
+/**
  * Expand file patterns from rc include/files and direct CLI inputs.
- * @param {{ cwd?: string, files?: string[], include?: string[], exclude?: string[] }} input
+ * @param {{
+ *  cwd?: string,
+ *  files?: string[],
+ *  include?: string[],
+ *  exclude?: string[],
+ *  platform?: NodeJS.Platform
+ * }} input
  * @returns {Promise<string[]>}
  */
 export async function resolveFiles(input) {
   const cwd = input.cwd ?? process.cwd();
+  const platform = input.platform ?? process.platform;
   const files = input.files ?? [];
   const include = input.include ?? [];
   const exclude = input.exclude ?? [];
-  const patterns = [...files, ...include].filter(Boolean);
+  const patterns = [...files, ...include]
+    .filter(Boolean)
+    .map((pattern) => normalizeGlobPattern(pattern, platform));
   if (patterns.length === 0) return [];
+  // `exclude` is matched against the same pattern syntax, so it needs the same
+  // rewrite -- an exclude that silently stops excluding is the worse failure.
+  const ignore = exclude.filter(Boolean).map((pattern) => normalizeGlobPattern(pattern, platform));
   const matches = await fg(patterns, {
     cwd,
     absolute: true,
     onlyFiles: true,
     unique: true,
-    ignore: exclude,
+    ignore,
     dot: true,
   });
+  // Back to native separators: everything downstream reads these off disk.
   return matches.map((p) => resolve(p));
 }
 

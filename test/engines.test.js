@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
+import yaml from 'js-yaml';
 
 const pkg = JSON.parse(readFileSync(resolve(process.cwd(), 'package.json'), 'utf8'));
 
@@ -133,12 +134,35 @@ test('every runtime dependency supports the Node version Flecto claims', () => {
   );
 });
 
-test('the CI matrix covers the declared Node floor', () => {
-  const workflow = readFileSync(resolve(process.cwd(), '.github/workflows/ci.yml'), 'utf8');
-  const matrix = /node-version:\s*\[([^\]]+)\]/.exec(workflow);
-  assert.ok(matrix, 'ci.yml must declare a node-version matrix');
+/**
+ * The `test` job's matrix, flattened to one entry per runner. Parsed as YAML
+ * rather than pattern-matched, so the assertions below survive a reshaping of
+ * the matrix and fail only when a runner is genuinely gone.
+ * @returns {{ os: string, nodeVersion: number }[]}
+ */
+function ciMatrixEntries() {
+  const workflow = yaml.load(
+    readFileSync(resolve(process.cwd(), '.github/workflows/ci.yml'), 'utf8'),
+  );
+  const strategy = workflow?.jobs?.test?.strategy;
+  assert.ok(strategy?.matrix, 'ci.yml must declare a matrix for the test job');
 
-  const versions = matrix[1].split(',').map((v) => Number(v.trim()));
+  const { include, os, 'node-version': nodeVersion } = strategy.matrix;
+  if (Array.isArray(include)) {
+    return include.map((entry) => ({
+      os: String(entry.os ?? os ?? workflow.jobs.test['runs-on']),
+      nodeVersion: Number(entry['node-version']),
+    }));
+  }
+  // A plain cross-product matrix, should it ever go back to one.
+  const platforms = Array.isArray(os) ? os : [String(workflow.jobs.test['runs-on'])];
+  return platforms.flatMap((platform) =>
+    (nodeVersion ?? []).map((version) => ({ os: String(platform), nodeVersion: Number(version) })),
+  );
+}
+
+test('the CI matrix covers the declared Node floor', () => {
+  const versions = [...new Set(ciMatrixEntries().map((entry) => entry.nodeVersion))];
   const floorMajor = parseVersion(pkg.engines.node.replace(/^[^\d]*/, ''))[0];
 
   assert.ok(
@@ -146,6 +170,31 @@ test('the CI matrix covers the declared Node floor', () => {
     `CI matrix [${versions.join(', ')}] does not test the declared floor (Node ${floorMajor}). ` +
     'A floor nothing exercises is a claim, not a guarantee.',
   );
+});
+
+test('the CI matrix covers Linux, Windows, and macOS', () => {
+  // Flecto's primary local mode is watching files by glob, and both the glob
+  // engine's separator handling and chokidar's backend differ per platform.
+  // A matrix that quietly loses a runner takes the only check on that with it.
+  const entries = ciMatrixEntries();
+  const families = new Set(entries.map((entry) => entry.os.split('-')[0]));
+
+  for (const family of ['ubuntu', 'windows', 'macos']) {
+    assert.ok(
+      families.has(family),
+      `CI matrix runs on [${[...families].join(', ')}] but not ${family}. `
+      + 'See #148: Windows and macOS were untested for the first three minor versions.',
+    );
+  }
+});
+
+test('the CI matrix does not cancel siblings on the first failure', () => {
+  // Platform divergence is what this matrix exists to surface, so a Windows
+  // failure must not cancel the macOS job that shows whether it is platform-wide.
+  const workflow = yaml.load(
+    readFileSync(resolve(process.cwd(), '.github/workflows/ci.yml'), 'utf8'),
+  );
+  assert.equal(workflow.jobs.test.strategy['fail-fast'], false);
 });
 
 test('the engines range parser rejects shapes it does not model', () => {

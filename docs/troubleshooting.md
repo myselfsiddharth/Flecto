@@ -28,6 +28,12 @@ flecto watch "config/**/*.yaml"   # correct
 flecto watch config/**/*.yaml     # shell may expand or mangle this
 ```
 
+**On Windows**, patterns may be written with either separator — `config\*.yaml`
+and `config/*.yaml` both work, including drive letters and UNC paths. Backslash
+patterns are rewritten to the forward slashes the glob engine requires. This is
+Windows-only: on Linux and macOS a backslash is a legal filename character *and*
+a glob escape, so it is left as written there.
+
 ---
 
 ## Changes aren't detected while watching

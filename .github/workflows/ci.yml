@@ -11,12 +11,33 @@ concurrency:
 
 jobs:
   test:
-    name: test (${{ matrix.node-version }})
-    runs-on: ubuntu-latest
+    name: test (${{ matrix.os }}, node ${{ matrix.node-version }})
+    runs-on: ${{ matrix.os }}
 
     strategy:
+      # Platform divergence is the point of this matrix, so one platform failing
+      # must not cancel the runners that would show whether it is platform-wide.
+      fail-fast: false
       matrix:
-        node-version: [20, 22, 24]
+        # The Node matrix runs on Linux; Windows and macOS run one version each.
+        # Repeating every Node version on all three platforms triples the cost to
+        # re-test a runtime difference the Linux jobs already cover -- what the
+        # extra platforms add is the OS, not the runtime.
+        include:
+          - os: ubuntu-latest
+            node-version: 20
+          - os: ubuntu-latest
+            node-version: 22
+          - os: ubuntu-latest
+            node-version: 24
+          # Windows: fast-glob separator handling, ReadDirectoryChangesW watch
+          # events, and CRLF checkouts.
+          - os: windows-latest
+            node-version: 24
+          # macOS: chokidar takes the fsevents path here rather than inotify,
+          # and this is where most local development happens.
+          - os: macos-latest
+            node-version: 24
 
     steps:
       - name: Checkout

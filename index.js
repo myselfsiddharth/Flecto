@@ -359,10 +359,28 @@ function gitRepoRelativePath(filePath) {
 /**
  * Resolve symlinks where possible, falling back to the input when the path does
  * not exist on disk.
+ *
+ * `realpathSync.native` is tried first because on Windows it asks the OS for the
+ * final path, which resolves 8.3 short names and normalizes case. Those are not
+ * cosmetic here: `git rev-parse --show-toplevel` reports the long form, while
+ * `os.tmpdir()` and many shells hand Flecto the short one
+ * (`C:\Users\RUNNER~1\...`). The JS `realpathSync` leaves both as written, so
+ * the two spellings of one directory compare as different and `relative()`
+ * produces a path that climbs out of the repository -- making
+ * `--snapshot-ref <git-ref>` fail on a file that is plainly tracked.
+ *
+ * On Linux and macOS the two agree for any path that exists, so this only ever
+ * changes the Windows result.
  * @param {string} path
  * @returns {string}
  */
 function canonicalPath(path) {
+  try {
+    return realpathSync.native(path);
+  } catch {
+    // Falls back for a path that does not exist yet, and for the rare platform
+    // where the native call is unavailable.
+  }
   try {
     return realpathSync(path);
   } catch {
@@ -438,37 +456,143 @@ function escapeWorkflowCommandProperty(value) {
     .replaceAll(',', '%2C');
 }
 
-function printCiOutput(results, format) {
+/**
+ * Write to stdout and resolve only once the bytes have actually left.
+ *
+ * `process.exit()` does not flush a pending stdout write, and Node writes to a
+ * pipe asynchronously. So `flecto ci --format json | jq`, or any CI harness
+ * capturing stdout, silently lost everything past the 64 KB pipe buffer -- and
+ * still saw exit 0. A truncated envelope stream that reports success is the
+ * worst shape a machine consumer can be handed: it does not look like a
+ * failure, it looks like a clean run over fewer files.
+ *
+ * Redirecting to a file hid this, because Node writes to a file descriptor
+ * synchronously. It only appeared through a pipe, which is how every consumer
+ * that matters reads it.
+ *
+ * The callback form fires when that specific chunk drains, and stream writes
+ * are ordered, so awaiting the last one means every earlier one is out too.
+ *
+ * The trailing newline is appended unconditionally, which is exactly what
+ * `console.log` did. Adding it only when one is missing would silently drop a
+ * byte from any payload that already ends in a newline -- `--format pr-comment`
+ * does -- and the point of this change is that the rendered output is identical.
+ * @param {string} text
+ * @returns {Promise<void>}
+ */
+function writeStdout(text) {
+  return new Promise((resolveWrite) => {
+    process.stdout.write(`${text}\n`, () => resolveWrite());
+  });
+}
+
+/**
+ * Collapse the envelopes for files that were scanned and had nothing to report
+ * into a single manifest entry.
+ *
+ * `ci` emits one envelope per *scanned* file rather than per *changed* file, so
+ * the output grows with the size of the repository instead of the size of the
+ * change -- measured on 250 service configs with one file edited, 113.4 KB of
+ * output for 0.2 KB of semantic content. For a human that is invisible, because
+ * the renderer already prints only what changed; it is the machine consumers
+ * (webhooks, NDJSON sinks, and any agent handed the JSON) that pay for it.
+ *
+ * Dropping those files outright is not safe. An envelope for a scanned but
+ * unchanged file is *evidence Flecto looked*, and a consumer diffing two runs
+ * can tell "checked and clean" from "not checked at all" -- silently removing
+ * that distinction would weaken a gate someone relies on, in the same way a
+ * silently skipped plugin would. So the evidence is kept, in the one place it
+ * costs almost nothing: a single `lifecycle` envelope carrying the list of
+ * paths, instead of a full envelope with its own pair of UUIDs, timestamp, and
+ * absolute path for every file.
+ *
+ * The path list rides on the result wrapper rather than the envelope, which is
+ * closed by schemas/flecto-envelope-2.0.json -- the same arrangement `baseline`
+ * already uses. Nothing about schema 2.0 changes, and the default output is
+ * untouched, so this is opt-in rather than a reshaping of a documented contract.
+ *
+ * Each envelope keeps its own `batch_id`: that field is documented as grouping
+ * the events from one file change, not one run.
+ * @param {any[]} results
+ * @returns {any[]}
+ */
+function collapseUnchangedResults(results) {
+  const reported = [];
+  /** @type {string[]} */
+  const scanned = [];
+
+  for (const result of results) {
+    const hasChanges = (result.envelope.changes?.length ?? 0) > 0;
+    const hasFindings = (result.envelope.policies?.length ?? 0) > 0;
+    if (hasChanges || hasFindings) reported.push(result);
+    else scanned.push(result.file);
+  }
+
+  if (scanned.length === 0) return reported;
+  return [
+    ...reported,
+    {
+      // No `file`: this entry is not about one file. Consumers discriminate on
+      // `envelope.event_type === "lifecycle"`, which schema 2.0 already carries.
+      scanned,
+      envelope: createEnvelope({
+        source: 'ci',
+        file: '',
+        lifecycle: {
+          type: 'scanned',
+          message:
+            `${scanned.length} file${scanned.length === 1 ? '' : 's'} scanned `
+            + 'with no changes and no policy findings',
+        },
+      }),
+      policies: [],
+    },
+  ];
+}
+
+/**
+ * Render the machine-readable CI output and wait for it to flush.
+ *
+ * The payload is assembled and written once rather than line by line, so a
+ * caller has a single write to await -- see {@link writeStdout} for why that
+ * matters. The rendered bytes are unchanged.
+ * @param {any[]} results
+ * @param {string} format
+ * @returns {Promise<void>}
+ */
+async function printCiOutput(results, format) {
   if (format === 'json') {
-    console.log(JSON.stringify(results, null, 2));
+    await writeStdout(JSON.stringify(results, null, 2));
     return;
   }
   if (format === 'ndjson') {
-    for (const result of results) {
-      console.log(JSON.stringify(result));
-    }
+    if (results.length === 0) return;
+    await writeStdout(results.map((result) => JSON.stringify(result)).join('\n'));
     return;
   }
   if (format === 'sarif') {
     const sarif = buildSarif(results, { cwd: process.cwd(), toolVersion: PKG.version });
-    console.log(JSON.stringify(sarif, null, 2));
+    await writeStdout(JSON.stringify(sarif, null, 2));
     return;
   }
   if (format === 'github-annotations') {
+    const lines = [];
     for (const result of results) {
       for (const event of result.envelope.changes) {
         const title = `flecto ${event.type}`;
         const detail = event.note ? `${event.path} (${event.note})` : event.path;
-        console.log(`::warning file=${escapeWorkflowCommandProperty(result.file)},title=${escapeWorkflowCommandProperty(title)}::${escapeWorkflowCommandData(detail)}`);
+        lines.push(`::warning file=${escapeWorkflowCommandProperty(result.file)},title=${escapeWorkflowCommandProperty(title)}::${escapeWorkflowCommandData(detail)}`);
       }
       for (const finding of result.policies) {
         const level = finding.severity === 'error' ? 'error' : 'warning';
         const pack = finding.pack ? ` [${finding.pack}]` : '';
         const title = `flecto policy ${finding.id}${pack}`;
         const detail = `${finding.path}: ${finding.message}`;
-        console.log(`::${level} file=${escapeWorkflowCommandProperty(result.file)},title=${escapeWorkflowCommandProperty(title)}::${escapeWorkflowCommandData(detail)}`);
+        lines.push(`::${level} file=${escapeWorkflowCommandProperty(result.file)},title=${escapeWorkflowCommandProperty(title)}::${escapeWorkflowCommandData(detail)}`);
       }
     }
+    if (lines.length === 0) return;
+    await writeStdout(lines.join('\n'));
   }
 }
 
@@ -873,6 +997,7 @@ program
   .option('--array-ignore-order', 'Treat array order as insignificant', false)
   .option('--mask-secrets', 'Mask secret-like values in CI output', false)
   .option('--show-suppressed', 'List inline-suppressed findings instead of only counting them', false)
+  .option('--changed-only', 'With --format json|ndjson, replace envelopes for unchanged files with one scanned manifest', false)
   .option('--allow-empty', 'Allow CI to succeed when no files were diffed', false)
   .action(async (files, opts, command) => {
     try {
@@ -898,6 +1023,13 @@ program
       }
       const maskSecrets = Boolean(effective.maskSecrets);
       const showSuppressed = Boolean(effective.showSuppressed);
+      const changedOnly = Boolean(effective.changedOnly);
+      // github-annotations and pr-comment already render only what changed, so
+      // there is nothing for the flag to collapse there. Say so rather than
+      // accepting it and quietly doing nothing.
+      if (changedOnly && format !== 'json' && format !== 'ndjson') {
+        renderWarn(`Ignoring --changed-only: it only applies to --format json or ndjson (got ${format}).`);
+      }
       const dOpts = diffOptionsFromEffective(effective, ignorePaths);
 
       const cwd = process.cwd();
@@ -1058,10 +1190,11 @@ program
 
       if (format === 'pr-comment') {
         const body = renderPrComment(results, { cwd, failed: shouldFail });
-        console.log(body);
+        await writeStdout(body);
         await deliverPrCommentSafely(body, prCommentPost);
       } else {
-        printCiOutput(results, format);
+        const collapsible = changedOnly && (format === 'json' || format === 'ndjson');
+        await printCiOutput(collapsible ? collapseUnchangedResults(results) : results, format);
       }
       process.exit(shouldFail ? 1 : 0);
     } catch (err) {
@@ -1162,10 +1295,10 @@ program
 
       if (format === 'pr-comment') {
         const body = renderPrComment(results, { cwd: process.cwd(), failed: shouldFail });
-        console.log(body);
+        await writeStdout(body);
         await deliverPrCommentSafely(body, prCommentPost);
       } else if (format !== 'human') {
-        printCiOutput(results, format);
+        await printCiOutput(results, format);
       }
       process.exit(shouldFail ? 1 : 0);
     } catch (err) {
@@ -1248,7 +1381,7 @@ program
         // Same envelope and printer as `ci`, so machine consumers see one shape.
         // `baseline` rides on the result wrapper rather than the envelope, which
         // is closed by schemas/flecto-envelope-2.0.json.
-        printCiOutput(
+        await printCiOutput(
           [{ file: targetPath, baseline: baselinePath, envelope, policies: outboundFindings }],
           format,
         );

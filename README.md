@@ -402,12 +402,17 @@ and runs no code from the package. →
 
 | Format | Extensions |
 |---|---|
-| JSON | `.json` |
+| JSON / JSONC | `.json`, `.jsonc` |
 | YAML | `.yaml`, `.yml` |
 | TOML | `.toml` |
 | INI | `.ini` |
 | dotenv | `.env`, `.env.*`, `*.env` |
 | age (armored) | `.age`, or any file whose contents are one armored blob |
+
+`.json` accepts comments and trailing commas, so `tsconfig.json`,
+`.vscode/settings.json`, `jsconfig.json`, and `devcontainer.json` are read as
+written. →
+**[JSON with comments](docs/configuration.md#json-with-comments)**
 
 Terraform plan JSON (`terraform show -json`) is read by **`flecto plan`**, which
 applies Terraform's own sensitivity marking. Point `plan` at it rather than `ci`
