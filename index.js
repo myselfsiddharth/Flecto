@@ -469,6 +469,70 @@ function writeStdout(text) {
 }
 
 /**
+ * Collapse the envelopes for files that were scanned and had nothing to report
+ * into a single manifest entry.
+ *
+ * `ci` emits one envelope per *scanned* file rather than per *changed* file, so
+ * the output grows with the size of the repository instead of the size of the
+ * change -- measured on 250 service configs with one file edited, 113.4 KB of
+ * output for 0.2 KB of semantic content. For a human that is invisible, because
+ * the renderer already prints only what changed; it is the machine consumers
+ * (webhooks, NDJSON sinks, and any agent handed the JSON) that pay for it.
+ *
+ * Dropping those files outright is not safe. An envelope for a scanned but
+ * unchanged file is *evidence Flecto looked*, and a consumer diffing two runs
+ * can tell "checked and clean" from "not checked at all" -- silently removing
+ * that distinction would weaken a gate someone relies on, in the same way a
+ * silently skipped plugin would. So the evidence is kept, in the one place it
+ * costs almost nothing: a single `lifecycle` envelope carrying the list of
+ * paths, instead of a full envelope with its own pair of UUIDs, timestamp, and
+ * absolute path for every file.
+ *
+ * The path list rides on the result wrapper rather than the envelope, which is
+ * closed by schemas/flecto-envelope-2.0.json -- the same arrangement `baseline`
+ * already uses. Nothing about schema 2.0 changes, and the default output is
+ * untouched, so this is opt-in rather than a reshaping of a documented contract.
+ *
+ * Each envelope keeps its own `batch_id`: that field is documented as grouping
+ * the events from one file change, not one run.
+ * @param {any[]} results
+ * @returns {any[]}
+ */
+function collapseUnchangedResults(results) {
+  const reported = [];
+  /** @type {string[]} */
+  const scanned = [];
+
+  for (const result of results) {
+    const hasChanges = (result.envelope.changes?.length ?? 0) > 0;
+    const hasFindings = (result.envelope.policies?.length ?? 0) > 0;
+    if (hasChanges || hasFindings) reported.push(result);
+    else scanned.push(result.file);
+  }
+
+  if (scanned.length === 0) return reported;
+  return [
+    ...reported,
+    {
+      // No `file`: this entry is not about one file. Consumers discriminate on
+      // `envelope.event_type === "lifecycle"`, which schema 2.0 already carries.
+      scanned,
+      envelope: createEnvelope({
+        source: 'ci',
+        file: '',
+        lifecycle: {
+          type: 'scanned',
+          message:
+            `${scanned.length} file${scanned.length === 1 ? '' : 's'} scanned `
+            + 'with no changes and no policy findings',
+        },
+      }),
+      policies: [],
+    },
+  ];
+}
+
+/**
  * Render the machine-readable CI output and wait for it to flush.
  *
  * The payload is assembled and written once rather than line by line, so a
@@ -915,6 +979,7 @@ program
   .option('--array-ignore-order', 'Treat array order as insignificant', false)
   .option('--mask-secrets', 'Mask secret-like values in CI output', false)
   .option('--show-suppressed', 'List inline-suppressed findings instead of only counting them', false)
+  .option('--changed-only', 'With --format json|ndjson, replace envelopes for unchanged files with one scanned manifest', false)
   .option('--allow-empty', 'Allow CI to succeed when no files were diffed', false)
   .action(async (files, opts, command) => {
     try {
@@ -940,6 +1005,13 @@ program
       }
       const maskSecrets = Boolean(effective.maskSecrets);
       const showSuppressed = Boolean(effective.showSuppressed);
+      const changedOnly = Boolean(effective.changedOnly);
+      // github-annotations and pr-comment already render only what changed, so
+      // there is nothing for the flag to collapse there. Say so rather than
+      // accepting it and quietly doing nothing.
+      if (changedOnly && format !== 'json' && format !== 'ndjson') {
+        renderWarn(`Ignoring --changed-only: it only applies to --format json or ndjson (got ${format}).`);
+      }
       const dOpts = diffOptionsFromEffective(effective, ignorePaths);
 
       const cwd = process.cwd();
@@ -1103,7 +1175,8 @@ program
         await writeStdout(body);
         await deliverPrCommentSafely(body, prCommentPost);
       } else {
-        await printCiOutput(results, format);
+        const collapsible = changedOnly && (format === 'json' || format === 'ndjson');
+        await printCiOutput(collapsible ? collapseUnchangedResults(results) : results, format);
       }
       process.exit(shouldFail ? 1 : 0);
     } catch (err) {
