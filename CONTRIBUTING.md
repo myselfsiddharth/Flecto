@@ -29,6 +29,18 @@ Node.js **20.19.0+** is required.
 - PR titles should be concise and descriptive (conventional style encouraged: `feat:`, `fix:`, `docs:`, `ci:`, `chore:`).
 - Do not force-push to `main`. Force-pushes on shared PR branches are discouraged after review has started — prefer new commits or a coordinated rebase.
 
+## Coverage
+
+`npm run coverage` runs the suite with Node's built-in coverage and prints a
+focused report for the modules where an untested branch is a security question —
+plugin resolution, pack loading, secret detection, encrypted files, and token
+handling. CI runs it on every pull request and prints it in the job log.
+
+**No threshold gates it**, deliberately. Use it to decide where a test is worth
+writing, not as a number to move. How to read it, and how to change which modules
+are on the focused list, is in
+[docs/security-review.md](docs/security-review.md#knowing-what-has-been-exercised).
+
 ## Benchmarks
 
 `npm run bench` generates a synthetic repo in a temp directory and reports where
