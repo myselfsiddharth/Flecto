@@ -210,10 +210,10 @@ a comment:
 > the parsed structure, not the original text. A comment changed on its own is
 > not a semantic change and produces no diff.
 
-> **Inline suppressions do not apply to JSON**, even though it now has comments.
-> `flecto-ignore-next-line` is recognised in YAML, TOML, INI, and dotenv only —
-> a directive written in a `.json` file has no effect. Use
-> [`--baseline`](ci.md) to accept a finding there.
+> **Inline suppressions apply here too.** `flecto-ignore-next-line` is read from
+> `.json` and `.jsonc` in both comment styles, resolving to the enclosing key
+> path exactly as it does in YAML. See
+> [suppressing one finding in place](ci.md#suppressing-one-finding-in-place).
 
 ---
 

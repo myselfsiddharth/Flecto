@@ -9,6 +9,24 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ### Added
 
+- **Inline suppressions in JSON** ([#158]). `.json` and `.jsonc` are parsed as
+  JSONC, so they carry comments — but `flecto-ignore-next-line` was still skipped
+  there, and skipped silently: the directive parsed as an ordinary comment, the
+  finding fired anyway, and nothing told the author their suppression had been
+  ignored. That is the failure mode inline suppressions exist to avoid, pointed
+  the wrong way.
+
+  The JSON resolver reuses the parser's comment stripper rather than recognising
+  `//` and block comments a second time — comments are blanked in place, so line
+  numbers still line up — and then walks the brace/bracket depth and enclosing
+  key stack to the same dotted path the differ reports.
+
+  Anything inside an **array** is refused, as it already is in YAML: an array
+  element's diff path is its index or its `--array-id-key` identity depending on
+  how the run is configured, so resolving one would suppress the wrong finding
+  under the other. Over-suppression is the dangerous direction for a security
+  tool, and the refusal is covered per array mode rather than by one happy path.
+
 - Inline suppressions: `# flecto-ignore-next-line <rule> — <reason>` on the line
   above a deliberate finding accepts that one finding in place, the companion to
   the baseline's bulk acceptance. **A reason is mandatory** — a directive without
@@ -17,8 +35,8 @@ The format is based on [Keep a Changelog], and this project adheres to
   to the next line and the named rule, and resolves to that line's full key path
   (nesting for YAML, section/table for INI/TOML, flat for dotenv), so a
   suppression on one `pool_size` cannot hide an uncommented `pool_size` elsewhere
-  in the file. Works in every commented format Flecto parses (YAML, TOML, INI,
-  dotenv); JSON has no comments, so use the baseline there. Suppressed findings
+  in the file. Works in every commented format Flecto parses — YAML, TOML, INI,
+  dotenv, and (since [#158]) JSON. Suppressed findings
   are still surfaced — a count by default, the full list with `--show-suppressed`
   — so the gate stays legible. ([#119])
 
@@ -78,10 +96,8 @@ The format is based on [Keep a Changelog], and this project adheres to
   config, and a comment-only edit is not a semantic change. See
   [JSON with comments](docs/configuration.md#json-with-comments).
 
-  Note that **inline suppressions still do not apply to JSON.**
-  `flecto-ignore-next-line` remains YAML/TOML/INI/dotenv only, so a directive
-  written in a `.json` file has no effect; use `--baseline` there. Now that JSON
-  carries comments, that gap is worth closing separately.
+  Inline suppressions followed, in [#158] — a directive written in a file that
+  visibly supports comments no longer does nothing.
 - **`ci --changed-only`** ([#151]). `ci --format json` emitted an envelope for
   every **scanned** file, not every **changed** one, so the output grew with the
   size of the repository rather than the size of the change. Each envelope
@@ -155,6 +171,20 @@ The format is based on [Keep a Changelog], and this project adheres to
   system rather than the runtime.
 
 ### Fixed
+
+- **A `flecto-ignore-next-line` that resolves to nothing now says so** ([#158]).
+  A directive on an array element, in a multi-document YAML file, or in a file
+  type with no comment syntax at all was accepted, resolved to no path, matched
+  nothing, and produced no output — the operator believed a finding was accepted
+  and had no way to learn otherwise. Every such directive now warns on stderr,
+  naming the file, the line, and `--baseline` as the way to accept the finding.
+
+  A warning rather than an error, deliberately: the case already fails closed,
+  because the finding the directive meant to accept still fires and still gates
+  the build. Failing it a second time adds nothing the first failure did not
+  already say. What was missing was the signal, not the gate. (The
+  mandatory-reason check stays a hard error — there, a suppression *would* have
+  hidden a finding, with no justification recorded.)
 
 - Adding a second YAML document beside an existing one no longer re-paths the
   whole file. A lone Kubernetes-shaped document (`apiVersion` + `kind` +
@@ -831,6 +861,7 @@ fixed — those runs were never actually gated — but the failure is new.
 [#151]: https://github.com/myselfsiddharth/Flecto/issues/151
 [#155]: https://github.com/myselfsiddharth/Flecto/issues/155
 [#139]: https://github.com/myselfsiddharth/Flecto/issues/139
+[#158]: https://github.com/myselfsiddharth/Flecto/issues/158
 [Keep a Changelog]: https://keepachangelog.com/en/1.1.0/
 [Semantic Versioning]: https://semver.org/spec/v2.0.0.html
 [GHSA-wq8m-fc3q-8m5x]: https://github.com/myselfsiddharth/Flecto/security/advisories/GHSA-wq8m-fc3q-8m5x
