@@ -341,6 +341,15 @@ export function parseSuppressions(raw, format) {
   for (let i = 0; i < lines.length; i++) {
     const match = DIRECTIVE.exec(lines[i]);
     if (!match) continue;
+    // Directives are scanned on the raw line so `// flecto-ignore-next-line`
+    // is visible. For JSON, comments have already been blanked on `code`, so a
+    // match still present there lived inside a string — data, not a comment.
+    // Treating it as a suppression would hide the next key, the over-suppression
+    // this resolver exists to refuse.
+    if (format === 'json') {
+      const blanked = code[i].slice(match.index, match.index + match[0].length);
+      if (blanked.trim() !== '') continue;
+    }
     const lineNo = i + 1;
 
     // A directive in a file whose format cannot carry one does nothing. Saying

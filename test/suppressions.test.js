@@ -122,6 +122,13 @@ describe('parseSuppressions — JSON', () => {
     assert.equal(parseSuppressions(raw, 'json').suppressions[0].path, 'a.b');
   });
 
+  test('a directive-shaped string value is data, not a suppression', () => {
+    // The scanner reads raw lines, so a value that merely *says* the
+    // directive would otherwise suppress the next key — over-suppression.
+    const raw = '{\n  "note": "flecto-ignore-next-line r — ok",\n  "b": 1\n}\n';
+    assert.equal(parseSuppressions(raw, 'json').suppressions.length, 0);
+  });
+
   test('a brace inside a string value does not open a container', () => {
     const raw = '{\n  "a": "{ not an object",\n  // flecto-ignore-next-line r — ok\n  "b": 1\n}\n';
     assert.equal(parseSuppressions(raw, 'json').suppressions[0].path, 'b');
