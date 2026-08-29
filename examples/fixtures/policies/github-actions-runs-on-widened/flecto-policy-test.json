@@ -1,0 +1,8 @@
+{
+  "baseline": "baseline.json",
+  "current": "current.yml",
+  "policies": ["github-actions"],
+  "expected": [
+    { "id": "github-actions-self-hosted-runner", "severity": "error", "path": "jobs.build.runs-on" }
+  ]
+}

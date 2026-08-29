@@ -27,6 +27,45 @@ The format is based on [Keep a Changelog], and this project adheres to
   under the other. Over-suppression is the dangerous direction for a security
   tool, and the refusal is covered per array mode rather than by one happy path.
 
+- **Coverage measurement in CI, focused on the modules where a gap is a security
+  question** ([#149]). CI ran `npm test` and `npm run pack:check` and nothing
+  else, so "is the plugin-loading path from GHSA-wq8m-fc3q-8m5x covered, and is
+  every branch of it covered?" was answered by reading `test/security.test.js`
+  and hoping.
+
+  `npm run coverage` runs the suite under `node --test
+  --experimental-test-coverage` — a flag, not a dependency — and prints a report
+  for `config.js` (plugin resolution), `policy.js` (pack loading), `secrets.js`,
+  `encrypted.js`, `pr-comment.js`, and `pr-providers.js` (token handling), worst
+  branch coverage first, with the count of branches that never executed.
+  Reporting those separately is the point: one repo-wide average is the number
+  that hides them.
+
+  **No threshold gates the job.** A number chosen before anyone has read the
+  report is arbitrary, and the usual outcome is tests written to satisfy the gate
+  rather than to find defects. The report prints in the job log, so reading it
+  needs no artifact download. The one thing that *does* fail the job is a focused
+  module missing from the report — a renamed module would otherwise drop out of
+  the table silently, leaving a report that covers less than it claims to.
+
+  No linter. The style argument is the weak one, the project is consistent
+  without it, and a rule set worth having is a separate decision from this one.
+  See [security review](docs/security-review.md#knowing-what-has-been-exercised).
+
+- `afterAnyMatches`, a policy matcher that applies a regular expression to the
+  elements of an array value. `afterMatches` requires a string, so the edit that
+  widens a scalar into a list — `runs-on: ubuntu-latest` →
+  `runs-on: [self-hosted, linux]` — was invisible to every value predicate: the
+  differ reports it as one `changed` event whose `after` is an array and does not
+  descend into a type change, so no per-element leaf exists to match either. The
+  scan is flat and array-only: a non-array value never matches, non-string
+  elements are skipped, and it does not recurse into nested arrays or objects, so
+  what a rule matches stays readable from the rule text. `afterMatches` keeps its
+  exact meaning, so no existing pack changes behavior. The `github-actions` pack's
+  `github-actions-self-hosted-runner` rule now pairs the two in an `anyOf` and
+  covers the fourth `runs-on` shape it previously documented as a limitation.
+  ([#159])
+
 - **Merge request comments on GitLab and Bitbucket.** The sticky review comment
   was GitHub-only: `src/pr-comment.js` and both composite actions spoke
   `GITHUB_TOKEN`, `GITHUB_EVENT_PATH`, and the issue-comments API directly, so
@@ -894,7 +933,9 @@ fixed — those runs were never actually gated — but the failure is new.
 [#155]: https://github.com/myselfsiddharth/Flecto/issues/155
 [#139]: https://github.com/myselfsiddharth/Flecto/issues/139
 [#137]: https://github.com/myselfsiddharth/Flecto/issues/137
+[#149]: https://github.com/myselfsiddharth/Flecto/issues/149
 [#158]: https://github.com/myselfsiddharth/Flecto/issues/158
+[#159]: https://github.com/myselfsiddharth/Flecto/issues/159
 [Keep a Changelog]: https://keepachangelog.com/en/1.1.0/
 [#138]: https://github.com/myselfsiddharth/Flecto/issues/138
 [Semantic Versioning]: https://semver.org/spec/v2.0.0.html
