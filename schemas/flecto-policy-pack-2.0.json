@@ -45,6 +45,7 @@
         "beforeLooksSecret": { "const": true },
         "afterLooksSecret": { "const": true },
         "afterMatches": { "type": "string" },
+        "afterAnyMatches": { "type": "string" },
         "numericJump": {
           "type": "object",
           "additionalProperties": false,
@@ -95,6 +96,7 @@
         "beforeLooksSecret": { "const": true },
         "afterLooksSecret": { "const": true },
         "afterMatches": { "type": "string" },
+        "afterAnyMatches": { "type": "string" },
         "numericJump": { "$ref": "#/$defs/numericJump" },
         "numericDelta": { "$ref": "#/$defs/numericDelta" }
       }

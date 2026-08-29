@@ -1,0 +1,16 @@
+{
+  "state": {
+    "name": "Build",
+    "on": { "push": null },
+    "jobs": {
+      "build": {
+        "runs-on": "ubuntu-latest",
+        "steps": [{ "run": "npm run build" }]
+      },
+      "lint": {
+        "runs-on": "ubuntu-latest",
+        "steps": [{ "run": "npm run lint" }]
+      }
+    }
+  }
+}

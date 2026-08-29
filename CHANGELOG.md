@@ -9,6 +9,20 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ### Added
 
+- `afterAnyMatches`, a policy matcher that applies a regular expression to the
+  elements of an array value. `afterMatches` requires a string, so the edit that
+  widens a scalar into a list — `runs-on: ubuntu-latest` →
+  `runs-on: [self-hosted, linux]` — was invisible to every value predicate: the
+  differ reports it as one `changed` event whose `after` is an array and does not
+  descend into a type change, so no per-element leaf exists to match either. The
+  scan is flat and array-only: a non-array value never matches, non-string
+  elements are skipped, and it does not recurse into nested arrays or objects, so
+  what a rule matches stays readable from the rule text. `afterMatches` keeps its
+  exact meaning, so no existing pack changes behavior. The `github-actions` pack's
+  `github-actions-self-hosted-runner` rule now pairs the two in an `anyOf` and
+  covers the fourth `runs-on` shape it previously documented as a limitation.
+  ([#159])
+
 - **Merge request comments on GitLab and Bitbucket.** The sticky review comment
   was GitHub-only: `src/pr-comment.js` and both composite actions spoke
   `GITHUB_TOKEN`, `GITHUB_EVENT_PATH`, and the issue-comments API directly, so
@@ -26,6 +40,7 @@ The format is based on [Keep a Changelog], and this project adheres to
   attempt it, because the resulting 401 reads like a broken setup rather than a
   missing permission; it names `FLECTO_GITLAB_TOKEN` and the `api` scope
   instead. See [CI](docs/ci.md#providers). ([#138])
+
 - Inline suppressions: `# flecto-ignore-next-line <rule> — <reason>` on the line
   above a deliberate finding accepts that one finding in place, the companion to
   the baseline's bulk acceptance. **A reason is mandatory** — a directive without
@@ -863,6 +878,7 @@ fixed — those runs were never actually gated — but the failure is new.
 [#155]: https://github.com/myselfsiddharth/Flecto/issues/155
 [#139]: https://github.com/myselfsiddharth/Flecto/issues/139
 [#137]: https://github.com/myselfsiddharth/Flecto/issues/137
+[#159]: https://github.com/myselfsiddharth/Flecto/issues/159
 [Keep a Changelog]: https://keepachangelog.com/en/1.1.0/
 [#138]: https://github.com/myselfsiddharth/Flecto/issues/138
 [Semantic Versioning]: https://semver.org/spec/v2.0.0.html

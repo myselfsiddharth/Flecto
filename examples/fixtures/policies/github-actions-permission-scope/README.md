@@ -7,4 +7,5 @@
   diffed element by element, so `self-hosted` arrives as its own leaf at
   `jobs.publish.runs-on[0]`; `linux` at `[1]` matches nothing.
 
-See `docs/policy-packs.md` for the one `runs-on` shape this rule still misses.
+The fourth `runs-on` shape — a scalar widened to a list in one edit — lives in
+`../github-actions-runs-on-widened/`.

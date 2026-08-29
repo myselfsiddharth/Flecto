@@ -61,7 +61,10 @@
       "severity": "error",
       "when": ["added", "changed"],
       "match": { "path": "^jobs\\.[^.]+\\.runs-on(?:\\.labels)?(?:\\[[0-9]+\\])?$" },
-      "afterMatches": "(^|[ ,])self-hosted([ ,]|$)",
+      "anyOf": [
+        { "afterMatches": "(^|[ ,])self-hosted([ ,]|$)" },
+        { "afterAnyMatches": "(^|[ ,])self-hosted([ ,]|$)" }
+      ],
       "message": "A self-hosted runner is reachable from this workflow. Confirm that fork-controlled changes cannot execute on a runner with persistent credentials."
     },
     {
