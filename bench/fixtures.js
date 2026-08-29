@@ -24,7 +24,7 @@ const DEEP_EVERY = 10;
 const DEEP_OFFSET = 3;
 const DEEP_DEPTH = 15;
 /** Every 10th file is mutated between the baseline snapshot and the diff run. */
-const MUTATE_EVERY = 10;
+export const MUTATE_EVERY = 10;
 
 /**
  * @typedef {{
@@ -33,20 +33,23 @@ const MUTATE_EVERY = 10;
  *   format: 'yaml' | 'json' | 'toml' | 'ini' | 'env',
  *   deep: boolean,
  *   bigArray: boolean,
- *   mutated: boolean
+ *   mutated: boolean,
+ *   bytes?: number
  * }} FixtureFile
  */
 
 /**
  * Describe the files a repo of a given size contains, without writing anything.
  * @param {number} fileCount
+ * @param {number} [mutateEvery] every Nth file is mutated; defaults to {@link MUTATE_EVERY}
+ * @param {boolean} [bigArrays] include the 5,000-item array files
  * @returns {FixtureFile[]}
  */
-function planFiles(fileCount) {
+function planFiles(fileCount, mutateEvery = MUTATE_EVERY, bigArrays = true) {
   /** @type {FixtureFile[]} */
   const files = [];
   for (let i = 0; i < fileCount; i++) {
-    const bigArray = i % BIG_ARRAY_EVERY === 0;
+    const bigArray = bigArrays && i % BIG_ARRAY_EVERY === 0;
     // Large arrays are always JSON: a 5k-entry YAML dump would make fixture
     // generation, not Flecto, the thing being measured.
     const format = bigArray ? 'json' : FORMATS[i % FORMATS.length];
@@ -58,7 +61,7 @@ function planFiles(fileCount) {
       format,
       deep: i % DEEP_EVERY === DEEP_OFFSET,
       bigArray,
-      mutated: i % MUTATE_EVERY === 0,
+      mutated: i % mutateEvery === 0,
     });
   }
   return files;
@@ -249,12 +252,18 @@ function render(file, tree) {
 /**
  * Write (or rewrite) a synthetic repo. Called once for the baseline state and
  * again with `mutate: true` to produce the "after" state the diff runs against.
- * @param {{ dir: string, fileCount: number, mutate?: boolean }} options
- * @returns {{ files: FixtureFile[], bytes: number }}
+ * `mutateEvery` controls how much of the repo a single change touches, which is
+ * what the context-savings section varies: the ratio a semantic diff achieves
+ * depends entirely on how much of the corpus actually changed.
+ * `bigArrays: false` drops the 5,000-item array files. They exist to stress the
+ * differ, and at any scale they are the overwhelming majority of the corpus by
+ * byte count — which makes them actively misleading in a size comparison.
+ * @param {{ dir: string, fileCount: number, mutate?: boolean, mutateEvery?: number, bigArrays?: boolean }} options
+ * @returns {{ files: FixtureFile[], bytes: number, changedBytes: number }}
  */
 export function writeRepo(options) {
-  const { dir, fileCount, mutate = false } = options;
-  const files = planFiles(fileCount);
+  const { dir, fileCount, mutate = false, mutateEvery = MUTATE_EVERY, bigArrays = true } = options;
+  const files = planFiles(fileCount, mutateEvery, bigArrays);
   let bytes = 0;
 
   mkdirSync(dir, { recursive: true });
@@ -281,11 +290,13 @@ export function writeRepo(options) {
       madeDirs.add(parent);
     }
     const text = render(file, serviceTree(file, mutate));
-    bytes += Buffer.byteLength(text);
+    file.bytes = Buffer.byteLength(text);
+    bytes += file.bytes;
     writeFileSync(abs, text, 'utf8');
   }
 
-  return { files, bytes };
+  const changedBytes = files.reduce((sum, file) => (file.mutated ? sum + (file.bytes ?? 0) : sum), 0);
+  return { files, bytes, changedBytes };
 }
 
 /**
