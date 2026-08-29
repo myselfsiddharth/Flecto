@@ -18,9 +18,10 @@ The format is based on [Keep a Changelog], and this project adheres to
   `npm run coverage` runs the suite under `node --test
   --experimental-test-coverage` — a flag, not a dependency — and prints a report
   for `config.js` (plugin resolution), `policy.js` (pack loading), `secrets.js`,
-  `encrypted.js`, and `pr-comment.js` (token handling), worst branch coverage
-  first, with the count of branches that never executed. Reporting those five
-  separately is the point: one repo-wide average is the number that hides them.
+  `encrypted.js`, `pr-comment.js`, and `pr-providers.js` (token handling), worst
+  branch coverage first, with the count of branches that never executed.
+  Reporting those separately is the point: one repo-wide average is the number
+  that hides them.
 
   **No threshold gates the job.** A number chosen before anyone has read the
   report is arbitrary, and the usual outcome is tests written to satisfy the gate
@@ -32,6 +33,38 @@ The format is based on [Keep a Changelog], and this project adheres to
   No linter. The style argument is the weak one, the project is consistent
   without it, and a rule set worth having is a separate decision from this one.
   See [security review](docs/security-review.md#knowing-what-has-been-exercised).
+
+- `afterAnyMatches`, a policy matcher that applies a regular expression to the
+  elements of an array value. `afterMatches` requires a string, so the edit that
+  widens a scalar into a list — `runs-on: ubuntu-latest` →
+  `runs-on: [self-hosted, linux]` — was invisible to every value predicate: the
+  differ reports it as one `changed` event whose `after` is an array and does not
+  descend into a type change, so no per-element leaf exists to match either. The
+  scan is flat and array-only: a non-array value never matches, non-string
+  elements are skipped, and it does not recurse into nested arrays or objects, so
+  what a rule matches stays readable from the rule text. `afterMatches` keeps its
+  exact meaning, so no existing pack changes behavior. The `github-actions` pack's
+  `github-actions-self-hosted-runner` rule now pairs the two in an `anyOf` and
+  covers the fourth `runs-on` shape it previously documented as a limitation.
+  ([#159])
+
+- **Merge request comments on GitLab and Bitbucket.** The sticky review comment
+  was GitHub-only: `src/pr-comment.js` and both composite actions spoke
+  `GITHUB_TOKEN`, `GITHUB_EVENT_PATH`, and the issue-comments API directly, so
+  the flagship review experience was unavailable to every team not on GitHub.
+
+  Delivery is now an adapter (`src/pr-providers.js`); everything upstream of it —
+  the differ, the policy engine, the envelope, and the rendered markdown body —
+  was already provider-agnostic. The host is detected from CI variables and
+  `--pr-provider github|gitlab|bitbucket` forces one. All three upsert a single
+  sticky comment by marker, skip the write when the body is unchanged, redact
+  the token from error text, and leave the exit code to the diff and policy
+  result.
+
+  **GitLab's `CI_JOB_TOKEN` cannot post merge request notes.** Flecto does not
+  attempt it, because the resulting 401 reads like a broken setup rather than a
+  missing permission; it names `FLECTO_GITLAB_TOKEN` and the `api` scope
+  instead. See [CI](docs/ci.md#providers). ([#138])
 
 - Inline suppressions: `# flecto-ignore-next-line <rule> — <reason>` on the line
   above a deliberate finding accepts that one finding in place, the companion to
@@ -156,8 +189,22 @@ The format is based on [Keep a Changelog], and this project adheres to
   and four fixtures pin the boundary — including one asserting **zero** findings
   for changes that only look risky.
 
-### Changed
+- **Context-savings measurement in the benchmark harness.** Section 5 of
+  `npm run bench` reports the size of the semantic diff against the size of the
+  config it describes, in bytes, at three mutation rates plus a single-file
+  crossover table. Published in [performance](docs/performance.md#context-savings).
 
+  The result is more qualified than the claim it was written to check. A sparse
+  change in a large file is 50x to 1270x cheaper to read as a diff than as the
+  file, and the advantage compounds because a change event plus its envelope
+  costs a fixed ~600 bytes while the file grows. But a *dense* change is not
+  cheaper at all — at roughly a quarter of a file's keys the payload runs about
+  3x the size of the files it covers — and `ci --format json` currently emits an
+  envelope for every **scanned** file rather than every changed one, so with one
+  file changed out of 250 roughly 98% of the output is boilerplate for files that
+  did not change. ([#137])
+
+### Changed
 - The 3.0 integrations were verified against the real tools they integrate with,
   not only fixtures ([#122]). The HTML report was opened in a real browser — both
   themes render with no JS errors, and the filter, expand/collapse, and
@@ -855,7 +902,10 @@ fixed — those runs were never actually gated — but the failure is new.
 [#151]: https://github.com/myselfsiddharth/Flecto/issues/151
 [#155]: https://github.com/myselfsiddharth/Flecto/issues/155
 [#139]: https://github.com/myselfsiddharth/Flecto/issues/139
+[#137]: https://github.com/myselfsiddharth/Flecto/issues/137
 [#149]: https://github.com/myselfsiddharth/Flecto/issues/149
+[#159]: https://github.com/myselfsiddharth/Flecto/issues/159
 [Keep a Changelog]: https://keepachangelog.com/en/1.1.0/
+[#138]: https://github.com/myselfsiddharth/Flecto/issues/138
 [Semantic Versioning]: https://semver.org/spec/v2.0.0.html
 [GHSA-wq8m-fc3q-8m5x]: https://github.com/myselfsiddharth/Flecto/security/advisories/GHSA-wq8m-fc3q-8m5x

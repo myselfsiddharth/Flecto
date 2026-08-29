@@ -355,6 +355,71 @@ native I/O), then parser choice — not a differ rewrite.
 
 ---
 
+## Context savings
+
+Flecto is often described as a cheaper way to find out what changed than reading
+the config itself — relevant when the reader is paying by the byte, as an agent
+reading into a context window does. Section 5 of the harness measures that claim
+instead of asserting it. The measurement is in bytes, which are exact; tokenizers
+disagree with each other and would date the number.
+
+### One key changed, in a file that grows
+
+This is the shape the claim is actually about.
+
+| keys in file | file | one-file `ci` payload | payload vs file |
+| --- | --- | --- | --- |
+| 10 | 1.4 KB | 0.6 KB | 2.4x |
+| 50 | 7.0 KB | 0.6 KB | 12.4x |
+| 200 | 28.3 KB | 0.6 KB | 49.9x |
+| 1000 | 142.4 KB | 0.6 KB | 250.9x |
+| 5000 | 720.5 KB | 0.6 KB | 1269.8x |
+
+A change event plus its envelope costs a fixed ~600 bytes. The payload does not
+grow with the file, so the advantage compounds: past a kilobyte or so of config,
+reading the diff is dramatically cheaper, and by a 1,000-key file it is two
+orders of magnitude cheaper.
+
+**The floor is real.** Below ~600 bytes of config there is nothing to save, and
+a tiny file plus a tiny change is cheaper to read whole.
+
+### Across a repo, at three mutation rates
+
+250 synthetic service configs, `--format json`:
+
+| change | files | changes | corpus | changed files | `ci` output | payload only | payload vs changed |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| one file changed | 1 | 10 | 227.8 KB | 0.9 KB | 156.5 KB | 3.4 KB | 0.3x |
+| every 10th file changed | 25 | 250 | 229.4 KB | 22.9 KB | 223.3 KB | 85.0 KB | 0.3x |
+| every file changed | 250 | 2400 | 242.5 KB | 242.5 KB | 810.9 KB | 810.9 KB | 0.3x |
+
+Two things this says, both worth stating plainly.
+
+**A dense change is not cheaper as a diff.** These fixture files are ~900 bytes
+and each mutated one takes ten edits — roughly a quarter of its keys. At that
+density a change event costs more bytes than the value it describes, and the
+payload runs about 3x the size of the files it covers. The advantage in the
+first table comes from *sparsity*, not from the diff format.
+
+**`ci --format json` emits an envelope per scanned file, changed or not.** Each
+carries a schema version, two UUIDs, a timestamp, and an absolute path. With one
+file changed out of 250, the output is 156 KB of which 3.4 KB is semantic
+content: the boilerplate is ~98% of the payload, and it scales with repo size
+rather than with the size of the change. Anything quoting a context-savings
+number from `ci` output today is mostly measuring envelope overhead.
+
+### What this means for the claim
+
+The claim holds, with its conditions attached: **a sparse change in a large file
+is one to three orders of magnitude cheaper to read as a semantic diff than as
+the file.** It does not hold for dense changes, it does not hold for small files,
+and it is currently obscured in `ci --format json` by per-file envelopes for
+files that did not change.
+
+The corpus here excludes the 5,000-item array fixtures used by the timing
+sections. They are a differ stress test and would be ~90% of the corpus by byte
+count, which would flatter the ratio without describing any real repository.
+
 ## What this benchmark does not tell you
 
 Being explicit about the limits of a synthetic harness:

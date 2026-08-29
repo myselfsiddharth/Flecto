@@ -91,7 +91,7 @@ npm run coverage
 ```
 
 That runs the suite under `node --test --experimental-test-coverage` and prints a
-focused report — the five modules where an untested branch is a security question
+focused report — the modules where an untested branch is a security question
 rather than a style one, worst branch coverage first, with the count of branches
 that never ran:
 

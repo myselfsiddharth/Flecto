@@ -379,6 +379,67 @@ describe('policy engine', () => {
     assert.equal(findings.length, 1);
   });
 
+  test('afterAnyMatches applies a regex to the elements of a list value', async () => {
+    // The scalar-to-list edit: one `changed` event whose `after` is an array,
+    // which every scalar predicate -- afterMatches included -- is blind to.
+    const findings = await evaluateCustomPack([{
+      id: 'list-label',
+      severity: 'warn',
+      afterAnyMatches: '(^|[ ,])self-hosted([ ,]|$)',
+    }], [
+      { type: 'changed', path: 'a.runs-on', before: 'ubuntu-latest', after: ['self-hosted', 'linux'] },
+      { type: 'changed', path: 'b.runs-on', before: 'ubuntu-latest', after: ['ubuntu-latest', 'x64'] },
+    ]);
+    assert.deepEqual(findings.map((finding) => finding.path), ['a.runs-on']);
+  });
+
+  test('afterAnyMatches is a flat scan of array values only', async () => {
+    // Scoped narrowly on purpose: a non-array value never matches (that is what
+    // afterMatches is for), non-string elements are skipped rather than
+    // stringified, and the scan does not descend into a nested array or object,
+    // so what a rule matches stays readable from the rule text.
+    const findings = await evaluateCustomPack([{
+      id: 'flat-only',
+      severity: 'warn',
+      afterAnyMatches: 'self-hosted',
+    }], [
+      { type: 'changed', path: 'scalar', before: 'x', after: 'self-hosted' },
+      { type: 'changed', path: 'nested.array', before: 'x', after: [['self-hosted']] },
+      { type: 'changed', path: 'nested.object', before: 'x', after: [{ label: 'self-hosted' }] },
+      { type: 'changed', path: 'numeric', before: 'x', after: [1, 2] },
+      { type: 'changed', path: 'flat', before: 'x', after: ['self-hosted'] },
+    ]);
+    assert.deepEqual(findings.map((finding) => finding.path), ['flat']);
+  });
+
+  test('afterMatches keeps its exact scalar meaning alongside afterAnyMatches', async () => {
+    // Existing packs must not start matching lists because the list predicate
+    // was added, so the two are asserted against the same pair of events.
+    const findings = await evaluateCustomPack([
+      { id: 'scalar-only', severity: 'info', afterMatches: 'self-hosted' },
+      { id: 'list-only', severity: 'info', afterAnyMatches: 'self-hosted' },
+    ], [
+      { type: 'changed', path: 'runs-on', before: 'x', after: 'self-hosted' },
+      { type: 'changed', path: 'runs-on', before: 'x', after: ['self-hosted'] },
+    ]);
+    assert.deepEqual(findings.map((finding) => finding.id), ['scalar-only', 'list-only']);
+  });
+
+  test('rejects an afterAnyMatches that is not a valid regular expression', () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'flecto-policy-'));
+    try {
+      const policiesDir = join(cwd, 'policies');
+      mkdirSync(policiesDir);
+      writeFileSync(join(policiesDir, 'invalid.json'), JSON.stringify({
+        id: 'invalid',
+        rules: [{ id: 'bad-rule', severity: 'warn', afterAnyMatches: '([' }],
+      }));
+      assert.throws(() => loadPack('invalid', cwd), /afterAnyMatches is not a valid regular expression/);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
   test('matches symmetric truthiness predicates', async () => {
     const findings = await evaluateCustomPack([
       { id: 'was-configured', severity: 'info', beforeTruthy: true },

@@ -90,6 +90,8 @@ Each rule produces one finding for every change that satisfies all specified con
 | `match.path` | Optional JavaScript regular expression matched against the semantic change path. |
 | `match.pathFlags` | Optional JavaScript regular-expression flags, such as `i`. |
 | `afterEquals` | Optional exact post-change value matcher. |
+| `afterMatches` | Optional JavaScript regular expression matched against a **string** post-change value. |
+| `afterAnyMatches` | The same expression applied to the elements of an **array** post-change value; matches when any string element matches. |
 | `beforeLooksSecret` / `afterLooksSecret` | `true` when the value — or any string nested inside it — looks like a credential. |
 | `numericJump.minMultiple` | Optional numeric increase threshold. |
 | `message` | Static finding text. |
@@ -102,6 +104,45 @@ Paths use dot notation and array indices, for example `database.pool_size` and `
 ```
 
 `numericJump` matches only when both values are JavaScript numbers, the previous value is greater than zero, and `after >= before * minMultiple`.
+
+### Matching a value that became a list
+
+`afterMatches` requires a string, so it sees nothing when a scalar and a list are
+swapped in one edit. That edit is a single `changed` event whose `after` is an
+array — the differ reports a type change and does not descend into it, so there
+is no per-element leaf to match either:
+
+```
+~ jobs.build.runs-on: ubuntu-latest → [self-hosted, linux]
+```
+
+`afterAnyMatches` covers it, and the two compose in an `anyOf` so one rule reads
+both shapes:
+
+```json
+{
+  "id": "self-hosted-runner",
+  "severity": "error",
+  "match": { "path": "^jobs\\.[^.]+\\.runs-on$" },
+  "anyOf": [
+    { "afterMatches": "(^|[ ,])self-hosted([ ,]|$)" },
+    { "afterAnyMatches": "(^|[ ,])self-hosted([ ,]|$)" }
+  ]
+}
+```
+
+The scan is deliberately flat and array-only:
+
+- A **non-array** value never matches. `afterMatches` keeps its exact meaning, so
+  adding `afterAnyMatches` to a pack cannot change what its existing rules match.
+- Only **string** elements are tested; a number or `null` element is skipped
+  rather than stringified.
+- It does **not** recurse into a nested array or object element. A rule that
+  matched at arbitrary depth could not be understood from its own text, which is
+  the property that makes a rule reviewable.
+
+It applies to any list a pack reasons about — allowed registries, CIDR ranges,
+capability lists — not only to `runs-on`.
 
 ## Secret-shaped values
 
@@ -197,7 +238,7 @@ The pack is **changed-file oriented**. It reports what this pull request changed
 not what the workflow already contained; scanning a workflow for pre-existing
 problems is a linter's job, and `actionlint` and `zizmor` do it well.
 
-Three limits are worth stating outright, because each is a case where a reader
+Two limits are worth stating outright, because each is a case where a reader
 could reasonably expect a finding and not get one:
 
 - **Severity cannot depend on the trigger.** Widening `permissions` on a
@@ -206,12 +247,6 @@ could reasonably expect a finding and not get one:
   consult the rest of the document, so each severity here is chosen for the
   worst plausible context. That is a rule-engine limitation, recorded rather
   than encoded as a flat severity that trains people to ignore the finding.
-- **`runs-on` changing from a string to a list is not reported.** `runs-on:
-  ubuntu-latest` → `runs-on: [self-hosted, linux]` produces a single `changed`
-  event whose value is an array, and no matcher inspects array contents. Every
-  other shape *is* covered: a plain string, a list on an added job, an element
-  changed within an existing list (`jobs.x.runs-on[0]`), and the runner-group
-  form (`jobs.x.runs-on.labels[0]`).
 - **A trigger added together with its sub-keys reports once, at the trigger.**
   The trigger rules use `pathEquals`, so adding `workflow_call:` with an
   `inputs:` block yields one finding rather than one per input.
@@ -220,11 +255,12 @@ The pack sets `expandSubtrees`, so a step, `with:` block, or whole job that
 arrives at once is still inspected at its leaf paths — otherwise the newest code
 in a workflow would be the code no rule could see.
 
-Four fixtures record the boundary, and they are the specification:
+Five fixtures record the boundary, and they are the specification:
 `examples/fixtures/policies/github-actions/` (triggering changes),
-`github-actions-permissions-removed/`, `github-actions-permission-scope/`, and
-`github-actions-benign/`, which asserts **zero** findings for changes that only
-look risky.
+`github-actions-permissions-removed/`, `github-actions-permission-scope/`,
+`github-actions-runs-on-widened/` (a `runs-on` scalar widened to a list, with a
+benign widening beside it), and `github-actions-benign/`, which asserts **zero**
+findings for changes that only look risky.
 
 ## Exact values, truthiness, and coercion
 

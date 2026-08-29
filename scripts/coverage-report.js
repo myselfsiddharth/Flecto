@@ -20,6 +20,7 @@
  */
 
 import { readFileSync } from 'node:fs';
+import { isAbsolute, relative } from 'node:path';
 
 /**
  * The modules whose untested branches are a security question. Each is here for
@@ -31,7 +32,8 @@ const SECURITY_RELEVANT = [
   ['src/policy.js', 'policy pack loading, including packs resolved from node_modules'],
   ['src/secrets.js', 'secret detection; a miss here leaks, a false hit trains people to ignore it'],
   ['src/encrypted.js', 'encrypted files, which must be read for structure and never decrypted'],
-  ['src/pr-comment.js', 'GitHub token handling and comment output'],
+  ['src/pr-comment.js', 'sticky-comment rendering and GitHub comment output'],
+  ['src/pr-providers.js', 'provider tokens (GitHub, GitLab, Bitbucket) and redaction of them from errors'],
 ];
 
 const LCOV_PATH = process.argv[2] ?? 'coverage.lcov';
@@ -46,6 +48,21 @@ const NAME_WIDTH = 26;
  *   functions: { found: number, hit: number }
  * }} FileCoverage
  */
+
+/**
+ * Node's lcov reporter may emit cwd-relative or absolute paths. The focused list
+ * is repo-relative (`src/config.js`), so an absolute `SF:` would otherwise fail
+ * the "module missing from the report" check on CI.
+ * @param {string} file
+ * @returns {string}
+ */
+function repoRelative(file) {
+  const normalized = file.replace(/\\/g, '/');
+  if (!isAbsolute(file) && !/^[A-Za-z]:[\\/]/.test(file)) {
+    return normalized.replace(/^\.\//, '');
+  }
+  return relative(process.cwd(), file).replace(/\\/g, '/');
+}
 
 /**
  * Parse the subset of lcov the Node reporter emits. Only the summary counters
@@ -67,8 +84,10 @@ function parseLcov(raw) {
     const value = line.slice(separator + 1);
 
     if (tag === 'SF') {
-      // Normalize separators so a report generated on Windows reads the same.
-      const file = value.trim().replace(/\\/g, '/');
+      // Normalize separators so a report generated on Windows reads the same,
+      // and strip an absolute prefix so `SF:/runner/work/Flecto/src/config.js`
+      // still matches the repo-relative focused list.
+      const file = repoRelative(value.trim());
       current = {
         file,
         lines: { found: 0, hit: 0 },

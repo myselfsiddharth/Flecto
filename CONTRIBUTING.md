@@ -34,7 +34,7 @@ Node.js **20.19.0+** is required.
 `npm run coverage` runs the suite with Node's built-in coverage and prints a
 focused report for the modules where an untested branch is a security question —
 plugin resolution, pack loading, secret detection, encrypted files, and token
-handling. CI runs it on every pull request and prints it in the job log.
+handling (including GitLab/Bitbucket). CI runs it on every pull request and prints it in the job log.
 
 **No threshold gates it**, deliberately. Use it to decide where a test is worth
 writing, not as a number to move. How to read it, and how to change which modules

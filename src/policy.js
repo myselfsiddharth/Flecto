@@ -29,6 +29,7 @@ import { containsSecret } from './secrets.js';
  *   beforeLooksSecret?: true,
  *   afterLooksSecret?: true,
  *   afterMatches?: string,
+ *   afterAnyMatches?: string,
  *   numericJump?: { minMultiple: number },
  *   numericDelta?: { min: number },
  *   allOf?: PolicyMatchClause[],
@@ -48,6 +49,7 @@ import { containsSecret } from './secrets.js';
  *   beforeLooksSecret?: true,
  *   afterLooksSecret?: true,
  *   afterMatches?: string,
+ *   afterAnyMatches?: string,
  *   numericJump?: { minMultiple: number },
  *   numericDelta?: { min: number }
  * }} PolicyMatchClause
@@ -86,12 +88,12 @@ const RULE_FIELDS = new Set([
   'id', 'severity', 'when', 'match', 'beforeEquals', 'afterEquals',
   'beforeIn', 'afterIn', 'beforeTruthy', 'afterTruthy', 'numericJump',
   'beforeLooksSecret', 'afterLooksSecret',
-  'afterMatches', 'numericDelta', 'allOf', 'anyOf', 'message', 'messageTemplate',
+  'afterMatches', 'afterAnyMatches', 'numericDelta', 'allOf', 'anyOf', 'message', 'messageTemplate',
 ]);
 const CLAUSE_FIELDS = new Set([
   'match', 'beforeEquals', 'afterEquals', 'beforeIn', 'afterIn',
   'beforeTruthy', 'afterTruthy', 'beforeLooksSecret', 'afterLooksSecret',
-  'afterMatches', 'numericJump', 'numericDelta',
+  'afterMatches', 'afterAnyMatches', 'numericJump', 'numericDelta',
 ]);
 const MATCH_FIELDS = new Set(['path', 'pathFlags', 'pathEquals', 'pathPrefix']);
 // Community distribution convention: an npm package named flecto-pack-<id>
@@ -258,6 +260,7 @@ function validateRule(candidate, location, isClause = false) {
   validateTruthyPredicate(rule.beforeLooksSecret, 'beforeLooksSecret', location);
   validateTruthyPredicate(rule.afterLooksSecret, 'afterLooksSecret', location);
   validateRegexPredicate(rule.afterMatches, 'afterMatches', location);
+  validateRegexPredicate(rule.afterAnyMatches, 'afterAnyMatches', location);
   validateNumericPredicate(rule.numericJump, 'numericJump', 'minMultiple', location, true);
   validateNumericPredicate(rule.numericDelta, 'numericDelta', 'min', location, false);
   for (const name of ['message', 'messageTemplate']) {
@@ -731,15 +734,16 @@ export function addPolicyPackFromPackage(name, options = {}) {
 }
 
 /**
- * Compile each rule's `match.path` and `afterMatches` regular expressions
- * once, at pack-load time, storing them as non-enumerable properties on the
- * loaded rule/clause objects. matchClause() runs per change event — for a
- * rule with a path match, once per event per rule — so compiling here instead
- * of inside that loop turns a `new RegExp(...)` call into a property read.
+ * Compile each rule's `match.path`, `afterMatches`, and `afterAnyMatches`
+ * regular expressions once, at pack-load time, storing them as non-enumerable
+ * properties on the loaded rule/clause objects. matchClause() runs per change
+ * event — for a rule with a path match, once per event per rule — so compiling
+ * here instead of inside that loop turns a `new RegExp(...)` call into a
+ * property read.
  *
- * validatePack() has already proven, by this point, that every `match.path`
- * and `afterMatches` string constructs a valid RegExp, so construction here
- * cannot throw a new error the caller hasn't already seen.
+ * validatePack() has already proven, by this point, that every `match.path`,
+ * `afterMatches`, and `afterAnyMatches` string constructs a valid RegExp, so
+ * construction here cannot throw a new error the caller hasn't already seen.
  * @param {PolicyPack} pack
  */
 function compilePackRegexes(pack) {
@@ -764,6 +768,12 @@ function compileClauseRegexes(clause) {
       enumerable: false,
     });
   }
+  if (clause.afterAnyMatches !== undefined) {
+    Object.defineProperty(clause, '_afterAnyMatchesRegex', {
+      value: new RegExp(clause.afterAnyMatches),
+      enumerable: false,
+    });
+  }
 }
 
 /**
@@ -783,6 +793,29 @@ function pathRegexFor(match) {
  */
 function afterMatchesRegexFor(clause) {
   return clause._afterMatchesRegex ?? new RegExp(clause.afterMatches);
+}
+
+/**
+ * @param {{ afterAnyMatches?: string, _afterAnyMatchesRegex?: RegExp }} clause
+ * @returns {RegExp}
+ */
+function afterAnyMatchesRegexFor(clause) {
+  return clause._afterAnyMatchesRegex ?? new RegExp(clause.afterAnyMatches);
+}
+
+/**
+ * True when `value` is an array carrying at least one string element that
+ * matches. Deliberately a flat scan: it does not descend into nested arrays or
+ * objects, because a rule's text should say what it matches without the reader
+ * having to reason about how deep the walk goes. Non-array values never match,
+ * which is what keeps `afterMatches` and this predicate from overlapping.
+ * @param {unknown} value
+ * @param {RegExp} regex
+ * @returns {boolean}
+ */
+function anyElementMatches(value, regex) {
+  return Array.isArray(value)
+    && value.some((element) => typeof element === 'string' && regex.test(element));
 }
 
 /**
@@ -822,6 +855,10 @@ function matchClause(clause, change) {
   if (clause.beforeLooksSecret && !containsSecret(change.before)) return false;
   if (clause.afterLooksSecret && !containsSecret(change.after)) return false;
   if (clause.afterMatches && (typeof change.after !== 'string' || !afterMatchesRegexFor(clause).test(change.after))) return false;
+  // The list counterpart, for the change that turns a scalar into a list in
+  // one edit -- reported as a single `changed` event whose `after` is an array,
+  // which no scalar predicate can see into.
+  if (clause.afterAnyMatches && !anyElementMatches(change.after, afterAnyMatchesRegexFor(clause))) return false;
 
   if (clause.numericJump) {
     const before = change.before;
