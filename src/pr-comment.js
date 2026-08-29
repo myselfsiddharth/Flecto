@@ -1,6 +1,8 @@
 import { readFileSync } from 'fs';
 import { isAbsolute, relative } from 'path';
 
+import { PR_PROVIDERS, selectPrProvider } from './pr-providers.js';
+
 /**
  * Hidden marker embedded in every rendered body. Flecto finds its own comment by
  * searching for this string, so repeated runs update one sticky comment instead
@@ -8,21 +10,23 @@ import { isAbsolute, relative } from 'path';
  */
 export const PR_COMMENT_MARKER = '<!-- flecto:pr-comment -->';
 
-const DEFAULT_API_URL = 'https://api.github.com';
 const DEFAULT_TIMEOUT_MS = 10_000;
 /** GitHub rejects comment bodies longer than 65536 characters. */
 const MAX_BODY_CHARS = 60_000;
 const MAX_INLINE_CHANGES = 10;
 const MAX_VALUE_CHARS = 120;
 const MAX_COMMENT_PAGES = 10;
-const COMMENTS_PER_PAGE = 100;
 const SEVERITY_ORDER = ['error', 'warn', 'info'];
 const SEVERITY_HEADINGS = { error: 'Errors', warn: 'Warnings', info: 'Notices' };
 const SEVERITY_NOUNS = { error: 'error', warn: 'warning', info: 'notice' };
 
 /**
  * @typedef {{ file: string, envelope: import('./envelope.js').FlectoEnvelope, policies?: import('./policy.js').PolicyFinding[] }} CiResult
- * @typedef {{ repo: string, prNumber: number, token: string, apiUrl: string }} PrCommentContext
+ * @typedef {{ provider?: string, prNumber: number, token: string, apiUrl: string,
+ *   repo?: string, projectId?: string, webUrl?: string, workspace?: string, repoSlug?: string
+ * }} PrCommentContext The fields a delivery adapter resolved; which ones are
+ *   present depends on the provider. A context built by hand carries no
+ *   `provider` and is treated as GitHub.
  */
 
 /**
@@ -233,70 +237,30 @@ export function renderPrComment(results, options = {}) {
 }
 
 /**
- * @param {Record<string, string | undefined>} env
- * @param {(path: string) => string} readEventFile
- * @returns {number | null}
- */
-function resolvePrNumber(env, readEventFile) {
-  const fromRef = /^refs\/pull\/(\d+)\/(?:merge|head)$/u.exec(env.GITHUB_REF ?? '');
-  if (fromRef) return Number(fromRef[1]);
-
-  const eventPath = env.GITHUB_EVENT_PATH;
-  if (!eventPath) return null;
-
-  let event;
-  try {
-    event = JSON.parse(readEventFile(eventPath));
-  } catch {
-    return null;
-  }
-
-  const candidates = [
-    event?.pull_request?.number,
-    // issue_comment events on a PR carry the PR number under `issue`, but a
-    // plain issue must not be mistaken for one.
-    event?.issue?.pull_request ? event?.issue?.number : undefined,
-    event?.number,
-  ];
-  for (const candidate of candidates) {
-    const value = Number(candidate);
-    if (Number.isInteger(value) && value > 0) return value;
-  }
-  return null;
-}
-
-/**
- * Resolve the GitHub API context needed to post a pull request comment.
+ * Resolve the API context needed to post a merge request comment.
  *
- * Only `GITHUB_TOKEN` is honored — `GH_TOKEN` is deliberately ignored because
- * `gh auth login` exports it on developer machines, where posting would be a
- * surprise.
+ * The provider is detected from CI environment variables, or forced with
+ * `provider`. GitHub is the fallback, so an unrecognized environment reports
+ * the message it always did rather than a new one about detection.
  * @param {Record<string, string | undefined>} [env]
- * @param {{ readEventFile?: (path: string) => string }} [options]
+ * @param {{ readEventFile?: (path: string) => string, provider?: string }} [options]
  * @returns {{ ok: true, context: PrCommentContext } | { ok: false, reason: string }}
  */
 export function resolvePrCommentContext(env = process.env, options = {}) {
   const readEventFile = options.readEventFile ?? ((path) => readFileSync(path, 'utf8'));
-  const token = String(env.GITHUB_TOKEN ?? '').trim();
-  if (!token) {
-    return { ok: false, reason: 'GITHUB_TOKEN is not set' };
-  }
+  const selected = selectPrProvider(env, options.provider);
+  if (!selected.ok) return selected;
+  return selected.provider.resolve(env, { readEventFile });
+}
 
-  const repo = String(env.GITHUB_REPOSITORY ?? '').trim();
-  if (!/^[^/\s]+\/[^/\s]+$/u.test(repo)) {
-    return { ok: false, reason: 'GITHUB_REPOSITORY is not set to "owner/repo"' };
-  }
-
-  const prNumber = resolvePrNumber(env, readEventFile);
-  if (!prNumber) {
-    return {
-      ok: false,
-      reason: 'no pull request number in GITHUB_REF or GITHUB_EVENT_PATH (not a pull request run)',
-    };
-  }
-
-  const apiUrl = String(env.GITHUB_API_URL || DEFAULT_API_URL).replace(/\/+$/u, '');
-  return { ok: true, context: { repo, prNumber, token, apiUrl } };
+/**
+ * The adapter a resolved context belongs to. Contexts built by hand — as tests
+ * and embedders do — carry no provider and are GitHub, which is what they were
+ * before there was a choice.
+ * @param {{ provider?: string }} context
+ */
+function providerFor(context) {
+  return PR_PROVIDERS.find((p) => p.id === context?.provider) ?? PR_PROVIDERS[0];
 }
 
 /**
@@ -333,10 +297,10 @@ async function errorDetail(response, token) {
 }
 
 /**
- * @param {{ fetchImpl: typeof fetch, url: string, method: string, token: string, body?: unknown, timeoutMs: number }} request
+ * @param {{ fetchImpl: typeof fetch, provider: object, url: string, method: string, token: string, body?: unknown, timeoutMs: number }} request
  * @returns {Promise<Response>}
  */
-async function githubRequest({ fetchImpl, url, method, token, body, timeoutMs }) {
+async function apiRequest({ fetchImpl, provider, url, method, token, body, timeoutMs }) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   let response;
@@ -344,11 +308,10 @@ async function githubRequest({ fetchImpl, url, method, token, body, timeoutMs })
     response = await fetchImpl(url, {
       method,
       headers: {
-        Accept: 'application/vnd.github+json',
-        Authorization: `Bearer ${token}`,
+        Accept: provider.accept ?? 'application/json',
         'Content-Type': 'application/json',
         'User-Agent': 'flecto',
-        'X-GitHub-Api-Version': '2022-11-28',
+        ...provider.authHeaders(token),
       },
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: controller.signal,
@@ -357,14 +320,14 @@ async function githubRequest({ fetchImpl, url, method, token, body, timeoutMs })
     const reason = err?.name === 'AbortError'
       ? `timed out after ${timeoutMs}ms`
       : redact(err?.message ?? String(err), token);
-    throw new Error(`GitHub API ${method} failed: ${reason}`);
+    throw new Error(`${provider.label} API ${method} failed: ${reason}`);
   } finally {
     clearTimeout(timer);
   }
 
   if (!response.ok) {
     throw new Error(
-      `GitHub API ${method} returned HTTP ${response.status}${await errorDetail(response, token)}`,
+      `${provider.label} API ${method} returned HTTP ${response.status}${await errorDetail(response, token)}`,
     );
   }
   return response;
@@ -374,20 +337,19 @@ async function githubRequest({ fetchImpl, url, method, token, body, timeoutMs })
  * Find the sticky Flecto comment on a pull request, if one exists.
  * @param {PrCommentContext} context
  * @param {{ fetchImpl: typeof fetch, marker: string, timeoutMs: number }} options
- * @returns {Promise<{ id: number, body?: string, html_url?: string } | null>}
+ * @returns {Promise<{ id: string | number, body?: string, url?: string } | null>}
  */
 async function findStickyComment(context, { fetchImpl, marker, timeoutMs }) {
+  const provider = providerFor(context);
   for (let page = 1; page <= MAX_COMMENT_PAGES; page += 1) {
-    const url = `${context.apiUrl}/repos/${context.repo}/issues/${context.prNumber}`
-      + `/comments?per_page=${COMMENTS_PER_PAGE}&page=${page}`;
-    const response = await githubRequest({
-      fetchImpl, url, method: 'GET', token: context.token, timeoutMs,
+    const response = await apiRequest({
+      fetchImpl, provider, url: provider.listUrl(context, page), method: 'GET', token: context.token, timeoutMs,
     });
-    const comments = await response.json();
-    if (!Array.isArray(comments) || comments.length === 0) return null;
+    const comments = provider.readList(await response.json());
+    if (comments.length === 0) return null;
     const match = comments.find((c) => typeof c?.body === 'string' && c.body.includes(marker));
     if (match) return match;
-    if (comments.length < COMMENTS_PER_PAGE) return null;
+    if (comments.length < provider.perPage) return null;
   }
   return null;
 }
@@ -404,6 +366,7 @@ export async function upsertPrComment(body, context, options = {}) {
   const fetchImpl = options.fetchImpl ?? globalThis.fetch;
   const marker = options.marker ?? PR_COMMENT_MARKER;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const provider = providerFor(context);
   if (typeof fetchImpl !== 'function') {
     throw new Error('Global fetch unavailable. Use Node.js >= 20.19.0.');
   }
@@ -411,39 +374,41 @@ export async function upsertPrComment(body, context, options = {}) {
   const existing = await findStickyComment(context, { fetchImpl, marker, timeoutMs });
 
   if (!existing) {
-    const response = await githubRequest({
+    const response = await apiRequest({
       fetchImpl,
-      url: `${context.apiUrl}/repos/${context.repo}/issues/${context.prNumber}/comments`,
+      provider,
+      url: provider.createUrl(context),
       method: 'POST',
       token: context.token,
-      body: { body },
+      body: provider.payload(body),
       timeoutMs,
     });
     const created = await response.json().catch(() => ({}));
-    return { action: 'created', url: created?.html_url };
+    return { action: 'created', url: provider.readOne(created, context).url };
   }
 
   // Rendering is deterministic, so an identical body means nothing moved since
   // the last run — skip the write and the "edited" noise it creates.
   if (existing.body === body) {
-    return { action: 'unchanged', url: existing.html_url };
+    return { action: 'unchanged', url: existing.url };
   }
 
-  const response = await githubRequest({
+  const response = await apiRequest({
     fetchImpl,
-    url: `${context.apiUrl}/repos/${context.repo}/issues/comments/${existing.id}`,
-    method: 'PATCH',
+    provider,
+    url: provider.updateUrl(context, existing.id),
+    method: provider.updateMethod,
     token: context.token,
-    body: { body },
+    body: provider.payload(body),
     timeoutMs,
   });
   const updated = await response.json().catch(() => ({}));
-  return { action: 'updated', url: updated?.html_url ?? existing.html_url };
+  return { action: 'updated', url: provider.readOne(updated, context).url ?? existing.url };
 }
 
 /**
  * Post the sticky comment when — and only when — posting was explicitly enabled
- * and a complete GitHub pull request context is present.
+ * and a complete merge request context is present.
  *
  * Never throws and never reports the token: a delivery problem must not change
  * the CI exit code, which belongs to the diff and policy result alone.
@@ -454,7 +419,8 @@ export async function upsertPrComment(body, context, options = {}) {
  *   fetchImpl?: typeof fetch,
  *   marker?: string,
  *   timeoutMs?: number,
- *   readEventFile?: (path: string) => string
+ *   readEventFile?: (path: string) => string,
+ *   provider?: string
  * }} [options]
  * @returns {Promise<{ posted: boolean, action?: 'created' | 'updated' | 'unchanged', url?: string, reason?: string }>}
  */

@@ -320,7 +320,8 @@ happens only when *both* of these are true:
 
 1. You opted in explicitly with `--pr-comment-post` (or `"prCommentPost": true`
    in `.flectorc`), **and**
-2. the process has a complete GitHub pull request context: `GITHUB_TOKEN`,
+2. the process has a complete merge request context for the detected provider
+   (see [Providers](#providers) below). On GitHub that means `GITHUB_TOKEN`,
    `GITHUB_REPOSITORY` in `owner/repo` form, and a PR number from `GITHUB_REF`
    (`refs/pull/<n>/merge` or `/head`) or from the event payload at
    `GITHUB_EVENT_PATH`.
@@ -378,6 +379,75 @@ formally in
 [`schemas/flecto-envelope-2.0.json`](../schemas/flecto-envelope-2.0.json).
 
 ---
+
+
+## Providers
+
+The comment body is provider-agnostic markdown; only delivery differs. Flecto
+detects the host from CI environment variables, and `--pr-provider` forces one:
+
+```bash
+flecto ci "config/**/*.yaml" --format pr-comment --pr-comment-post --pr-provider gitlab
+```
+
+| Provider | Detected by | Token | Merge request identified by |
+| --- | --- | --- | --- |
+| `github` | `GITHUB_ACTIONS`, `GITHUB_REPOSITORY` | `GITHUB_TOKEN` | `GITHUB_REF` or `GITHUB_EVENT_PATH` |
+| `gitlab` | `GITLAB_CI`, `CI_MERGE_REQUEST_IID` | `FLECTO_GITLAB_TOKEN` or `GITLAB_TOKEN` | `CI_PROJECT_ID` + `CI_MERGE_REQUEST_IID` |
+| `bitbucket` | `BITBUCKET_PR_ID`, `BITBUCKET_REPO_SLUG` | `FLECTO_BITBUCKET_TOKEN` or `BITBUCKET_TOKEN` | `BITBUCKET_WORKSPACE` + `BITBUCKET_REPO_SLUG` + `BITBUCKET_PR_ID` |
+
+All three upsert a single sticky comment: Flecto finds its own previous comment
+by marker and edits it, so a pipeline that runs twenty times leaves one comment,
+not twenty. An identical body skips the write entirely.
+
+Behavior is identical across providers in the way that matters most: a missing
+token, a pipeline that is not a merge request, or an API failure prints a
+`[warn]` and **never changes the exit code**.
+
+### GitLab: `CI_JOB_TOKEN` will not work
+
+Every GitLab job gets a `CI_JOB_TOKEN`, and it **cannot post merge request
+notes**. Flecto does not try it — it would fail with a 401 that reads like a
+broken setup rather than a missing permission. Set `FLECTO_GITLAB_TOKEN` to a
+project or group access token with the `api` scope:
+
+```yaml
+flecto:
+  image: node:22
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  variables:
+    FLECTO_GITLAB_TOKEN: $FLECTO_REVIEW_TOKEN   # masked project variable
+  script:
+    - npx --yes flecto@3 ci "config/**/*.yaml"
+        --snapshot-ref "$CI_MERGE_REQUEST_DIFF_BASE_SHA"
+        --format pr-comment --pr-comment-post --mask-secrets
+```
+
+A self-managed instance is picked up automatically from `CI_API_V4_URL`.
+
+GitLab's note API returns no web URL for the note it just created, so the link
+Flecto prints after posting is built from `CI_MERGE_REQUEST_PROJECT_URL`. That
+variable is exported by merge request pipelines; without it the run still posts
+normally and simply reports the action with no link.
+
+### Bitbucket
+
+```yaml
+pipelines:
+  pull-requests:
+    '**':
+      - step:
+          image: node:22
+          script:
+            - export FLECTO_BITBUCKET_TOKEN=$FLECTO_REVIEW_TOKEN
+            - npx --yes flecto@3 ci "config/**/*.yaml"
+                --snapshot-ref "origin/$BITBUCKET_PR_DESTINATION_BRANCH"
+                --format pr-comment --pr-comment-post --mask-secrets
+```
+
+The token needs `pullrequest:write`. `BITBUCKET_WORKSPACE`, `BITBUCKET_REPO_SLUG`,
+and `BITBUCKET_PR_ID` are provided by Bitbucket Pipelines on pull request builds.
 
 ## GitHub Actions
 
