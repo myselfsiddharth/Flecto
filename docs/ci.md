@@ -85,16 +85,48 @@ the file and line, so a repo never accumulates unexplained `# noqa`:
 ```
 
 The reason follows the rule id after an em dash (`—`), `--`, `:`, or just a
-space. The directive works in every format Flecto parses that *has* comments —
-YAML, TOML, INI, and dotenv (`#`, or `;` in INI). **JSON has no comment syntax,**
-so use the [baseline](#adopting-on-an-existing-repo-the-baseline) for JSON.
+space. The directive works in every format Flecto parses that has comments —
+YAML, TOML, INI, dotenv (`#`, or `;` in INI), and **JSON**, which is read as
+[JSONC](configuration.md#json-with-comments) and so accepts both `//` and
+`/* … */`:
+
+```jsonc
+{
+  "database": {
+    // flecto-ignore-next-line pool-size-jump — Black Friday load test, reverting in December
+    "pool_size": 200
+  }
+}
+```
 
 A suppression is scoped to the **next line and the named rule** — never a bare
 "ignore everything here"; `--ignore` and `severityRemap` already do that. It
 resolves to the exact key on that line (with its full nesting), so a suppression
 on one `pool_size` never hides an uncommented `pool_size` elsewhere in the file.
-Array items and multi-document YAML resolve to no path — use the baseline for
-those.
+
+### When a directive cannot be resolved
+
+Some lines have no addressable key path: an **array element** in any format, and
+a document inside a **multi-document YAML** file. An array element's diff path is
+its index or its `--array-id-key` identity depending on how the run is
+configured, so resolving one would suppress the wrong finding under the other
+configuration — the dangerous direction for a tool whose job is making risk
+visible.
+
+Flecto refuses those, and **says so**:
+
+```
+config/app.json:3: flecto-ignore-next-line pool-size-jump does not resolve to a
+config key, so it suppresses nothing — array elements and multi-document files
+are not addressable inline; use --baseline
+```
+
+That is a warning rather than an error, because it already fails closed: the
+finding the directive meant to accept still fires and still gates the build.
+What was missing was any signal that the directive had no effect. A directive in
+a file type with no comment syntax at all — an encrypted `.age` file — warns the
+same way. Use the [baseline](#adopting-on-an-existing-repo-the-baseline) for
+those findings.
 
 Suppressed findings are still surfaced so the gate stays legible: a **count** by
 default, the full list with `--show-suppressed`, both on stderr.

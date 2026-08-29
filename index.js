@@ -412,14 +412,19 @@ function shouldFailFromPolicy(findings, failOn) {
  * Parse a file's inline suppressions and split its findings into active and
  * suppressed. A directive missing its mandatory reason is a hard error: applying
  * it would hide a finding with no justification, and skipping it silently would
- * fail the build confusingly. JSON (no comment syntax) has no suppressions.
+ * fail the build confusingly.
+ *
+ * A directive that resolves to nothing — an array element, or a file type with
+ * no comment syntax — is a warning instead of an error. It already fails closed,
+ * because the finding it meant to accept still fires and still gates, so failing
+ * the build a second time adds nothing; what was missing was any signal at all
+ * that the directive did not take effect.
  * @param {string} filepath
  * @param {import('./src/policy.js').PolicyFinding[]} findings
  * @returns {{ active: any[], suppressed: Array<{ finding: any, reason: string }> }}
  */
 function resolveSuppressed(filepath, findings) {
   const format = suppressionFormat(filepath);
-  if (!format) return { active: findings, suppressed: [] };
 
   let raw;
   try {
@@ -427,12 +432,13 @@ function resolveSuppressed(filepath, findings) {
   } catch {
     return { active: findings, suppressed: [] };
   }
-  const { suppressions, errors } = parseSuppressions(raw, format);
+  const { suppressions, errors, warnings } = parseSuppressions(raw, format);
+  const rel = relative(process.cwd(), filepath) || filepath;
   if (errors.length > 0) {
-    const rel = relative(process.cwd(), filepath) || filepath;
     const detail = errors.map((e) => `  ${rel}:${e.line}: ${e.message}`).join('\n');
     throw new Error(`Inline suppression is missing a required reason:\n${detail}`);
   }
+  for (const warning of warnings) renderNote(`${rel}:${warning.line}: ${warning.message}`);
   return applySuppressions(findings, suppressions);
 }
 
