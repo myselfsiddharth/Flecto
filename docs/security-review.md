@@ -80,5 +80,43 @@ real config) that fails fast with a clear error. Regression test in
   is limited (an attacker who controls the repo can already commit content), but
   it has not been hardened.
 
+## Knowing what has been exercised
+
+"Checked — no change needed" above is a claim about what a reader looked at.
+Coverage is the mechanical half of the same question: which branches of these
+modules has **no test ever executed**?
+
+```sh
+npm run coverage
+```
+
+That runs the suite under `node --test --experimental-test-coverage` and prints a
+focused report — the modules where an untested branch is a security question
+rather than a style one, worst branch coverage first, with the count of branches
+that never ran:
+
+```
+Security-relevant modules (worst branch coverage first)
+  file                         lines  branch   funcs  missed
+  ----------------------------------------------------------
+  src/config.js                97.4%   84.3%  100.0%      19
+  src/policy.js                95.5%   88.4%  100.0%      44
+  ...
+```
+
+It runs in CI on every pull request and prints in the job log, so it needs no
+artifact download to read. **No threshold gates it** ([#149]): a number chosen
+before anyone has read the report is arbitrary, and the usual outcome is tests
+written to satisfy the gate rather than to find defects. The list is a place to
+start a review, and a way to know when one is finished — not a score.
+
+The focused list, and the reason each module is on it, lives at the top of
+[`scripts/coverage-report.js`](../scripts/coverage-report.js). It is meant to be
+argued with and edited rather than grown until it is the whole repository again.
+
+Coverage says a branch ran, not that it ran with the input an attacker would
+choose. It narrows where to look; it does not replace looking.
+
 [GHSA-wq8m-fc3q-8m5x]: https://github.com/myselfsiddharth/Flecto/security/advisories/GHSA-wq8m-fc3q-8m5x
 [#121]: https://github.com/myselfsiddharth/Flecto/issues/121
+[#149]: https://github.com/myselfsiddharth/Flecto/issues/149

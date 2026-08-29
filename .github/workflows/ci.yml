@@ -57,3 +57,29 @@ jobs:
 
       - name: Verify package contents
         run: npm run pack:check
+
+  coverage:
+    name: coverage (security-relevant modules)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        # One version is enough: coverage answers "which branches has no test
+        # ever executed", and that is a property of the suite, not the runtime.
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # No threshold gates this job. A number chosen before anyone has read the
+      # report is arbitrary, and the usual outcome is tests written to satisfy
+      # the gate rather than to find defects. The report is printed in full in
+      # this log so it needs no artifact download to read.
+      - name: Coverage
+        run: npm run coverage
