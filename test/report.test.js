@@ -438,3 +438,58 @@ test('report honors ignore paths and array identity like history does', () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('a report of first snapshots says nothing was compared, not that nothing drifted (#141)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-report-no-history-'));
+  const file = join(dir, 'prod.yaml');
+
+  try {
+    // One snapshot per file, which is what a CI runner produces on its first
+    // (and, on an ephemeral runner, every) run.
+    writeSnapshot(dir, file, { replicas: 2 }, '2026-03-01T00:00:00.000Z', 1000);
+    writeSnapshot(dir, join(dir, 'staging.yaml'), { replicas: 1 }, '2026-03-01T00:00:01.000Z', 1001);
+
+    const result = runReport(dir, ['--output', 'report.html']);
+    const html = readFileSync(join(dir, 'report.html'), 'utf8');
+
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(html, /Nothing in this report was compared/);
+    assert.match(html, /no history<\/strong>, not <strong>no drift/);
+    // The claim the banner exists to prevent.
+    assert.doesNotMatch(html, /No semantic changes from the previous snapshot\./);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('renderReportHtml labels a first snapshot baseline and counts comparisons (#141)', () => {
+  const html = renderReportHtml({
+    generatedAt: '2026-03-04T09:15:00.000Z',
+    cwd: '/srv/app',
+    snapshots: [
+      {
+        file: '/srv/app/config/prod.yaml',
+        createdAt: '2026-03-02T00:00:00.000Z',
+        previousCreatedAt: '2026-03-01T00:00:00.000Z',
+        changeCount: 0,
+        changes: [],
+      },
+      {
+        file: '/srv/app/config/prod.yaml',
+        createdAt: '2026-03-01T00:00:00.000Z',
+        previousCreatedAt: null,
+        changeCount: 0,
+        changes: [],
+      },
+    ],
+  });
+
+  // One of the two snapshots had something to compare against, and it is the
+  // only one allowed to claim it found no changes.
+  assert.match(html, /<div class="stat-value">1<\/div><div class="stat-label">Comparisons<\/div>/);
+  assert.match(html, /<span class="count">baseline<\/span>/);
+  assert.match(html, /First snapshot of this file/);
+  assert.match(html, /No semantic changes from the previous snapshot\./);
+  // Something was compared, so the page is not claiming the history is empty.
+  assert.doesNotMatch(html, /Nothing in this report was compared/);
+});

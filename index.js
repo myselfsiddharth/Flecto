@@ -390,7 +390,21 @@ function canonicalPath(path) {
 }
 
 function readSnapshotStateFromRef(filePath, snapshotRef) {
-  if (!snapshotRef) return readSnapshotStateFromFile(snapshotPathForFile(filePath));
+  if (!snapshotRef) {
+    const snapshotPath = snapshotPathForFile(filePath);
+    // Failing closed here is right — a diff with no baseline is not a clean
+    // diff — but an ENOENT on a hashed filename explains nothing. Snapshot
+    // history is local to the working directory, so this is what an ephemeral
+    // CI runner hits on every run (#141).
+    if (!existsSync(snapshotPath)) {
+      throw new Error(
+        `no local snapshot has been saved for this file (${SNAPSHOT_DIR}/ holds none).`
+          + ' Save one with "flecto watch <file> --snapshot", or pass --snapshot-ref'
+          + ' <git-ref> to diff against a committed revision instead',
+      );
+    }
+    return readSnapshotStateFromFile(snapshotPath);
+  }
   const maybePath = resolve(snapshotRef);
   if (existsSync(maybePath)) {
     return readSnapshotStateFromFile(maybePath);
@@ -725,17 +739,36 @@ program
 
       if (effective.diff) {
         let hasChanges = false;
+        let compared = 0;
+        let missing = 0;
         for (const filepath of targets) {
           const snapshotPath = snapshotPathForFile(filepath);
           if (!existsSync(snapshotPath)) {
             renderWarn(`No snapshot found for "${filepath}"`);
+            missing += 1;
             continue;
           }
           const before = readSnapshotStateFromFile(snapshotPath);
           const after = parseFile(filepath);
           const events = diffTrees(before, after, dOpts);
           renderDiff(filepath, events, { maskSecrets });
+          compared += 1;
           if (events.length > 0) hasChanges = true;
+        }
+        // Exiting 0 having compared nothing is the worst answer available: the
+        // caller reads it as "no drift" when the truth is "no baseline to drift
+        // from" (#141). Snapshot history lives in the working directory, so this
+        // is the normal state of a fresh CI runner.
+        if (compared === 0) {
+          throw new Error(
+            'No snapshot found for any target, so nothing was compared.'
+              + ' Run "flecto watch <file> --snapshot" first — no history is not no drift.',
+          );
+        }
+        if (missing > 0) {
+          renderNote(
+            `${missing} of ${targets.length} targets had no snapshot and were not compared.`,
+          );
         }
         process.exit(hasChanges ? 1 : 0);
       }
@@ -884,10 +917,27 @@ program
       }
 
       console.log(`Local snapshot history (${summaries.length} snapshots)`);
+      let baselines = 0;
       for (const snapshot of summaries) {
         const file = relative(process.cwd(), snapshot.file) || snapshot.file;
-        const changes = `${snapshot.changeCount} change${snapshot.changeCount === 1 ? '' : 's'}`;
+        // A snapshot with nothing before it was never compared, so printing
+        // "0 changes" for it states a result that was never computed (#141).
+        if (!snapshot.previousCreatedAt) baselines += 1;
+        const changes = snapshot.previousCreatedAt
+          ? `${snapshot.changeCount} change${snapshot.changeCount === 1 ? '' : 's'}`
+          : 'baseline (no earlier snapshot to compare against)';
         console.log(`${snapshot.createdAt}  ${file} — ${changes}`);
+      }
+      if (baselines === summaries.length) {
+        renderNote(
+          'Nothing was compared: every snapshot shown is the first of its file.'
+            + ' That is no history, not no drift.',
+        );
+      } else if (baselines > 0) {
+        renderNote(
+          `${baselines} of ${summaries.length} snapshots shown are the first of their file`
+            + ' and were not compared against anything.',
+        );
       }
     } catch (err) {
       renderError(err.message);
