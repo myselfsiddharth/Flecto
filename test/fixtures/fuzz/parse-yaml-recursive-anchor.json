@@ -1,0 +1,8 @@
+{
+  "target": "parse-yaml",
+  "note": "A self-referential anchor parses to a genuinely cyclic object (#103). Must resolve to the circular sentinel, not recurse forever.",
+  "input": {
+    "filename": "config.yaml",
+    "text": "a: &x\n  b: *x\n"
+  }
+}

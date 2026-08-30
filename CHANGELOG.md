@@ -241,6 +241,42 @@ The format is based on [Keep a Changelog], and this project adheres to
   Windows and macOS run one version each, since what they add is the operating
   system rather than the runtime.
 
+- **Fuzzing for the boundary an untrusted pull request controls** ([#150]).
+  `flecto ci` runs on a pull request, and everything it reads there is
+  attacker-supplied: the config files, their names, `.flectorc`, and the regexes
+  inside a policy pack the same pull request can add. GHSA-wq8m-fc3q-8m5x came
+  out of that surface, and the two DoS vectors fixed after it were found by hand
+  — which finds what someone thought to look for.
+
+  `npm run fuzz` runs eleven structure-aware targets over it: `parseContent` per
+  format, `diffTrees`, `expandChangeSubtrees`, Flecto's own regexes in
+  `secrets.js` and `encrypted.js`, and pack loading and evaluation. The shared
+  invariant is that each either succeeds or throws a clean `Error` — never hangs,
+  never exhausts memory, never returns a prototype-polluted object.
+
+  **No fuzzing dependency.** The inputs are config text, trees, and regex sources
+  rather than binary protocols, so the generators are hand-written over a seeded
+  PRNG in `test/fuzz/`. That is also what makes a case `(target, seed, index)`
+  and nothing else, so `--case N` replays one case without walking the N-1 before
+  it.
+
+  **The time budget is enforced from outside the process.** A hang cannot be
+  observed from inside the process that hung, so cases run in a child that writes
+  its case index before running the case, and the driver kills the child when the
+  heartbeat stops. A failing input is then shrunk — each candidate in its own
+  child, so a candidate that hangs shrinks like any other failure.
+
+  **A finding becomes a regression test by moving one file.** The minimized input
+  lands in `test/fuzz/findings/`; moving it to `test/fixtures/fuzz/` is the whole
+  procedure, because `test/fuzz-regressions.test.js` replays everything there as
+  part of `npm test`. The corpus ships seeded with the already-fixed vectors from
+  the security review record.
+
+  Scheduled nightly, never on a pull request — a fuzz run is a wall-clock budget
+  against a random seed, and gating a merge on one is a flaky merge gate — and it
+  files nothing automatically, because a finding on this boundary may be
+  exploitable rather than merely a hang and those go private per `SECURITY.md`.
+
 ### Fixed
 
 - **A `flecto-ignore-next-line` that resolves to nothing now says so** ([#158]).
@@ -936,6 +972,7 @@ fixed — those runs were never actually gated — but the failure is new.
 [#149]: https://github.com/myselfsiddharth/Flecto/issues/149
 [#158]: https://github.com/myselfsiddharth/Flecto/issues/158
 [#159]: https://github.com/myselfsiddharth/Flecto/issues/159
+[#150]: https://github.com/myselfsiddharth/Flecto/issues/150
 [Keep a Changelog]: https://keepachangelog.com/en/1.1.0/
 [#138]: https://github.com/myselfsiddharth/Flecto/issues/138
 [Semantic Versioning]: https://semver.org/spec/v2.0.0.html

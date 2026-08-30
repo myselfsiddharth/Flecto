@@ -1,0 +1,91 @@
+name: Fuzz
+
+# Scheduled, never on pull requests. The property most of these targets check is
+# "it terminates", so a fuzz run is inherently a wall-clock budget against a
+# random seed -- exactly the shape that makes a flaky merge gate. It runs
+# nightly instead, and a failure is a finding to triage, not a blocked merge.
+on:
+  schedule:
+    # 03:17 UTC. Off the hour so it does not queue behind everything else that
+    # runs at midnight.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: "uint32 seed (blank = random, printed in the log)"
+        required: false
+        type: string
+      time:
+        description: "Seconds per target"
+        required: false
+        default: "300"
+        type: string
+
+concurrency:
+  group: fuzz-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: fuzz (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    # A finding in one target says nothing about the others, and cancelling them
+    # would throw away the run that might have found a second one.
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - parse-yaml
+          - parse-json
+          - parse-toml
+          - parse-ini
+          - parse-dotenv
+          - diff-trees
+          - expand-subtrees
+          - secret-scan
+          - encrypted-scan
+          - pack-load
+          - pack-eval
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        # One version. What is under test is Flecto's handling of hostile input,
+        # not a runtime difference; the test matrix in ci.yml covers runtimes.
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The seed is derived from the run id when none is given, so the log always
+      # records a value that reproduces the run: npm run fuzz -- --seed <n>
+      - name: Fuzz
+        run: |
+          SEED="${{ inputs.seed }}"
+          if [ -z "$SEED" ]; then SEED=$(( ${{ github.run_id }} % 4294967295 )); fi
+          npm run fuzz -- --target "${{ matrix.target }}" --seed "$SEED" --time "${{ inputs.time || 300 }}"
+
+      # Findings are minimized inputs, which are the whole value of a fuzz run:
+      # keep them even though the step above failed.
+      - name: Upload findings
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-findings-${{ matrix.target }}
+          path: test/fuzz/findings/
+          if-no-files-found: ignore
+          retention-days: 30
+
+  # Deliberately no automatic issue, comment, or notification on failure. These
+  # targets sit on the boundary an untrusted pull request controls, so a finding
+  # may be exploitable rather than merely a hang -- and SECURITY.md says those are
+  # reported privately, not filed in public. A red job in the Actions tab is the
+  # signal; a human decides where it goes from there.
