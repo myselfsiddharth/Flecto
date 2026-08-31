@@ -336,6 +336,31 @@ The format is based on [Keep a Changelog], and this project adheres to
   loudly, naming `FLECTO_ALLOW_SYMLINK_TARGETS=1` for a checkout that links
   config in from a sibling directory on purpose.
 
+- **Prototype pollution in the INI parser** ([#121]). A `.ini` file containing a
+  `[__proto__]` section wrote every key in that section onto `Object.prototype`
+  for the rest of the process: `parseIni` looked the section up as
+  `out[section]`, which resolves to `Object.prototype` for that name — and
+  `Object.prototype` passes `isPlainObject`, because its own prototype is
+  `null`, so the existing guard did not catch it.
+
+  The blast radius went past the attacker's own file. `severityRemap[rule.id]`
+  is a plain-object lookup, so `dangerous-toggle-enabled=off` under
+  `[__proto__]` silenced that rule for **every file in the same run**, turning a
+  failing `flecto ci --fail-on error` green. Config file contents are
+  attacker-controlled on a pull request, which is the case `flecto ci` exists
+  to run in.
+
+  Sections are now read with `Object.hasOwn` and every key written with
+  `Object.defineProperty`, so a reserved name is an ordinary own key holding
+  ordinary data — and stays *visible* in the diff, rather than being dropped.
+  Two same-class sites were hardened alongside it, neither exploitable: the
+  masking walk in `src/renderer.js` and the copy loops in `src/encrypted.js`
+  moved a `__proto__` subtree onto the result's prototype, dropping the key from
+  the output instead of rendering it. Both now rebuild with
+  `Object.fromEntries`.
+
+  Found by the fuzz harness added in [#150] on its first full-length run.
+
 - **A `flecto-ignore-next-line` that resolves to nothing now says so** ([#158]).
   A directive on an array element, in a multi-document YAML file, or in a file
   type with no comment syntax at all was accepted, resolved to no path, matched

@@ -211,13 +211,13 @@ export function maskSensitiveValue(value, path = '') {
     && typeof value === 'object'
     && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null)
   ) {
-    /** @type {Record<string, unknown>} */
-    const out = {};
-    for (const [k, v] of Object.entries(value)) {
-      const child = path ? `${path}.${k}` : k;
-      out[k] = maskSensitiveValue(v, child);
-    }
-    return out;
+    // Object.fromEntries rather than `out[k] = ...`: assigning a key literally
+    // named "__proto__" runs the prototype setter instead of creating an own
+    // property, so that whole subtree would vanish from the masked output
+    // rather than being rendered masked.
+    return Object.fromEntries(
+      Object.entries(value).map(([k, v]) => [k, maskSensitiveValue(v, path ? `${path}.${k}` : k)]),
+    );
   }
   if (typeof value === 'string') return redactSecretString(value);
   return value;

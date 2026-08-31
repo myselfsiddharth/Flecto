@@ -89,6 +89,41 @@ Still not covered, and worth its own look: `--output` (`flecto report`) and
 `--baseline` are *write* paths, and a symlinked destination redirects the write
 rather than a read.
 
+### Prototype pollution in the INI parser — fixed
+
+`parseIni` nested a section's keys under `out[section]`. A section named
+`__proto__` resolved that to `Object.prototype` — which passes `isPlainObject`,
+because its *own* prototype is `null` — and every key in the section was then
+written onto the prototype of every object in the process. In this threat model
+that is a pull request adding one `.ini` file to a repository whose CI runs
+`flecto ci`.
+
+The impact was not limited to the attacker's own file. `severityRemap[rule.id]`
+is a plain-object lookup, so `[__proto__]` with `dangerous-toggle-enabled=off`
+answered `'off'` for **every file in the same run** and the rule stopped firing:
+a `flecto ci --fail-on error` that exited `1` on a real finding exited `0` with
+the hostile file present. That is a merge-gate bypass, not only a denial of
+service — though `toString=` was that too, since it replaces
+`Object.prototype.toString` for the rest of the process.
+
+**Fixed** by reading the section with `Object.hasOwn` and writing every key with
+`Object.defineProperty`: a reserved name becomes an ordinary own key holding
+ordinary data, which is what a config file's `[__proto__]` section is. It stays
+*visible* in the diff rather than being dropped — silently discarding it would
+hide a change, which is its own kind of wrong.
+
+Two same-class sites were hardened alongside it, neither exploitable: the
+masking walk in `src/renderer.js` and the copy loops in `src/encrypted.js` used
+`out[key] = value`, which moves a `__proto__` subtree onto the *result's*
+prototype. No value leaked — the key vanished from the output entirely — but a
+change under such a key would have been invisible in masked output. Both now
+rebuild with `Object.fromEntries`, as `normalizeParsedValue` already did.
+
+Found by the fuzz harness ([#150]) on its first full-length run, at
+`parse-ini` case 280 of seed 20260830. Regression tests in
+`test/security.test.js`, including the end-to-end gate bypass, plus the
+minimized input in `test/fixtures/fuzz/parse-ini-proto-section.json`.
+
 ## Checked — no change needed
 
 - **Command execution (`--command`, `src/alerter.js`).** Env var *names* are
@@ -103,11 +138,14 @@ rather than a read.
   `apiUrl`, `repo`, and `prNumber` come from runner env, not PR files, so PR
   content cannot redirect the token or induce SSRF. Posting is opt-in and needs a
   complete PR context.
-- **Prototype pollution.** A `__proto__` / `constructor.prototype` key in JSON or
-  YAML becomes an ordinary own property (the parser's `isPlainObject` checks the
-  prototype and normalization rebuilds via `Object.fromEntries`); it does not
-  reach `Object.prototype`. The differ and pack loading were exercised with such
-  keys and stayed clean.
+- **Prototype pollution in JSON, YAML, TOML, and dotenv.** A `__proto__` /
+  `constructor.prototype` key becomes an ordinary own property (the parser's
+  `isPlainObject` checks the prototype and normalization rebuilds via
+  `Object.fromEntries`); it does not reach `Object.prototype`. The differ and
+  pack loading were exercised with such keys and stayed clean, and the fuzz
+  targets now exercise all of it continuously. **INI was not covered by this
+  claim and was vulnerable** — see the finding above. The lesson is the narrow
+  one: this list is per code path, and "the parser" is five of them.
 - **`policies add` package safety.** Resolves the target with `require.resolve`
   (path only, never evaluated) and reads the pack JSON off disk; it never
   `import()`s the package, so it runs no package code. (`npm install`-time
@@ -122,7 +160,6 @@ rather than a read.
   timeout, so a full fix means a timeout-capable engine (e.g. `re2`) — a
   dependency decision left to the maintainer. Documented as a known limitation in
   [`SECURITY.md`](../SECURITY.md).
-- *(none currently)*
 
 ## Fuzzing the same boundary
 
