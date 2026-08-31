@@ -8,6 +8,11 @@
 | 2.x | Best-effort (security fixes may be backported when practical) |
 | < 2.0 | No |
 
+> **GHSA-wq8m-fc3q-8m5x affects 2.0.0–2.1.0.** The fix is merged on `release/2.x`
+> as 2.1.1 but not yet published, so the highest installable 2.x is still
+> vulnerable — upgrade to 3.0.1 or newer. Assessment:
+> [`docs/ghsa-wq8m-fc3q-8m5x-2x.md`](docs/ghsa-wq8m-fc3q-8m5x-2x.md).
+
 ## Reporting a vulnerability
 
 Please **do not** open a public GitHub issue for security vulnerabilities.
