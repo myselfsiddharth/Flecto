@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'fs';
-import { join, relative, resolve, sep } from 'path';
+import { basename, dirname, join, relative, resolve, sep } from 'path';
 import fg from 'fast-glob';
 import yaml from 'js-yaml';
 import { isEnvFilename, parseContent } from './parser.js';
@@ -186,14 +186,29 @@ export function assertTargetContained(file, cwd = process.cwd()) {
 
   const root = canonical(resolve(cwd));
   const given = resolve(file);
+  // A path with nothing readable behind it cannot leak a file: either it does
+  // not exist, or it is a symlink whose target does not exist (existsSync
+  // follows the link). Missing targets are reported elsewhere; refusing one here
+  // as an "escape" is a false positive -- and canonical() cannot resolve a
+  // nonexistent path, so its symlink-normalized fallback would not even match
+  // `root` on a platform where the temp root is itself a symlink (macOS /var).
+  if (!existsSync(given)) return;
+  // Whether the target is *nominally* inside the project. Canonicalize its
+  // containing directory rather than the path itself: the directory is a real
+  // directory, never the symlink under test, so this normalizes Windows drive-
+  // letter case and 8.3 short names -- which would otherwise make an in-repo
+  // path compare as external and skip the check entirely -- without following
+  // the final link. On POSIX the two forms already agree, so this is a no-op
+  // there.
+  const nominal = join(canonical(dirname(given)), basename(given));
   // Named from outside the project: nothing was escaped, it was never inside.
-  if (!isInside(given, root)) return;
+  if (!isInside(nominal, root)) return;
 
   const real = canonical(given);
   if (isInside(real, root)) return;
 
   throw new Error(
-    `Refusing to read "${relative(root, given).split(sep).join('/') || given}": it is a link out of the project, `
+    `Refusing to read "${relative(root, nominal).split(sep).join('/') || given}": it is a link out of the project, `
     + `resolving to ${real}.\n`
     + 'File names and links are attacker-controlled on an untrusted pull request, and '
     + 'reading one would put a file from outside the repository into Flecto\'s output.\n'
