@@ -1,0 +1,17 @@
+{
+  "target": "diff-trees",
+  "note": "A tree carrying __proto__ / constructor / prototype keys must diff as ordinary data and reach no prototype. JSON.parse makes these real own properties, which is exactly how they arrive from a config file.",
+  "input": {
+    "before": {
+      "__proto__": { "polluted": 1 },
+      "constructor": { "prototype": { "isAdmin": true } },
+      "ok": 1
+    },
+    "after": {
+      "__proto__": { "polluted": 2 },
+      "prototype": { "flectoFuzzPolluted": true },
+      "ok": 2
+    },
+    "options": {}
+  }
+}

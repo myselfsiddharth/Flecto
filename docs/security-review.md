@@ -91,6 +91,34 @@ real config) that fails fast with a clear error. Regression test in
   is limited (an attacker who controls the repo can already commit content), but
   it has not been hardened.
 
+## Fuzzing the same boundary
+
+Everything above is manual review, and manual review finds what someone thought
+to look for. `npm run fuzz` ([#150], [`test/fuzz/README.md`](../test/fuzz/README.md))
+keeps looking at the same boundary after the reviewer has moved on: structure-aware
+targets over `parseContent` per format, `diffTrees`, `expandChangeSubtrees`, the
+regexes in `secrets.js` and `encrypted.js`, and pack loading and evaluation.
+
+The invariant is the one this record has been assuming: **it either succeeds or
+throws a clean `Error` — never hangs, never exhausts memory, never returns a
+prototype-polluted object** — with a per-case time budget, because a target that
+takes seconds is a denial of service on a CI runner whether or not it returns.
+
+Two scoping notes, so the target list is read for what it is:
+
+- **Pack-supplied regexes are fuzzed with bounded quantifiers.** A pack author
+  can already hang the process, which is the known limitation in
+  [`SECURITY.md`](../SECURITY.md); generating that class would re-report it every
+  night rather than find anything. What is fuzzed is everything around it —
+  compilation, flags, and evaluation.
+- **A cyclic tree reaching `diffTrees` throws rather than returning.** That
+  satisfies the contract, and the parser's circular sentinel means a cycle cannot
+  arrive from a parsed file in the first place.
+
+Fuzzing runs nightly, not on pull requests, and files nothing automatically:
+findings on this boundary may be exploitable rather than merely a hang, and those
+are reported privately per [`SECURITY.md`](../SECURITY.md).
+
 ## Knowing what has been exercised
 
 "Checked — no change needed" above is a claim about what a reader looked at.
@@ -132,3 +160,4 @@ choose. It narrows where to look; it does not replace looking.
 [#121]: https://github.com/myselfsiddharth/Flecto/issues/121
 [#125]: https://github.com/myselfsiddharth/Flecto/issues/125
 [#149]: https://github.com/myselfsiddharth/Flecto/issues/149
+[#150]: https://github.com/myselfsiddharth/Flecto/issues/150

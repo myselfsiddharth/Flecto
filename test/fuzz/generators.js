@@ -1,0 +1,442 @@
+/**
+ * Input generators for the fuzz targets.
+ *
+ * The inputs Flecto has to survive are config text, config trees, and regex
+ * sources — not binary protocols — so these are structure-aware generators with
+ * a mutation pass on top, rather than random bytes. Random bytes would spend
+ * almost every case being rejected at the first character of the parser and
+ * would never reach the code that matters.
+ *
+ * Every generator is a pure function of an `Rng`, so a case is reproducible from
+ * `(target, seed, index)` alone.
+ */
+
+/** Characters that have historically ended up in a config file and broken something. */
+const NASTY_CHARS = [
+  '\u0000', '\uFEFF', '\u2028', '\u2029', '\r', '\n', '\t',
+  '\\', '"', "'", '`', '$', '{', '}', '[', ']', ':', '#', '&', '*', '!', '%',
+  '\uD800', '\uDFFF', '\u00A0', '\u{1F600}', '\u00E9',
+];
+
+/** Keys that reach for the prototype chain. */
+export const HOSTILE_KEYS = [
+  '__proto__', 'constructor', 'prototype', 'toString', 'valueOf',
+  '__defineGetter__', 'hasOwnProperty',
+];
+
+const KEY_WORDS = [
+  'replicas', 'pool_size', 'debug', 'api_key', 'password', 'token', 'host',
+  'port', 'enabled', 'timeout', 'image', 'env', 'secret', 'url', 'a', '',
+  '0', 'key.with.dots', 'key with spaces', 'key:colon', '-', '--',
+];
+
+/**
+ * A string that is plausible as a config value, with a tail of deliberately
+ * awkward shapes.
+ * @param {import('./rng.js').Rng} rng
+ * @param {number} [maxLength]
+ * @returns {string}
+ */
+export function scalarString(rng, maxLength = 48) {
+  return rng.weighted([
+    [30, () => rng.chars('abcdefghijklmnopqrstuvwxyz0123456789-_.', rng.between(0, maxLength))],
+    [10, () => rng.chars('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=', rng.between(0, maxLength))],
+    [6, () => String(rng.between(-1000000, 1000000))],
+    [4, () => rng.pick(['true', 'false', 'null', 'yes', 'no', 'on', 'off', '~', ''])],
+    [4, () => rng.pick(NASTY_CHARS).repeat(rng.between(1, 8))],
+    [3, () => `${rng.chars('abc', rng.between(1, 6))}${rng.pick(NASTY_CHARS)}${rng.chars('xyz', rng.between(1, 6))}`],
+    [2, () => rng.chars('ab', rng.between(200, 2000))],
+    [1, () => rng.pick(['- ', '  ', '\t\t', '...', '---', '&anchor', '*alias', '<<', '!!str'])],
+  ])();
+}
+
+/**
+ * @param {import('./rng.js').Rng} rng
+ * @returns {string}
+ */
+export function key(rng) {
+  return rng.weighted([
+    [70, () => rng.pick(KEY_WORDS)],
+    [15, () => rng.chars('abcdefghijklmnopqrstuvwxyz_', rng.between(1, 12))],
+    [10, () => rng.pick(HOSTILE_KEYS)],
+    [5, () => scalarString(rng, 12)],
+  ])();
+}
+
+/**
+ * A JSON-representable tree. `depth` bounds nesting so a generator cannot spend
+ * a whole case building one enormous object; the deep-nesting case is generated
+ * deliberately by `deepTree` instead of stumbled into.
+ * @param {import('./rng.js').Rng} rng
+ * @param {number} [depth]
+ * @returns {unknown}
+ */
+export function tree(rng, depth = 3) {
+  if (depth <= 0) return leaf(rng);
+  return rng.weighted([
+    [40, () => leaf(rng)],
+    [35, () => {
+      /** @type {Record<string, unknown>} */
+      const object = {};
+      const size = rng.between(0, 6);
+      for (let i = 0; i < size; i += 1) {
+        // Assigned through defineProperty so a generated "__proto__" key is a
+        // real own property of the input rather than a silent prototype write
+        // inside the generator itself.
+        Object.defineProperty(object, key(rng), {
+          value: tree(rng, depth - 1),
+          enumerable: true,
+          writable: true,
+          configurable: true,
+        });
+      }
+      return object;
+    }],
+    [25, () => Array.from({ length: rng.between(0, 6) }, () => tree(rng, depth - 1))],
+  ])();
+}
+
+/**
+ * @param {import('./rng.js').Rng} rng
+ * @returns {unknown}
+ */
+function leaf(rng) {
+  return rng.weighted([
+    [40, () => scalarString(rng)],
+    [20, () => rng.between(-100000, 100000)],
+    [10, () => rng.bool()],
+    [10, () => null],
+    [6, () => rng.pick([0, -0, 1e308, -1e308, Number.MIN_SAFE_INTEGER, Number.MAX_SAFE_INTEGER])],
+    [4, () => rng.pick([NaN, Infinity, -Infinity])],
+    [4, () => ({})],
+    [4, () => []],
+    [2, () => undefined],
+  ])();
+}
+
+/**
+ * A chain nested `depth` levels down, for the resource-exhaustion cases.
+ * @param {import('./rng.js').Rng} rng
+ * @param {number} depth
+ * @returns {unknown}
+ */
+export function deepTree(rng, depth) {
+  let node = /** @type {unknown} */ (leaf(rng));
+  for (let i = 0; i < depth; i += 1) {
+    node = rng.bool(0.7) ? { [key(rng)]: node } : [node];
+  }
+  return node;
+}
+
+/**
+ * Serialize a tree as text in the requested format, well-formed. Malformation is
+ * a separate, explicit step (`mutate`), so a case is either "valid document the
+ * parser must accept" or "damaged document the parser must reject cleanly", and
+ * the harness can tell which it generated.
+ * @param {import('./rng.js').Rng} rng
+ * @param {string} format
+ * @returns {string}
+ */
+export function documentText(rng, format) {
+  switch (format) {
+    case 'json':
+    case 'jsonc':
+      return jsonText(rng, format === 'jsonc');
+    case 'yaml':
+      return yamlText(rng);
+    case 'toml':
+      return tomlText(rng);
+    case 'ini':
+      return iniText(rng);
+    case 'env':
+      return envText(rng);
+    default:
+      return scalarString(rng, 200);
+  }
+}
+
+/**
+ * @param {import('./rng.js').Rng} rng
+ * @param {boolean} withComments
+ * @returns {string}
+ */
+function jsonText(rng, withComments) {
+  const body = JSON.stringify(tree(rng, rng.between(1, 4)), null, rng.between(0, 4)) ?? 'null';
+  if (!withComments) return body;
+  return rng.weighted([
+    [2, () => `// ${scalarString(rng, 20)}\n${body}`],
+    [2, () => `${body}\n/* ${scalarString(rng, 20)} */`],
+    [1, () => body.replace('}', ',}')],
+    [1, () => body],
+  ])();
+}
+
+/**
+ * YAML gets its own generator rather than `js-yaml.dump`, because the shapes
+ * worth fuzzing — anchors, aliases, merge keys, multiple documents, tags — are
+ * exactly the ones a round-trip dumper will not produce.
+ * @param {import('./rng.js').Rng} rng
+ * @returns {string}
+ */
+function yamlText(rng) {
+  const lines = [];
+  const documents = rng.between(1, 3);
+  for (let d = 0; d < documents; d += 1) {
+    if (d > 0 || rng.bool(0.2)) lines.push('---');
+    const size = rng.between(1, 6);
+    for (let i = 0; i < size; i += 1) {
+      lines.push(rng.weighted([
+        [40, () => `${key(rng)}: ${scalarString(rng, 24)}`],
+        [10, () => `${key(rng)}: &a${i} ${scalarString(rng, 12)}`],
+        [10, () => `${key(rng)}: *a${rng.between(0, size)}`],
+        [8, () => `${key(rng)}:\n  - ${scalarString(rng, 12)}\n  - ${scalarString(rng, 12)}`],
+        [8, () => `${key(rng)}:\n  ${key(rng)}: ${scalarString(rng, 12)}`],
+        [6, () => `<<: *a${rng.between(0, size)}`],
+        [6, () => `${key(rng)}: !!${rng.pick(['str', 'int', 'binary', 'timestamp', 'python/object'])} ${scalarString(rng, 8)}`],
+        [6, () => `${key(rng)}: |\n  ${scalarString(rng, 20)}`],
+        [3, () => `${key(rng)}: ${'['.repeat(rng.between(1, 40))}${']'.repeat(rng.between(1, 40))}`],
+        [3, () => `${' '.repeat(rng.between(0, 8))}${key(rng)}: ${scalarString(rng, 12)}`],
+      ])());
+    }
+  }
+  return `${lines.join('\n')}\n`;
+}
+
+/**
+ * @param {import('./rng.js').Rng} rng
+ * @returns {string}
+ */
+function tomlText(rng) {
+  const lines = [];
+  const size = rng.between(1, 8);
+  for (let i = 0; i < size; i += 1) {
+    lines.push(rng.weighted([
+      [40, () => `${rng.chars('abcdefghij_', rng.between(1, 8))} = "${scalarString(rng, 16).replaceAll('\\', '').replaceAll('"', '')}"`],
+      [15, () => `${rng.chars('abcdefghij_', rng.between(1, 8))} = ${rng.between(-1000, 1000)}`],
+      [10, () => `[${rng.chars('abcdefghij.', rng.between(1, 10))}]`],
+      [10, () => `[[${rng.chars('abcdefghij', rng.between(1, 6))}]]`],
+      [10, () => `${rng.chars('abcdef', 4)} = ${'['.repeat(rng.between(1, 30))}${']'.repeat(rng.between(1, 30))}`],
+      [8, () => `${rng.chars('abcdef', 4)} = ${rng.pick(['true', 'false', '1979-05-27T07:32:00Z', 'inf', 'nan', '0x', '1_0'])}`],
+      [7, () => scalarString(rng, 20)],
+    ])());
+  }
+  return `${lines.join('\n')}\n`;
+}
+
+/**
+ * @param {import('./rng.js').Rng} rng
+ * @returns {string}
+ */
+function iniText(rng) {
+  const lines = [];
+  const size = rng.between(1, 8);
+  for (let i = 0; i < size; i += 1) {
+    lines.push(rng.weighted([
+      [40, () => `${key(rng)}=${scalarString(rng, 20)}`],
+      [15, () => `[${key(rng)}]`],
+      [10, () => `${key(rng)} = ${scalarString(rng, 20)}`],
+      [10, () => `; ${scalarString(rng, 20)}`],
+      [10, () => `${key(rng)}`],
+      [8, () => `[${'['.repeat(rng.between(0, 10))}${key(rng)}`],
+      [7, () => scalarString(rng, 30)],
+    ])());
+  }
+  return `${lines.join('\n')}\n`;
+}
+
+/**
+ * @param {import('./rng.js').Rng} rng
+ * @returns {string}
+ */
+function envText(rng) {
+  const lines = [];
+  const size = rng.between(1, 8);
+  for (let i = 0; i < size; i += 1) {
+    lines.push(rng.weighted([
+      [40, () => `${rng.chars('ABCDEFGHIJ_', rng.between(1, 10))}=${scalarString(rng, 24)}`],
+      [15, () => `export ${rng.chars('ABCDEFG_', rng.between(1, 8))}="${scalarString(rng, 24).replaceAll('"', '')}"`],
+      [10, () => `${rng.chars('ABCDEF', 4)}='${scalarString(rng, 24).replaceAll("'", '')}'`],
+      [10, () => `# ${scalarString(rng, 20)}`],
+      [10, () => `${rng.chars('ABCDEF', 4)}=$\{${rng.chars('ABCDEF', 4)}}`],
+      [8, () => `${rng.chars('ABCDEF', 4)}="${scalarString(rng, 10)}\n${scalarString(rng, 10)}"`],
+      [7, () => scalarString(rng, 30)],
+    ])());
+  }
+  return `${lines.join('\n')}\n`;
+}
+
+/**
+ * Damage a document: byte flips, truncation, duplication, and injected control
+ * characters. This is the half of the corpus the parser is expected to reject —
+ * cleanly, with an `Error`, and without hanging.
+ * @param {import('./rng.js').Rng} rng
+ * @param {string} text
+ * @returns {string}
+ */
+export function mutate(rng, text) {
+  if (text.length === 0) return rng.pick(NASTY_CHARS);
+  let out = text;
+  const rounds = rng.between(1, 4);
+  for (let i = 0; i < rounds; i += 1) {
+    const at = rng.int(out.length);
+    out = rng.weighted([
+      [25, () => out.slice(0, at) + rng.pick(NASTY_CHARS) + out.slice(at)],
+      [20, () => out.slice(0, at)],
+      [15, () => out.slice(0, at) + out.slice(at + rng.between(1, 8))],
+      [15, () => out.slice(0, at) + out.slice(at, at + rng.between(1, 40)).repeat(rng.between(2, 12)) + out.slice(at)],
+      [10, () => out.slice(0, at) + rng.pick(['{', '}', '[', ']', '"', ':', '- ', '*', '&', '---']) + out.slice(at)],
+      [10, () => `${out}\n${out.slice(0, rng.between(0, 80))}`],
+      [5, () => out.toUpperCase()],
+    ])();
+  }
+  return out;
+}
+
+/**
+ * Strings built to be worst cases for a backtracking regex engine: long runs
+ * with a failing tail, near-miss prefixes of the markers Flecto's own detectors
+ * look for, and long unbroken scheme-like runs.
+ * @param {import('./rng.js').Rng} rng
+ * @returns {string}
+ */
+export function adversarialValue(rng) {
+  const length = rng.weighted([
+    [50, () => rng.between(0, 200)],
+    [30, () => rng.between(200, 4000)],
+    [20, () => rng.between(4000, 60000)],
+  ])();
+  return rng.weighted([
+    [20, () => rng.chars('aA1+/=', length)],
+    [15, () => `-----BEGIN ${rng.pick(['RSA PRIVATE KEY', 'PRIVATE KEY', 'OPENSSH PRIVATE KEY', 'X'])}-----${'A'.repeat(length)}`],
+    [12, () => `${'a'.repeat(length)}://user:pass@host`],
+    [12, () => `${rng.chars('abcdefghij+.-', length)}:${rng.chars('/', rng.between(0, 4))}`],
+    [10, () => `${'ENC[AES256_GCM,data:'.slice(0, rng.between(1, 20))}${'A'.repeat(length)}`],
+    [8, () => `age1${'q'.repeat(length)}`],
+    [8, () => `${'-'.repeat(length)}BEGIN`],
+    [8, () => rng.chars('0123456789abcdef', length)],
+    [7, () => scalarString(rng, Math.min(length, 2000))],
+  ])();
+}
+
+/**
+ * Regex sources for the pack surface.
+ *
+ * **At most one unbounded quantifier per source, and never a nested one.** A
+ * pack author can already hang the process — `(a+)+$` exponentially, and two
+ * adjacent `+`/`*` runs polynomially — and SECURITY.md documents that as an
+ * accepted limitation of running a third-party pack, since Node has no regex
+ * timeout. A fuzzer that rediscovers it on every run reports the known
+ * limitation, not a finding, and a target that always fails is a target nobody
+ * reads.
+ *
+ * What is worth fuzzing is everything around it: that an arbitrary source either
+ * compiles or is refused with a clean error, that flags and named groups do not
+ * break the loader, and that evaluation never crashes or pollutes. Widen this
+ * grammar only alongside a decision about a timeout-capable engine.
+ * @param {import('./rng.js').Rng} rng
+ * @returns {string}
+ */
+export function regexSource(rng) {
+  const atom = () => rng.weighted([
+    [30, () => rng.chars('abc019._-', rng.between(1, 6))],
+    [10, () => `[${rng.chars('a-z0-9_^\\\\', rng.between(1, 6))}]`],
+    [10, () => rng.pick(['\\d', '\\w', '\\s', '\\S', '.', '\\.', '\\b'])],
+    [8, () => `(${rng.chars('abc', rng.between(1, 4))})`],
+    [8, () => `(?:${rng.chars('abc', rng.between(1, 4))})`],
+    [6, () => rng.pick(['^', '$', '|', '\\', '(', ')', '[', '{', '}', '*', '+', '?'])],
+    [4, () => `\\u{${rng.chars('0123456789abcdef', rng.between(1, 6))}}`],
+    [4, () => `(?<${rng.chars('abc', 3)}>x)`],
+  ])();
+  let unbounded = 0;
+  const quantifier = () => rng.weighted([
+    [50, () => ''],
+    [15, () => (unbounded++ === 0 ? '*' : `{0,${rng.between(0, 12)}}`)],
+    [15, () => (unbounded++ === 0 ? '+' : `{1,${rng.between(1, 12)}}`)],
+    [10, () => '?'],
+    [10, () => `{${rng.between(0, 40)},${rng.between(0, 40)}}`],
+  ])();
+
+  let source = '';
+  const parts = rng.between(1, 6);
+  for (let i = 0; i < parts; i += 1) source += atom() + quantifier();
+  return source;
+}
+
+/**
+ * A policy pack, valid-ish or not. Pack JSON is attacker-controlled in the
+ * threat model: a pull request can add `policies/<id>.json` and select it from
+ * `.flectorc`.
+ * @param {import('./rng.js').Rng} rng
+ * @returns {unknown}
+ */
+export function policyPack(rng) {
+  const rule = () => {
+    /** @type {Record<string, unknown>} */
+    const out = {
+      id: rng.weighted([[70, () => rng.chars('abcdefg-', rng.between(1, 12))], [30, () => leaf(rng)]])(),
+      severity: rng.weighted([[70, () => rng.pick(['info', 'warn', 'error'])], [30, () => leaf(rng)]])(),
+      message: rng.weighted([
+        [60, () => `${scalarString(rng, 20)} {path} {before} {after}`],
+        [40, () => leaf(rng)],
+      ])(),
+    };
+    if (rng.bool(0.85)) {
+      out.match = {
+        ...(rng.bool(0.7) ? { path: regexSource(rng) } : {}),
+        ...(rng.bool(0.2) ? { pathFlags: rng.pick(['i', 'g', 'm', 'u', 'zz', '']) } : {}),
+        ...(rng.bool(0.2) ? { pathPrefix: scalarString(rng, 12) } : {}),
+        // A field no pack schema allows: loading must refuse it, not ignore it.
+        ...(rng.bool(0.1) ? { [key(rng)]: leaf(rng) } : {}),
+      };
+    }
+    if (rng.bool(0.4)) out.afterMatches = regexSource(rng);
+    if (rng.bool(0.2)) out.afterAnyMatches = regexSource(rng);
+    if (rng.bool(0.2)) out.numericJump = rng.weighted([[1, () => rng.between(1, 10)], [1, () => leaf(rng)]])();
+    if (rng.bool(0.15)) out.allOf = [{ match: { path: regexSource(rng) } }];
+    if (rng.bool(0.1)) out.anyOf = [{ afterMatches: regexSource(rng) }];
+    return out;
+  };
+
+  return rng.weighted([
+    [55, () => ({
+      id: rng.chars('abcdef-', rng.between(1, 10)),
+      ...(rng.bool(0.3) ? { expandSubtrees: rng.bool() } : {}),
+      rules: Array.from({ length: rng.between(0, 8) }, rule),
+    })],
+    [15, () => ({ rules: rng.weighted([[1, () => leaf(rng)], [1, () => ({})], [1, () => [leaf(rng)]]])() })],
+    [10, () => deepTree(rng, rng.between(20, 400))],
+    [10, () => leaf(rng)],
+    [10, () => ({
+      id: rng.chars('abc', 4),
+      rules: Array.from({ length: rng.between(60, 300) }, rule),
+    })],
+  ])();
+}
+
+/**
+ * Change events, the shape `expandChangeSubtrees` and `evaluatePack` consume.
+ * @param {import('./rng.js').Rng} rng
+ * @returns {unknown[]}
+ */
+export function changeEvents(rng) {
+  return Array.from({ length: rng.between(0, 12) }, () => {
+    const type = rng.weighted([
+      [35, () => 'added'],
+      [35, () => 'removed'],
+      [25, () => 'changed'],
+      [5, () => scalarString(rng, 8)],
+    ])();
+    /** @type {Record<string, unknown>} */
+    const event = {
+      type,
+      path: rng.weighted([
+        [60, () => Array.from({ length: rng.between(1, 5) }, () => key(rng)).join('.')],
+        [20, () => scalarString(rng, 30)],
+        [20, () => leaf(rng)],
+      ])(),
+    };
+    if (type !== 'added') event.before = tree(rng, rng.between(0, 3));
+    if (type !== 'removed') event.after = tree(rng, rng.between(0, 3));
+    return event;
+  });
+}
