@@ -205,3 +205,85 @@ describe('denial-of-service hardening (#121)', () => {
     assert.equal(Object.keys(parsed).length, 5000);
   });
 });
+
+describe('prototype pollution from config file contents (#121)', () => {
+  // The INI parser nested a section's keys under out[section]. A section named
+  // "__proto__" resolved that to Object.prototype -- which passes isPlainObject,
+  // because its own prototype is null -- and every key in the section was
+  // written onto the prototype of every object in the process.
+  //
+  // In Flecto's threat model that is a pull request adding one .ini file to a
+  // repository whose CI runs `flecto ci`.
+
+  test('a [__proto__] section is ordinary data, not a write to Object.prototype', async () => {
+    const { parseIni, parseContent } = await import('../src/parser.js');
+
+    const parsed = parseIni('[__proto__]\nisAdmin=true\ntoString=x\n');
+
+    assert.equal(({}).isAdmin, undefined, 'Object.prototype must be untouched');
+    assert.equal(typeof ({}).toString, 'function', 'Object.prototype.toString must survive');
+    // The section is still visible as data: dropping it silently would hide a
+    // change from the diff, which is its own kind of wrong.
+    assert.ok(Object.hasOwn(parsed, '__proto__'));
+    assert.deepEqual(parsed['__proto__'], { isAdmin: 'true', toString: 'x' });
+    assert.equal(Object.getPrototypeOf(parsed), Object.prototype);
+
+    const viaParseContent = parseContent('app.ini', '[constructor]\nprototype=1\n');
+    assert.equal(({}).prototype, undefined);
+    assert.ok(Object.hasOwn(viaParseContent, 'constructor'));
+  });
+
+  test('ordinary INI sections still nest, accumulate, and take root keys', async () => {
+    const { parseIni } = await import('../src/parser.js');
+    const parsed = parseIni(
+      'root=top\n[db]\nhost=localhost\n[db]\nport=5432\n[cache]\nttl="60"\n',
+    );
+    assert.deepEqual(parsed, {
+      root: 'top',
+      db: { host: 'localhost', port: '5432' },
+      cache: { ttl: '60' },
+    });
+  });
+
+  test('a hostile .ini cannot disable a policy rule on another file in the same run', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'flecto-sec-proto-'));
+    try {
+      // severityRemap[rule.id] is a plain-object lookup, so a polluted prototype
+      // answered "off" and the rule stopped firing -- for every file in the run,
+      // not just the attacker's. The gate went from red to green.
+      writeFileSync(
+        join(dir, 'a.ini'),
+        '[__proto__]\ndangerous-toggle-enabled=off\nsecret-value-detected=off\n',
+        'utf8',
+      );
+      writeFileSync(join(dir, 'b.yaml'), 'debug: true\n', 'utf8');
+      writeFileSync(join(dir, 'snap.json'), JSON.stringify({ state: { debug: false } }), 'utf8');
+
+      const run = spawnSync(
+        process.execPath,
+        [rootIndex, 'ci', 'a.ini', 'b.yaml', '--snapshot-ref', 'snap.json', '--fail-on', 'error'],
+        { cwd: dir, encoding: 'utf8' },
+      );
+
+      assert.equal(run.status, 1, `the gate must still fail:\n${run.stdout}\n${run.stderr}`);
+      assert.match(run.stdout, /dangerous-toggle-enabled/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a __proto__ key survives secret masking instead of vanishing from the output', async () => {
+    const { parseContent } = await import('../src/parser.js');
+    const { maskSensitiveValue } = await import('../src/renderer.js');
+
+    const tree = parseContent('c.json', '{"__proto__": {"api_key": "AKIAIOSFODNN7EXAMPLE"}, "ok": 1}');
+    const masked = maskSensitiveValue(tree, '');
+
+    // Assigning it would have moved the subtree onto the result's prototype: the
+    // value was masked, but the key disappeared from what the user is shown.
+    assert.ok(Object.hasOwn(masked, '__proto__'));
+    assert.equal(Object.getPrototypeOf(masked), Object.prototype);
+    assert.notEqual(masked['__proto__'].api_key, 'AKIAIOSFODNN7EXAMPLE');
+    assert.equal(({}).api_key, undefined);
+  });
+});
