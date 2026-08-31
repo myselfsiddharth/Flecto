@@ -7,6 +7,20 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ## [Unreleased]
 
+### Security
+
+- **Assessed 2.x against GHSA-wq8m-fc3q-8m5x and corrected the advisory range**
+  ([#125]). The advisory's own proof-of-concept was run against a clean install
+  of every released version: 2.0.0, 2.1.0, and 3.0.0 execute an rc-declared
+  plugin; 1.0.x predate the `plugins` option, and 3.0.1 is fixed. So the true
+  affected range is `>= 2.0.0, <= 3.0.0`, not the `<= 3.0.0` the draft advisory
+  recorded — which wrongly swept in 1.x. The 2.x backport is merged on
+  `release/2.x` (2.1.1) and blocks both the exploit and its path-traversal
+  variant, but **2.1.1 was never published**, so the highest installable 2.x is
+  the still-vulnerable 2.1.0. `SECURITY.md` now says so, and the full matrix and
+  publish recommendation are in
+  [`docs/ghsa-wq8m-fc3q-8m5x-2x.md`](docs/ghsa-wq8m-fc3q-8m5x-2x.md).
+
 ### Added
 
 - **Inline suppressions in JSON** ([#158]). `.json` and `.jsonc` are parsed as
@@ -962,6 +976,7 @@ fixed — those runs were never actually gated — but the failure is new.
 [#149]: https://github.com/myselfsiddharth/Flecto/issues/149
 [#158]: https://github.com/myselfsiddharth/Flecto/issues/158
 [#159]: https://github.com/myselfsiddharth/Flecto/issues/159
+[#125]: https://github.com/myselfsiddharth/Flecto/issues/125
 [#141]: https://github.com/myselfsiddharth/Flecto/issues/141
 [Keep a Changelog]: https://keepachangelog.com/en/1.1.0/
 [#138]: https://github.com/myselfsiddharth/Flecto/issues/138
