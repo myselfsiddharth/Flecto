@@ -292,14 +292,14 @@ function mapStrings(value, mapString) {
 
   if (isPlainObject(value)) {
     let changed = false;
-    /** @type {Record<string, unknown>} */
-    const out = {};
-    for (const [key, item] of Object.entries(value)) {
+    // Rebuilt with fromEntries, not `out[key] = next`: a key literally named
+    // "__proto__" would run the prototype setter and drop the subtree.
+    const entries = Object.entries(value).map(([key, item]) => {
       const next = mapStrings(item, mapString);
       if (next !== item) changed = true;
-      out[key] = next;
-    }
-    return changed ? out : value;
+      return [key, next];
+    });
+    return changed ? Object.fromEntries(entries) : value;
   }
 
   return value;
@@ -385,14 +385,12 @@ function normalizeRecipientGroup(group, value) {
  */
 function normalizeSopsBlock(block) {
   let changed = false;
-  /** @type {Record<string, unknown>} */
-  const out = {};
-  for (const [key, value] of Object.entries(block)) {
+  const entries = Object.entries(block).map(([key, value]) => {
     const next = RECIPIENT_GROUPS.includes(key) ? normalizeRecipientGroup(key, value) : value;
     if (next !== value) changed = true;
-    out[key] = next;
-  }
-  return changed ? out : block;
+    return [key, next];
+  });
+  return changed ? Object.fromEntries(entries) : block;
 }
 
 /**
@@ -436,7 +434,12 @@ export function normalizeEncrypted(tree, documentKeys = []) {
     const normalized = normalizeSopsOwner(doc);
     if (normalized === doc) continue;
     if (out === redacted) out = { ...redacted };
-    out[key] = normalized;
+    Object.defineProperty(out, key, {
+      value: normalized,
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
   }
   return out;
 }

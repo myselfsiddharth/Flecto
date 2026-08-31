@@ -32,23 +32,62 @@ export function isIniFilename(filepath) {
 }
 
 /**
+ * Define an own data property, whatever the key is called.
+ *
+ * `target[key] = value` is not a property write when `key` is `"__proto__"`: it
+ * runs the `Object.prototype.__proto__` setter instead, which either reassigns
+ * the object's prototype or silently discards the value. `defineProperty` is the
+ * operation that was actually meant every time a parser writes a key it read out
+ * of a file, and it treats every key name the same.
+ * @param {Record<string, unknown>} target
+ * @param {string} key
+ * @param {unknown} value
+ */
+function defineOwn(target, key, value) {
+  Object.defineProperty(target, key, {
+    value,
+    writable: true,
+    enumerable: true,
+    configurable: true,
+  });
+}
+
+/**
  * Minimal INI parser: [section] + key=value.
  * Root keys are top-level; sectioned keys nest under the section name.
+ *
+ * Section and key names come out of the file, which in Flecto's threat model
+ * means they come out of a pull request. They are read and written as **own
+ * properties only**: `out[section]` on a section named `__proto__` resolves to
+ * `Object.prototype` — which passes `isPlainObject`, since its own prototype is
+ * `null` — and every key in that section would then be written onto the
+ * prototype of every object in the process. `Object.hasOwn` for the lookup and
+ * `defineOwn` for the write make a reserved name an ordinary key holding
+ * ordinary data, which is what a config file's `[__proto__]` section is.
  * @param {string} raw
  * @returns {Record<string, unknown>}
  */
 export function parseIni(raw) {
   /** @type {Record<string, unknown>} */
   const out = {};
-  let section = null;
+  /** @type {Record<string, unknown>} */
+  let bucket = out;
 
   for (const line of String(raw).split(/\r?\n/)) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith(';') || trimmed.startsWith('#')) continue;
     const sectionMatch = trimmed.match(/^\[([^\]]+)\]$/);
     if (sectionMatch) {
-      section = sectionMatch[1].trim();
-      if (!isPlainObject(out[section])) out[section] = {};
+      const section = sectionMatch[1].trim();
+      const existing = Object.hasOwn(out, section) ? out[section] : undefined;
+      if (isPlainObject(existing)) {
+        bucket = /** @type {Record<string, unknown>} */ (existing);
+      } else {
+        // A repeated section keeps accumulating; a section colliding with a
+        // root scalar replaces it, exactly as before.
+        bucket = {};
+        defineOwn(out, section, bucket);
+      }
       continue;
     }
     const eq = trimmed.indexOf('=');
@@ -61,13 +100,7 @@ export function parseIni(raw) {
     ) {
       value = value.slice(1, -1);
     }
-    if (section == null) {
-      out[key] = value;
-    } else {
-      /** @type {Record<string, string>} */
-      const bucket = /** @type {any} */ (out[section]);
-      bucket[key] = value;
-    }
+    defineOwn(bucket, key, value);
   }
   return out;
 }

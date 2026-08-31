@@ -1,0 +1,8 @@
+{
+  "target": "parse-ini",
+  "note": "A [__proto__] section resolved out[section] to Object.prototype (whose own prototype is null, so it passed isPlainObject) and wrote every key in the section onto it. Fixed by reading with Object.hasOwn and writing with defineProperty.",
+  "input": {
+    "filename": "app.ini",
+    "text": "[__proto__]\ntoString=x\nisAdmin=true\ndangerous-toggle-enabled=off\n"
+  }
+}
