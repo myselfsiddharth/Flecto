@@ -14,6 +14,8 @@
  * Not run directly. `node test/fuzz/run.js` drives it.
  */
 
+import { writeSync } from 'fs';
+
 import { makeRng, caseSeed } from './rng.js';
 import { TARGETS_BY_ID, FuzzViolation } from './targets.js';
 
@@ -39,15 +41,29 @@ function parseArgs(argv) {
 }
 
 /**
- * One NDJSON line, flushed synchronously. Synchronous matters: the heartbeat has
- * to be on the wire before the case that might hang starts running.
+ * One NDJSON line, written straight to fd 1.
+ *
+ * `process.stdout.write` is **asynchronous when stdout is a pipe**, which is
+ * exactly what it is here — so a heartbeat could still be sitting in the stream's
+ * queue when the case it announces blocks the event loop forever, and the parent
+ * would then blame the previous case for the hang. `writeSync` puts the bytes on
+ * the wire before the case starts, which is the whole contract this depends on.
+ *
+ * EAGAIN is possible on a non-blocking pipe when the parent has not drained yet;
+ * retrying is correct because there is nothing else this process could usefully
+ * do with the bytes.
  * @param {Record<string, unknown>} record
  */
 function emit(record) {
-  try {
-    process.stdout.write(`${JSON.stringify(record)}\n`);
-  } catch {
-    // A closed pipe means the parent gave up on us; there is nothing to say.
+  const line = `${JSON.stringify(record)}\n`;
+  for (let attempt = 0; attempt < 1000; attempt += 1) {
+    try {
+      writeSync(1, line);
+      return;
+    } catch (err) {
+      // EPIPE means the parent gave up on us; there is nothing left to say.
+      if (err?.code !== 'EAGAIN') return;
+    }
   }
 }
 

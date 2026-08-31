@@ -68,10 +68,20 @@ jobs:
       # The seed is derived from the run id when none is given, so the log always
       # records a value that reproduces the run: npm run fuzz -- --seed <n>
       - name: Fuzz
+        # Inputs reach the script through the environment, never interpolated
+        # into the shell text. workflow_dispatch needs write access, so this is
+        # not the likeliest injection path in the repository -- but a security
+        # tool's own workflows should not model the pattern.
+        env:
+          INPUT_SEED: ${{ inputs.seed }}
+          INPUT_TIME: ${{ inputs.time }}
+          RUN_ID: ${{ github.run_id }}
+          TARGET: ${{ matrix.target }}
         run: |
-          SEED="${{ inputs.seed }}"
-          if [ -z "$SEED" ]; then SEED=$(( ${{ github.run_id }} % 4294967295 )); fi
-          npm run fuzz -- --target "${{ matrix.target }}" --seed "$SEED" --time "${{ inputs.time || 300 }}"
+          set -euo pipefail
+          SEED="${INPUT_SEED:-}"
+          if [ -z "$SEED" ]; then SEED=$(( RUN_ID % 4294967295 )); fi
+          npm run fuzz -- --target "$TARGET" --seed "$SEED" --time "${INPUT_TIME:-300}"
 
       # Findings are minimized inputs, which are the whole value of a fuzz run:
       # keep them even though the step above failed.
