@@ -52,7 +52,11 @@ If you omit `files`, Flecto uses the `files` / `include` patterns from `.flector
 | `--allow-empty` | off | Let `--snapshot` succeed when nothing was written |
 
 **Exit codes:** watch mode runs until interrupted (`0` on clean shutdown).
-With `--diff`: `0` when the file matches the baseline, `1` when it differs.
+With `--diff`: `0` when the file matches the baseline, `1` when it differs, and
+`1` with an error when **no** target had a saved snapshot — exiting `0` there
+would report "no drift" from a comparison that never happened. Targets that
+individually lack a snapshot are warned about and counted, and the rest still
+diff.
 
 See [configuration](configuration.md) for `--ignore` pattern syntax and array
 identity behavior, and [webhooks](webhooks.md) for delivery details.
@@ -100,6 +104,12 @@ or when the run errored.
 Two things fail closed by design: an unresolved `--snapshot-ref` is an error
 rather than a silently empty baseline, and a run where every target is missing or
 unsupported exits non-zero unless you pass `--allow-empty`.
+
+With no `--snapshot-ref`, the baseline is the local snapshot in
+`.flecto-snapshots/`, which is not committed and does not survive an ephemeral
+runner. A file with no saved snapshot is an error naming both ways out — save one
+with `flecto watch <file> --snapshot`, or diff against a committed revision with
+`--snapshot-ref <git-ref>` — rather than a diff against nothing.
 
 `--format pr-comment` prints a markdown risk summary to stdout. It posts that
 summary as a single sticky pull request comment only when `--pr-comment-post` is
@@ -225,6 +235,11 @@ Change counts use the same ignore paths, array identity, and order settings as
 `flecto watch --diff`. This command is entirely local — it reads snapshot files
 and sends nothing anywhere.
 
+**A snapshot with nothing before it reads as `baseline`, not `0 changes`.** The
+first snapshot of a file was never compared against anything, so a change count
+for it would be a result nobody computed. When every snapshot shown is a
+baseline, the command says so on stderr: *no history is not no drift*.
+
 ---
 
 ## `flecto report [files...]`
@@ -270,6 +285,14 @@ could leak from a report, so pass `--mask-secrets` (or set `maskSecrets` in a
 profile) whenever you plan to share one: masking uses the same key-name and
 value-pattern detection as everywhere else, and it also redacts policy messages
 that interpolate values.
+
+**Snapshot history is local to the working directory.** `.flecto-snapshots/` is
+not committed and does not survive an ephemeral CI runner, so a pipeline that
+runs `flecto report` without first saving snapshots has nothing to report on. A
+report whose snapshots are all first-of-their-file says so in a banner and in a
+**Comparisons** tile reading `0` — an empty report is *no history*, never an
+all-clear. Individual first snapshots are labelled `baseline` rather than
+`0 changes`, for the same reason.
 
 **Exit codes:** `0` when a report was written, `1` when no snapshots matched —
 the same message `flecto history` gives, and no file is written.

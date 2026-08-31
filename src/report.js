@@ -245,6 +245,13 @@ function snapshotCard(snapshot, index) {
   } else if (count > 0) {
     // changeCount without events: the caller summarized but did not diff.
     body.push(`<p class="empty">${escapeHtml(plural(count, 'change'))} recorded.</p>`);
+  } else if (!previous) {
+    // Nothing was compared here, so "no changes" would be a claim this card
+    // cannot support (#141). Say what actually happened instead.
+    body.push(
+      '<p class="empty">First snapshot of this file — there is no earlier state to'
+      + ' compare it against. That is <strong>no history</strong>, not no drift.</p>',
+    );
   } else {
     body.push('<p class="empty">No semantic changes from the previous snapshot.</p>');
   }
@@ -257,11 +264,14 @@ function snapshotCard(snapshot, index) {
   }
 
   const countClass = count > 0 ? 'count count-active' : 'count';
+  // A first snapshot is labelled "baseline" rather than "0 changes": the count
+  // is only meaningful once there is something on the other side of it.
+  const countLabel = previous ? plural(count, 'change') : 'baseline';
   return [
     `<details class="card" open id="snapshot-${escapeHtml(String(index))}">`,
     '<summary>',
     `<time class="stamp" datetime="${escapeHtml(time.iso)}">${escapeHtml(time.label)}</time>`,
-    `<span class="${countClass}">${escapeHtml(plural(count, 'change'))}</span>`,
+    `<span class="${countClass}">${escapeHtml(countLabel)}</span>`,
     baselineNote,
     '</summary>',
     `<div class="card-body">${body.join('')}</div>`,
@@ -442,6 +452,14 @@ tr:last-child td { border-bottom: 0; }
 .sev-warn { color: var(--warn); }
 .sev-info { color: var(--info); }
 .empty { color: var(--muted); margin: 8px 0; }
+.banner {
+  border: 1px solid var(--warn);
+  border-left-width: 4px;
+  border-radius: 6px;
+  background: var(--panel);
+  padding: 10px 14px;
+  margin: 0 0 24px;
+}
 .no-matches { color: var(--muted); margin: 16px 0; }
 footer { margin-top: 40px; padding-top: 14px; border-top: 1px solid var(--border); color: var(--muted); font-size: 0.82rem; }
 .hidden { display: none !important; }
@@ -513,8 +531,13 @@ export function renderReportHtml(data = {}) {
   /** @type {Array<{ file: string, snapshot: ReportSnapshot, finding: import('./policy.js').PolicyFinding }>} */
   const allFindings = [];
   let totalChanges = 0;
+  // How many of these snapshots actually had an earlier one to be compared
+  // against. Zero means the report compared nothing, which is a different
+  // statement from "compared everything and found nothing" (#141).
+  let comparisons = 0;
   for (const snapshot of snapshots) {
     const changes = changesOf(snapshot);
+    if (snapshot.previousCreatedAt) comparisons += 1;
     // Prefer the events actually carried; fall back to the count for callers
     // that summarized without diffing.
     totalChanges += Array.isArray(snapshot.changes)
@@ -556,11 +579,25 @@ export function renderReportHtml(data = {}) {
     '<section class="stats">',
     statTile('Snapshots', String(snapshots.length)),
     statTile('Files', String(groups.length)),
+    // "Changes" alone reads as an all-clear at 0 whether or not anything was
+    // ever compared, so the number of comparisons behind it sits next to it.
+    statTile('Comparisons', String(comparisons)),
     statTile('Changes', String(totalChanges)),
     statTile('Policy errors', String(severityCounts.error), 'error'),
     statTile('Policy warnings', String(severityCounts.warn), 'warn'),
     '</section>',
   ].join('');
+
+  // The failure mode this guards against: a CI job takes its first snapshot and
+  // renders a report from it, and the page reads as "nothing drifted" when the
+  // truth is that there was no history to look at. Say so above the fold.
+  const noHistoryBanner = comparisons === 0
+    ? '<p class="banner">Nothing in this report was compared. Every snapshot here is'
+      + ' the first one of its file, so there is no earlier state to measure drift'
+      + ' against — this is <strong>no history</strong>, not <strong>no drift</strong>.'
+      + ' Snapshot history is local to the working directory, so a fresh CI runner'
+      + ' starts with none of it.</p>'
+    : '';
 
   const findingsSection = allFindings.length === 0
     ? '<h2>Policy findings</h2><p class="empty">No policy findings across these snapshots.</p>'
@@ -603,6 +640,7 @@ export function renderReportHtml(data = {}) {
   return htmlDocument([
     head,
     stats,
+    noHistoryBanner,
     findingsSection,
     `<h2>Snapshot timeline (${escapeHtml(plural(snapshots.length, 'snapshot'))})</h2>`,
     controls,
