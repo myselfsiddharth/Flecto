@@ -6,6 +6,17 @@ safe schema, and a critical RCE shipped anyway ([GHSA-wq8m-fc3q-8m5x], fixed in
 been examined — findings *and* the "checked, solid" list — so the unexamined
 surface stays visible instead of assumed safe.
 
+## Related: is 2.x affected by GHSA-wq8m-fc3q-8m5x?
+
+Yes, from its first release — confirmed with the advisory's own proof-of-concept
+against a clean install of every published version ([#125]). 2.0.0, 2.1.0, and
+3.0.0 execute the rc-declared plugin; 1.0.x predate the `plugins` option and 3.0.1
+refuses it. The backport is merged on `release/2.x` (2.1.1) and effective, but was
+never published — the highest installable 2.x is the still-vulnerable 2.1.0. The
+full test matrix, the advisory range correction (`>= 2.0.0, <= 3.0.0`), and the
+publish recommendation are in
+[`ghsa-wq8m-fc3q-8m5x-2x.md`](ghsa-wq8m-fc3q-8m5x-2x.md).
+
 ## Threat model
 
 Flecto runs in CI with repository access and often a `GITHUB_TOKEN`. The primary
@@ -119,4 +130,5 @@ choose. It narrows where to look; it does not replace looking.
 
 [GHSA-wq8m-fc3q-8m5x]: https://github.com/myselfsiddharth/Flecto/security/advisories/GHSA-wq8m-fc3q-8m5x
 [#121]: https://github.com/myselfsiddharth/Flecto/issues/121
+[#125]: https://github.com/myselfsiddharth/Flecto/issues/125
 [#149]: https://github.com/myselfsiddharth/Flecto/issues/149
