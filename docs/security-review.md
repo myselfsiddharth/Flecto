@@ -54,6 +54,41 @@ tiny crafted file hung. **Fixed** with a node budget (5,000,000, far above any
 real config) that fails fast with a clear error. Regression test in
 `test/security.test.js`.
 
+### Symlinked targets read files outside the repository — fixed
+
+Recorded here previously as unhardened with "limited" impact, on the reasoning
+that an attacker who controls the repo can already commit content. **That reads
+the vector backwards.** The attacker does not control the file the link points
+*at*, and that is the whole point of following it: on a CI runner, `~/.npmrc`,
+`~/.docker/config.json`, `~/.git-credentials`, and `~/.aws/credentials` (which
+is INI, and parses perfectly) are all outside the repository and all readable by
+the job.
+
+Confirmed: a pull request adding `leaked.yaml` as a symlink to a file outside
+the checkout had that file parsed and its **values** emitted — in the JSON
+envelope, in the job log, and in the `--format pr-comment` markdown, which
+`--pr-comment-post` writes to a comment on the pull request. Opening a pull
+request is the entire attack.
+
+**Fixed** with a containment check on every resolved target, and on
+`.flecto-snapshots/` before a snapshot is written. The rule is about *escape*,
+not location, so the legitimate cases keep working:
+
+| Given | Resolves to | Result |
+|---|---|---|
+| inside the project | inside | allowed — in-repo links still work |
+| inside the project | outside | **refused** — the shape a pull request can author |
+| outside the project | anywhere | allowed — `flecto compare /a.yaml /b.yaml` is operator intent |
+
+`FLECTO_ALLOW_SYMLINK_TARGETS=1` opts out for a checkout that genuinely links
+config in from a sibling directory. It refuses loudly rather than skipping the
+file, for the same reason rc-declared plugins do: a target that stops being
+scanned without saying so weakens a gate the operator believes is in place.
+
+Still not covered, and worth its own look: `--output` (`flecto report`) and
+`--baseline` are *write* paths, and a symlinked destination redirects the write
+rather than a read.
+
 ### Prototype pollution in the INI parser — fixed
 
 `parseIni` nested a section's keys under `out[section]`. A section named
@@ -125,9 +160,6 @@ minimized input in `test/fixtures/fuzz/parse-ini-proto-section.json`.
   timeout, so a full fix means a timeout-capable engine (e.g. `re2`) — a
   dependency decision left to the maintainer. Documented as a known limitation in
   [`SECURITY.md`](../SECURITY.md).
-- **Symlinked targets.** A glob can follow a symlink out of the repo; the impact
-  is limited (an attacker who controls the repo can already commit content), but
-  it has not been hardened.
 
 ## Fuzzing the same boundary
 
