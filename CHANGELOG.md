@@ -257,6 +257,32 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ### Fixed
 
+- **"No snapshot history" no longer renders as "no drift"** ([#141]).
+  `.flecto-snapshots/` lives in the working directory and is not committed, so on
+  an ephemeral CI runner it is empty on every run — and the drift commands read
+  that emptiness as an all-clear. For a tool whose job is making risk visible,
+  rendering a clean result from a missing input is the worst failure available.
+
+  - `flecto watch --diff` exited **0** when no target had a snapshot: nothing
+    was compared, and the caller was told the files match their baseline. It now
+    errors, and a run where only *some* targets lack a snapshot reports how many
+    were skipped instead of quietly diffing the rest.
+  - `flecto history` printed `0 changes` for the first snapshot of a file — a
+    result that was never computed. First snapshots now read as
+    `baseline (no earlier snapshot to compare against)`, and a listing with no
+    comparisons in it says so.
+  - `flecto report` said "No semantic changes from the previous snapshot" on
+    cards that had no previous snapshot. Those now name themselves as first
+    snapshots, the summary gains a **Comparisons** tile beside **Changes**, and a
+    report in which nothing was compared carries a banner saying so above the
+    fold.
+  - `flecto ci` already failed closed on a missing baseline, but did it with a
+    raw `ENOENT` on a hashed filename. The error now names both ways out —
+    save a snapshot, or pass `--snapshot-ref <git-ref>`.
+
+  The shared snapshot store the issue also asks for is not part of this change;
+  what is fixed here is every consumer's answer when the history is empty.
+
 - **A `flecto-ignore-next-line` that resolves to nothing now says so** ([#158]).
   A directive on an array element, in a multi-document YAML file, or in a file
   type with no comment syntax at all was accepted, resolved to no path, matched
@@ -951,6 +977,7 @@ fixed — those runs were never actually gated — but the failure is new.
 [#158]: https://github.com/myselfsiddharth/Flecto/issues/158
 [#159]: https://github.com/myselfsiddharth/Flecto/issues/159
 [#125]: https://github.com/myselfsiddharth/Flecto/issues/125
+[#141]: https://github.com/myselfsiddharth/Flecto/issues/141
 [Keep a Changelog]: https://keepachangelog.com/en/1.1.0/
 [#138]: https://github.com/myselfsiddharth/Flecto/issues/138
 [Semantic Versioning]: https://semver.org/spec/v2.0.0.html

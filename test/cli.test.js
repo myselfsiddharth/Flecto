@@ -457,7 +457,7 @@ test('history summarizes local snapshot drift', () => {
     assert.equal(history.status, 0);
     assert.match(history.stdout, /Local snapshot history \(2 snapshots\)/);
     assert.match(history.stdout, /config\.json — 1 change/);
-    assert.match(history.stdout, /config\.json — 0 changes/);
+    assert.match(history.stdout, /config\.json — baseline \(no earlier snapshot to compare against\)/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -531,8 +531,8 @@ test('history retains legacy snapshots without timestamped history', () => {
     );
 
     assert.equal(history.status, 0);
-    assert.match(history.stdout, /legacy\.json — 0 changes/);
-    assert.match(history.stdout, /current\.json — 0 changes/);
+    assert.match(history.stdout, /legacy\.json — baseline \(no earlier snapshot to compare against\)/);
+    assert.match(history.stdout, /current\.json — baseline \(no earlier snapshot to compare against\)/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -569,7 +569,7 @@ test('history preserves a legacy baseline during first snapshot migration', () =
     assert.equal(history.status, 0);
     assert.match(history.stdout, /Local snapshot history \(2 snapshots\)/);
     assert.match(history.stdout, /config\.json — 1 change/);
-    assert.match(history.stdout, /config\.json — 0 changes/);
+    assert.match(history.stdout, /config\.json — baseline \(no earlier snapshot to compare against\)/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -1519,6 +1519,116 @@ test('small output is byte-identical to what the previous writer produced', () =
     );
     assert.ok(ndjson.stdout.endsWith('\n'));
     assert.equal(ndjson.stdout.trim().split('\n').length, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('watch --diff fails rather than reporting no drift when nothing was compared (#141)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-diff-no-history-'));
+  const file = join(dir, 'prod.yaml');
+  const rootIndex = resolve(process.cwd(), 'index.js');
+
+  try {
+    writeFileSync(file, 'replicas: 2\n', 'utf8');
+
+    // No snapshot has ever been saved — the state of every ephemeral CI runner.
+    const bare = spawnSync(
+      process.execPath,
+      [rootIndex, 'watch', file, '--diff'],
+      { cwd: dir, encoding: 'utf8' },
+    );
+
+    assert.equal(bare.status, 1, `expected an error, got:\n${bare.stdout}\n${bare.stderr}`);
+    assert.match(bare.stderr, /no history is not no drift/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('watch --diff still compares the targets that do have a snapshot (#141)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-diff-partial-history-'));
+  const tracked = join(dir, 'tracked.yaml');
+  const untracked = join(dir, 'untracked.yaml');
+  const rootIndex = resolve(process.cwd(), 'index.js');
+
+  try {
+    writeFileSync(tracked, 'replicas: 2\n', 'utf8');
+    writeFileSync(untracked, 'replicas: 1\n', 'utf8');
+    const snapshot = spawnSync(
+      process.execPath,
+      [rootIndex, 'watch', tracked, '--snapshot'],
+      { cwd: dir, encoding: 'utf8' },
+    );
+
+    const diff = spawnSync(
+      process.execPath,
+      [rootIndex, 'watch', tracked, untracked, '--diff'],
+      { cwd: dir, encoding: 'utf8' },
+    );
+
+    assert.equal(snapshot.status, 0, snapshot.stderr);
+    // One target compared clean, one had no baseline: exit 0 for the diff that
+    // ran, and the file that was skipped is counted rather than passed over.
+    assert.equal(diff.status, 0, `${diff.stdout}\n${diff.stderr}`);
+    assert.match(diff.stderr, /1 of 2 targets had no snapshot and were not compared\./);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('history reads a first snapshot as a baseline, not as zero changes (#141)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-history-baseline-'));
+  const file = join(dir, 'prod.yaml');
+  const rootIndex = resolve(process.cwd(), 'index.js');
+  const run = (...args) => spawnSync(
+    process.execPath,
+    [rootIndex, ...args],
+    { cwd: dir, encoding: 'utf8' },
+  );
+
+  try {
+    writeFileSync(file, 'replicas: 2\n', 'utf8');
+    assert.equal(run('watch', file, '--snapshot').status, 0);
+
+    const firstOnly = run('history');
+    assert.equal(firstOnly.status, 0, firstOnly.stderr);
+    assert.match(firstOnly.stdout, /prod\.yaml — baseline \(no earlier snapshot to compare against\)/);
+    assert.doesNotMatch(firstOnly.stdout, /0 changes/);
+    assert.match(firstOnly.stderr, /Nothing was compared/);
+
+    writeFileSync(file, 'replicas: 3\n', 'utf8');
+    assert.equal(run('watch', file, '--snapshot').status, 0);
+
+    // With a real comparison in the window, the count is a count again — and
+    // the baseline below it is still reported as never having been compared.
+    const mixed = run('history');
+    assert.equal(mixed.status, 0, mixed.stderr);
+    assert.match(mixed.stdout, /prod\.yaml — 1 change$/m);
+    assert.match(mixed.stdout, /prod\.yaml — baseline \(no earlier snapshot to compare against\)/);
+    assert.match(mixed.stderr, /1 of 2 snapshots shown are the first of their file/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('ci names both ways out when a file has no saved snapshot (#141)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-cli-ci-no-snapshot-'));
+  const file = join(dir, 'prod.yaml');
+  const rootIndex = resolve(process.cwd(), 'index.js');
+
+  try {
+    writeFileSync(file, 'replicas: 2\n', 'utf8');
+    const ci = spawnSync(
+      process.execPath,
+      [rootIndex, 'ci', file],
+      { cwd: dir, encoding: 'utf8' },
+    );
+
+    assert.equal(ci.status, 1);
+    assert.match(ci.stderr, /no local snapshot has been saved for this file/);
+    assert.match(ci.stderr, /--snapshot-ref/);
+    assert.doesNotMatch(ci.stderr, /ENOENT/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
