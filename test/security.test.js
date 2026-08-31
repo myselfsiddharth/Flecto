@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync, existsSync, realpathSync } from 'fs';
+import { mkdirSync, mkdtempSync, writeFileSync, rmSync, existsSync, realpathSync, symlinkSync } from 'fs';
 import { join, resolve } from 'path';
 import { tmpdir } from 'os';
 import { spawnSync } from 'child_process';
@@ -203,5 +203,134 @@ describe('denial-of-service hardening (#121)', () => {
     for (let i = 0; i < 5000; i++) obj[`k${i}`] = i;
     const parsed = parseContent('big.json', JSON.stringify(obj));
     assert.equal(Object.keys(parsed).length, 5000);
+  });
+});
+
+describe('symlinked targets cannot read outside the project (#121)', () => {
+  // File names are attacker-controlled on an untrusted pull request, and so is
+  // what they point at. A pull request adding config/app.ini as a symlink to
+  // ~/.aws/credentials gets that file parsed and its contents emitted -- into
+  // the job log, the JSON envelope, and with --format pr-comment
+  // --pr-comment-post into a comment on the pull request itself. The attacker
+  // never controls the linked-to file, which is what makes it worth reading.
+
+  /**
+   * A repository with an in-tree link pointing at a file outside it.
+   * @returns {{ dir: string, outside: string }}
+   */
+  function repoWithEscapingLink() {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'flecto-sec-link-')));
+    const dir = join(root, 'repo');
+    mkdirSync(dir, { recursive: true });
+    const outside = join(root, 'outside.yaml');
+    writeFileSync(outside, 'runner_token: ghp_NOTAREALTOKEN0000000\n', 'utf8');
+    writeFileSync(join(dir, 'real.yaml'), 'ok: 1\n', 'utf8');
+    writeFileSync(join(dir, 'snap.json'), JSON.stringify({ state: {} }), 'utf8');
+    symlinkSync(outside, join(dir, 'leaked.yaml'));
+    return { dir, outside, root };
+  }
+
+  test('a glob that picks up an escaping link is refused, and nothing leaks', () => {
+    const { dir, root } = repoWithEscapingLink();
+    try {
+      const run = spawnSync(
+        process.execPath,
+        [rootIndex, 'ci', '*.yaml', '--snapshot-ref', 'snap.json', '--format', 'json'],
+        { cwd: dir, encoding: 'utf8' },
+      );
+
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /link out of the project/);
+      assert.match(run.stderr, /FLECTO_ALLOW_SYMLINK_TARGETS/);
+      assert.doesNotMatch(run.stdout, /ghp_NOTAREALTOKEN/);
+      assert.doesNotMatch(run.stderr, /ghp_NOTAREALTOKEN/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('naming the link explicitly is refused too — the PR chose where it points', () => {
+    const { dir, root } = repoWithEscapingLink();
+    try {
+      const run = spawnSync(
+        process.execPath,
+        [rootIndex, 'ci', 'leaked.yaml', '--snapshot-ref', 'snap.json'],
+        { cwd: dir, encoding: 'utf8' },
+      );
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /link out of the project/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('FLECTO_ALLOW_SYMLINK_TARGETS=1 opts a deliberate link back in', () => {
+    const { dir, root } = repoWithEscapingLink();
+    try {
+      const run = spawnSync(
+        process.execPath,
+        [rootIndex, 'ci', 'leaked.yaml', '--snapshot-ref', 'snap.json', '--fail-on', 'error'],
+        { cwd: dir, encoding: 'utf8', env: { ...process.env, FLECTO_ALLOW_SYMLINK_TARGETS: '1' } },
+      );
+      // The gate still fires on what it found (secret-key-changed is an error);
+      // what the opt-out changes is that the file was read at all.
+      assert.doesNotMatch(run.stderr, /link out of the project/);
+      assert.match(run.stdout, /ghp_NOTAREALTOKEN/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('links that stay inside the project still resolve', () => {
+    const { dir, root } = repoWithEscapingLink();
+    try {
+      symlinkSync(join(dir, 'real.yaml'), join(dir, 'alias.yaml'));
+      const run = spawnSync(
+        process.execPath,
+        [rootIndex, 'ci', 'alias.yaml', '--snapshot-ref', 'snap.json', '--fail-on', 'error'],
+        { cwd: dir, encoding: 'utf8' },
+      );
+      assert.equal(run.status, 0, `an in-project link must still work:\n${run.stderr}`);
+      assert.match(run.stdout, /alias\.yaml/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('a path named from outside the project is operator intent, not an escape', () => {
+    const { dir, outside, root } = repoWithEscapingLink();
+    try {
+      // `flecto compare /a/x.yaml /b/y.yaml` is a real thing to do, and nothing
+      // about it is a link escaping a repository.
+      const run = spawnSync(
+        process.execPath,
+        [rootIndex, 'ci', outside, '--snapshot-ref', 'snap.json', '--fail-on', 'changed'],
+        { cwd: dir, encoding: 'utf8' },
+      );
+      assert.doesNotMatch(run.stderr, /link out of the project/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('a .flecto-snapshots that links out of the project is refused', () => {
+    const { dir, root } = repoWithEscapingLink();
+    try {
+      const elsewhere = join(root, 'elsewhere');
+      mkdirSync(elsewhere, { recursive: true });
+      symlinkSync(elsewhere, join(dir, '.flecto-snapshots'));
+
+      const run = spawnSync(
+        process.execPath,
+        [rootIndex, 'watch', 'real.yaml', '--snapshot'],
+        { cwd: dir, encoding: 'utf8' },
+      );
+      // Snapshots carry config values; writing them outside the repository is
+      // the same escape pointed the other way.
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /link out of the project/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

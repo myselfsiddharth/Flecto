@@ -330,6 +330,38 @@ no code path downstream ever holds it. →
 
 ---
 
+## Symlinked config files
+
+A symlink that stays inside the project resolves normally — link
+`config/prod.yaml` to `config/base.yaml` and Flecto reads it.
+
+A file inside the project that resolves **out** of it is refused:
+
+```
+[error] Refusing to read "config/app.ini": it is a link out of the project,
+resolving to /home/runner/.aws/credentials.
+```
+
+File names, and what they point at, are attacker-controlled on an untrusted pull
+request — and the attacker does not control the file the link points *at*, which
+is exactly why reading one is worth blocking. Following it would put a file from
+outside the repository into the job log, the JSON envelope, and the pull request
+comment.
+
+Two things this deliberately does **not** refuse: a link that resolves to
+somewhere else inside the project, and a path you *named* from outside it
+(`flecto compare /etc/a.yaml /etc/b.yaml`) — nothing escaped there, it was never
+inside.
+
+If a checkout genuinely links config in from a sibling directory:
+
+```bash
+FLECTO_ALLOW_SYMLINK_TARGETS=1 flecto ci "config/**/*.yaml"
+```
+
+It refuses rather than skipping, deliberately: a target that stopped being
+scanned without saying so would weaken a gate you believe is in place.
+
 ## Watching on network drives
 
 Native filesystem events are used by default. Some network drives and editors

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'fs';
+import { existsSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'fs';
 import { join, relative, resolve, sep } from 'path';
 import fg from 'fast-glob';
 import yaml from 'js-yaml';
@@ -107,6 +107,98 @@ export function resolveEffectiveOptions(config, profile, cliOverrides = {}) {
 function rcPluginsAllowed() {
   const raw = process.env.FLECTO_ALLOW_RC_PLUGINS;
   return raw === '1' || String(raw).toLowerCase() === 'true';
+}
+
+/**
+ * Has the operator explicitly opted in to targets that leave the project through
+ * a symlink?
+ * @returns {boolean}
+ */
+function symlinkTargetsAllowed() {
+  const raw = process.env.FLECTO_ALLOW_SYMLINK_TARGETS;
+  return raw === '1' || String(raw).toLowerCase() === 'true';
+}
+
+/**
+ * Resolve symlinks where possible, falling back to the input for a path that
+ * does not exist yet.
+ *
+ * `realpathSync.native` first because on Windows it asks the OS for the final
+ * path, resolving 8.3 short names and normalizing case — two spellings of one
+ * directory would otherwise compare as different and make a contained path look
+ * like an escape.
+ * @param {string} path
+ * @returns {string}
+ */
+function canonical(path) {
+  try {
+    return realpathSync.native(path);
+  } catch {
+    // Falls through for a path that does not exist yet.
+  }
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
+/**
+ * @param {string} candidate
+ * @param {string} root both already canonical
+ * @returns {boolean}
+ */
+function isInside(candidate, root) {
+  return candidate === root || candidate.startsWith(root + sep);
+}
+
+/**
+ * Refuse a path that lives inside the project but reads from outside it through
+ * a symlink.
+ *
+ * On an untrusted pull request the file *names* are attacker-controlled, and so
+ * is what they point at. A pull request adding `config/app.ini` as a symlink to
+ * `~/.aws/credentials` gets that file parsed and its contents emitted — into the
+ * job log, the JSON envelope, and, with `--format pr-comment --pr-comment-post`,
+ * into a comment on the pull request itself. The attacker never controls the
+ * linked-to file, which is exactly what makes it worth reading.
+ *
+ * The rule is deliberately narrow, and it is about *escape*, not about location:
+ *
+ * - A path given from outside the project is operator intent — `flecto compare
+ *   /etc/a.yaml /etc/b.yaml` is a real thing to do — and is untouched.
+ * - A path inside the project that resolves to somewhere inside it is fine, so
+ *   symlinks within a repository keep working.
+ * - A path inside the project that resolves *out* of it is refused, because that
+ *   is the one shape an untrusted pull request can author to reach a file it
+ *   could not otherwise commit.
+ *
+ * `FLECTO_ALLOW_SYMLINK_TARGETS=1` opts out, for a checkout that genuinely links
+ * config in from a sibling directory. Refusing loudly rather than skipping is
+ * deliberate, for the reason rc-declared plugins are: a target that stops being
+ * scanned without saying so weakens a gate the operator believes is in place.
+ * @param {string} file absolute path as Flecto was given it
+ * @param {string} [cwd]
+ * @throws {Error} when the path escapes the project through a link
+ */
+export function assertTargetContained(file, cwd = process.cwd()) {
+  if (symlinkTargetsAllowed()) return;
+
+  const root = canonical(resolve(cwd));
+  const given = resolve(file);
+  // Named from outside the project: nothing was escaped, it was never inside.
+  if (!isInside(given, root)) return;
+
+  const real = canonical(given);
+  if (isInside(real, root)) return;
+
+  throw new Error(
+    `Refusing to read "${relative(root, given).split(sep).join('/') || given}": it is a link out of the project, `
+    + `resolving to ${real}.\n`
+    + 'File names and links are attacker-controlled on an untrusted pull request, and '
+    + 'reading one would put a file from outside the repository into Flecto\'s output.\n'
+    + 'Set FLECTO_ALLOW_SYMLINK_TARGETS=1 if this link is intentional.',
+  );
 }
 
 /**

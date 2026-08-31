@@ -319,6 +319,23 @@ The format is based on [Keep a Changelog], and this project adheres to
   The shared snapshot store the issue also asks for is not part of this change;
   what is fixed here is every consumer's answer when the history is empty.
 
+- **Symlinked targets could read files from outside the repository** ([#121]).
+  A pull request adding a config file that is a symlink out of the checkout had
+  that file parsed and its **values** emitted — into the job log, the JSON
+  envelope, and the `--format pr-comment` markdown that `--pr-comment-post`
+  writes to a comment on the pull request. The attacker never controls the
+  linked-to file, which is what makes it worth reading: on a CI runner that
+  includes `~/.npmrc`, `~/.docker/config.json`, and `~/.aws/credentials` — which
+  is INI, and parses perfectly. Opening a pull request is the whole attack.
+
+  Every resolved target, and `.flecto-snapshots/` before a snapshot is written,
+  is now checked for escape rather than for location, so the legitimate cases are
+  untouched: a link that stays inside the project still resolves, and a path
+  *named* from outside the project (`flecto compare /a.yaml /b.yaml`) is operator
+  intent. Only a path inside the project that resolves out of it is refused —
+  loudly, naming `FLECTO_ALLOW_SYMLINK_TARGETS=1` for a checkout that links
+  config in from a sibling directory on purpose.
+
 - **A `flecto-ignore-next-line` that resolves to nothing now says so** ([#158]).
   A directive on an array element, in a multi-document YAML file, or in a file
   type with no comment syntax at all was accepted, resolved to no path, matched

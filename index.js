@@ -62,6 +62,7 @@ import {
   initRcFile,
   resolveProfileName,
   resolvePolicyOptions,
+  assertTargetContained,
 } from './src/config.js';
 
 const PKG = JSON.parse(
@@ -289,6 +290,18 @@ function maybeMaskFindings(findings, changes, maskSecrets) {
   });
 }
 
+/**
+ * Every command's targets pass through here, which makes it the one place the
+ * symlink-escape check has to run: a target that leaves the project through a
+ * link is refused before anything reads it.
+ * @param {string[]} files
+ * @returns {string[]} the same list
+ */
+function assertTargetsContained(files) {
+  for (const file of files) assertTargetContained(file, process.cwd());
+  return files;
+}
+
 async function resolveTargetFiles(cliFiles, rcConfig) {
   if (cliFiles && cliFiles.length > 0) {
     const direct = [];
@@ -308,15 +321,15 @@ async function resolveTargetFiles(cliFiles, rcConfig) {
         exclude: rcConfig?.exclude ?? [],
       });
     }
-    return [...new Set([...direct, ...expanded])];
+    return assertTargetsContained([...new Set([...direct, ...expanded])]);
   }
 
-  return resolveFiles({
+  return assertTargetsContained(await resolveFiles({
     cwd: process.cwd(),
     files: rcConfig?.files ?? [],
     include: rcConfig?.include ?? [],
     exclude: rcConfig?.exclude ?? [],
-  });
+  }));
 }
 
 /**
@@ -697,6 +710,11 @@ program
 
       if (effective.snapshot) {
         mkdirSync(SNAPSHOT_DIR, { recursive: true });
+        // Snapshots carry config values, so a .flecto-snapshots/ that is itself a
+        // link out of the project would write them somewhere the repository does
+        // not control. Same rule as a target, checked after mkdir so an existing
+        // link is seen rather than a path that does not exist yet.
+        assertTargetContained(resolve(SNAPSHOT_DIR), process.cwd());
         const idsWithHistory = snapshotIdsWithHistory();
         let written = 0;
         for (const filepath of targets) {
