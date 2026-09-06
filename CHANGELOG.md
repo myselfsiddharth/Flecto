@@ -7,6 +7,8 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ## [Unreleased]
 
+## [3.0.2] - 2026-09-06
+
 ### Security
 
 - **Assessed 2.x against GHSA-wq8m-fc3q-8m5x and corrected the advisory range**
@@ -970,7 +972,8 @@ fixed — those runs were never actually gated — but the failure is new.
 - Misconfigured policy packs/plugins cause `watch` to exit non-zero instead of
   continuing with no policies.
 
-[Unreleased]: https://github.com/myselfsiddharth/Flecto/compare/v3.0.1...HEAD
+[Unreleased]: https://github.com/myselfsiddharth/Flecto/compare/v3.0.2...HEAD
+[3.0.2]: https://github.com/myselfsiddharth/Flecto/compare/v3.0.1...v3.0.2
 [3.0.1]: https://github.com/myselfsiddharth/Flecto/compare/v3.0.0...v3.0.1
 [3.0.0]: https://github.com/myselfsiddharth/Flecto/compare/v2.1.0...v3.0.0
 [2.1.0]: https://github.com/myselfsiddharth/Flecto/compare/v2.0.0...v2.1.0
