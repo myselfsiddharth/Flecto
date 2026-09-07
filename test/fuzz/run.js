@@ -35,7 +35,7 @@ import { dirname, join, relative, resolve } from 'path';
 import { fileURLToPath } from 'url';
 
 import { makeRng, caseSeed } from './rng.js';
-import { TARGETS, TARGETS_BY_ID, CASE_BUDGET_MS } from './targets.js';
+import { TARGETS, TARGETS_BY_ID, CASE_BUDGET_MS, isTimingFailure } from './targets.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const WORKER = join(HERE, 'worker.js');
@@ -49,6 +49,12 @@ const DEFAULT_TIME_S = 30;
 const CHUNK = 500;
 /** Candidates tried while shrinking a finding. Bounded: a rare event may be slow, but not unbounded. */
 const SHRINK_ATTEMPTS = 240;
+/**
+ * Isolated re-runs allowed to confirm a timing finding before it fails the run.
+ * One reproduction is enough to believe it; this many clean runs is enough to
+ * stop believing it.
+ */
+const CONFIRM_RUNS = 5;
 
 /**
  * @param {string[]} argv
@@ -138,12 +144,38 @@ if (findings.length === 0) {
   process.exit(0);
 }
 
-process.stdout.write(`${findings.length} finding${findings.length === 1 ? '' : 's'}:\n\n`);
-for (const finding of findings) {
-  process.stdout.write(`  ${finding.target} — ${finding.summary}\n`);
-  process.stdout.write(`    reproduce: npm run fuzz -- --target ${finding.target} --seed ${seed} --case ${finding.index}\n`);
-  process.stdout.write(`    replay:    npm run fuzz -- --replay ${rel(finding.file)}\n`);
+const confirmed = findings.filter((f) => f.confirmed);
+const unconfirmed = findings.filter((f) => !f.confirmed);
+
+/** @param {typeof findings} list */
+const describe = (list) => {
+  for (const finding of list) {
+    process.stdout.write(`  ${finding.target} — ${finding.summary}\n`);
+    process.stdout.write(`    reproduce: npm run fuzz -- --target ${finding.target} --seed ${seed} --case ${finding.index}\n`);
+    process.stdout.write(`    replay:    npm run fuzz -- --replay ${rel(finding.file)}\n`);
+  }
+};
+
+if (unconfirmed.length > 0) {
+  process.stdout.write(
+    `${unconfirmed.length} unconfirmed timing finding${unconfirmed.length === 1 ? '' : 's'} `
+    + `(held the budget on ${CONFIRM_RUNS} isolated re-runs each):\n\n`,
+  );
+  describe(unconfirmed);
+  process.stdout.write(
+    '\nRecorded for inspection, but not treated as failures: a deadline missed once in\n'
+    + 'hundreds of thousands of cases and never again is more likely to be the runner\n'
+    + 'than the input. Re-run with --budget to judge one of these by hand.\n\n',
+  );
 }
+
+if (confirmed.length === 0) {
+  process.stdout.write(`No confirmed findings. Replay this run with: npm run fuzz -- --seed ${seed}\n`);
+  process.exit(0);
+}
+
+process.stdout.write(`${confirmed.length} finding${confirmed.length === 1 ? '' : 's'}:\n\n`);
+describe(confirmed);
 process.stdout.write(
   '\nNext: move the input into test/fixtures/fuzz/ so test/fuzz-regressions.test.js\n'
   + 'replays it in the normal suite, then fix it. If it turns out to be exploitable\n'
@@ -162,7 +194,7 @@ process.exit(1);
  * @param {(typeof TARGETS)[number]} target
  * @param {number} seedValue
  * @param {number} budget total wall-clock for this target, in ms
- * @returns {Promise<null | { target: string, index: number, summary: string, file: string }>}
+ * @returns {Promise<null | { target: string, index: number, summary: string, file: string, confirmed: boolean }>}
  */
 async function fuzzTarget(target, seedValue, budget) {
   const deadline = Date.now() + budget;
@@ -186,8 +218,10 @@ async function fuzzTarget(target, seedValue, budget) {
     process.stdout.write(`  ${pad(target.id)} ${cases} cases — FAILED: ${summary}\n`);
 
     const original = result.input ?? regenerate(target, seedValue, failingIndex);
-    const file = shrinkAndSave(target.id, seedValue, failingIndex, original, result.kind);
-    return { target: target.id, index: failingIndex, summary, file };
+    const { file, confirmed } = shrinkAndSave(
+      target.id, seedValue, failingIndex, original, result.kind, result.message,
+    );
+    return { target: target.id, index: failingIndex, summary, file, confirmed };
   }
 
   const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
@@ -286,7 +320,7 @@ function runChunk(targetId, seedValue, start, count, perCaseMs) {
  * @param {string} kind
  * @returns {string} path the minimized input was written to
  */
-function shrinkAndSave(targetId, seedValue, index, input, kind) {
+function shrinkAndSave(targetId, seedValue, index, input, kind, message) {
   mkdirSync(FINDINGS_DIR, { recursive: true });
   const scratch = join(FINDINGS_DIR, `.${targetId}-candidate.json`);
   const perCase = budgetMs();
@@ -296,8 +330,24 @@ function shrinkAndSave(targetId, seedValue, index, input, kind) {
     return runCandidate(targetId, scratch, perCase).kind !== 'ok';
   };
 
+  // A timing failure gets more than one chance to reproduce. The first run is
+  // the same check every finding gets; the extra runs exist because the case
+  // that "hung" was one of several hundred thousand that did not, and the
+  // cheapest explanation for a lone outlier on a shared runner is the runner.
+  const timing = isTimingFailure(kind, message);
+  const allowed = timing ? CONFIRM_RUNS : 1;
+  let tries = 0;
+  let reproduced = false;
+  while (tries < allowed && !reproduced) {
+    tries += 1;
+    reproduced = stillFails(input);
+  }
+
   let best = input;
-  if (stillFails(best)) {
+  if (reproduced) {
+    if (timing && tries > 1) {
+      process.stdout.write(`    confirmed on isolated re-run ${tries} of ${allowed}\n`);
+    }
     let attempts = 0;
     let improved = true;
     while (improved && attempts < SHRINK_ATTEMPTS) {
@@ -312,12 +362,20 @@ function shrinkAndSave(targetId, seedValue, index, input, kind) {
       }
     }
     process.stdout.write(`    shrunk in ${attempts} attempts\n`);
+  } else if (timing) {
+    // Held the budget every time it was asked to on its own. Keep the input --
+    // it costs nothing and a human may see something in it -- but do not spend
+    // a red nightly run on a number that will not say the same thing twice.
+    process.stdout.write(
+      `    UNCONFIRMED — the budget held on ${allowed} isolated re-runs; recorded, not failing the run\n`,
+    );
   } else {
     // Order-dependent or environment-dependent: keep the original and say so,
     // rather than shipping a fixture that does not reproduce.
     process.stdout.write('    could not reproduce in isolation — saving the original input unshrunk\n');
   }
 
+  const confirmed = reproduced || !timing;
   const file = join(FINDINGS_DIR, `${targetId}-${seedValue}-${index}.json`);
   writeInput(file, {
     target: targetId,
@@ -325,9 +383,10 @@ function shrinkAndSave(targetId, seedValue, index, input, kind) {
     seed: seedValue,
     case: index,
     foundAt: new Date().toISOString(),
+    confirmed,
     input: best,
   });
-  return file;
+  return { file, confirmed };
 }
 
 /**

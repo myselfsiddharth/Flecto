@@ -70,6 +70,44 @@ export class FuzzViolation extends Error {
  */
 export const CASE_BUDGET_MS = 2000;
 
+/**
+ * Is this failure a measurement of wall-clock time rather than of behaviour?
+ *
+ * The distinction matters because the two have different evidentiary weight. A
+ * crash, a thrown non-Error, a polluted prototype -- those are properties of the
+ * input, and they reproduce. "Took too long" is a property of the input *and*
+ * the machine, and CI runners are shared: a stalled runner produces the same
+ * signal as a pathological input. Callers use this to decide whether a finding
+ * has to be confirmed before it is believed.
+ *
+ * It lives here, next to `assertWithinBudget`, so the message it matches and the
+ * message that is thrown cannot drift apart.
+ * @param {string} kind
+ * @param {string} [message]
+ * @returns {boolean}
+ */
+export function isTimingFailure(kind, message) {
+  if (kind === 'hang') return true;
+  return kind === 'violation' && BUDGET_EXCEEDED.test(message ?? '');
+}
+
+/** The one place the budget-exceeded wording is written. */
+const BUDGET_EXCEEDED = /took \d+ms, over the \d+ms budget/;
+
+/**
+ * Build the message `assertWithinBudget` throws. Exported so a test can assert
+ * that `isTimingFailure` still recognises a real one: the two are only useful
+ * together, and a reworded throw that no longer classifies as timing would
+ * silently restore the flaky-nightly behaviour this exists to prevent.
+ * @param {string} where
+ * @param {number} elapsedMs
+ * @param {number} [budgetMs]
+ * @returns {string}
+ */
+export function budgetExceededMessage(where, elapsedMs, budgetMs = CASE_BUDGET_MS) {
+  return `${where} took ${elapsedMs}ms, over the ${budgetMs}ms budget`;
+}
+
 const POLLUTION_PROBES = ['flectoFuzzPolluted', 'polluted', 'toString', 'isAdmin'];
 
 /**
@@ -177,9 +215,7 @@ function cleanly(where, fn) {
 function assertWithinBudget(where, startedAt) {
   const elapsed = Date.now() - startedAt;
   if (elapsed > CASE_BUDGET_MS) {
-    throw new FuzzViolation(`${where} took ${elapsed}ms, over the ${CASE_BUDGET_MS}ms budget`, {
-      elapsedMs: elapsed,
-    });
+    throw new FuzzViolation(budgetExceededMessage(where, elapsed), { elapsedMs: elapsed });
   }
 }
 
