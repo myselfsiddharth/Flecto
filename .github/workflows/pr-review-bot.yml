@@ -2,7 +2,12 @@ name: PR review bot
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    # `edited` matters: three of the signals below (title, description length,
+    # test-plan mention) come from PR metadata, so without it a title or body
+    # corrected after opening can never clear the bot's CHANGES_REQUESTED —
+    # re-running the job replays the original event payload and re-reads the
+    # stale metadata.
+    types: [opened, edited, synchronize, reopened, ready_for_review]
 
 permissions:
   contents: read
