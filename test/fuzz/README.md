@@ -91,6 +91,32 @@ that writes the case index *before* running the case, and the driver kills the
 child when that heartbeat stops. Shrinking runs each candidate in its own child
 for the same reason: a candidate that hangs has to shrink like any other failure.
 
+## Why a timing finding has to reproduce before it counts
+
+Everything else the fuzzer checks is a property of the input: a crash, a thrown
+non-`Error`, a polluted prototype. Those reproduce. "Took longer than 2000ms" is
+a property of the input *and* the machine, and the machine is a shared CI runner
+that occasionally stalls for reasons that have nothing to do with the case in
+front of it.
+
+Treated as equal evidence, that difference cost the nightly run its credibility:
+three of six consecutive runs failed on one case out of 100,000–334,000 that
+missed the deadline once, and in two of them the driver said in the same breath
+that it *could not reproduce the finding in isolation* — and failed the run
+anyway.
+
+So a `hang`, or a violation carrying the budget-exceeded message, is re-run on
+its own up to five times. One reproduction is enough to believe it, and it then
+shrinks and fails the run like anything else. Five clean runs mark it
+`UNCONFIRMED`: the input is still written to `findings/`, still uploaded as the
+run's artifact, and still printed with the command that replays it — it just
+does not fail the run. Every non-timing failure fails on sight, on the first
+observation, exactly as before.
+
+The trade is deliberate. A genuinely slow input reproduces essentially always,
+so what is given up is the rare pathological case that is *also* rare on replay —
+against a nightly signal that people read, which is the only kind worth having.
+
 [GHSA-wq8m-fc3q-8m5x]: https://github.com/myselfsiddharth/Flecto/security/advisories/GHSA-wq8m-fc3q-8m5x
 [#150]: https://github.com/myselfsiddharth/Flecto/issues/150
 [`docs/security-review.md`]: ../../docs/security-review.md
