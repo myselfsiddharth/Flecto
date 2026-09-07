@@ -84,9 +84,12 @@ jobs:
           npm run fuzz -- --target "$TARGET" --seed "$SEED" --time "${INPUT_TIME:-300}"
 
       # Findings are minimized inputs, which are the whole value of a fuzz run:
-      # keep them even though the step above failed.
+      # keep them even though the step above failed -- and keep them when it
+      # did not, because an UNCONFIRMED timing finding is recorded on a run that
+      # exits 0 and would otherwise never leave the runner. `findings/` is
+      # gitignored and untracked, so a clean run has nothing here to upload.
       - name: Upload findings
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: fuzz-findings-${{ matrix.target }}

@@ -108,8 +108,9 @@ anyway.
 So a `hang`, or a violation carrying the budget-exceeded message, is re-run on
 its own up to five times. One reproduction is enough to believe it, and it then
 shrinks and fails the run like anything else. Five clean runs mark it
-`UNCONFIRMED`: the input is still written to `findings/` and still printed, but
-it does not fail the run. Every non-timing failure fails on sight, on the first
+`UNCONFIRMED`: the input is still written to `findings/`, still uploaded as the
+run's artifact, and still printed with the command that replays it — it just
+does not fail the run. Every non-timing failure fails on sight, on the first
 observation, exactly as before.
 
 The trade is deliberate. A genuinely slow input reproduces essentially always,
