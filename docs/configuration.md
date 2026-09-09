@@ -362,6 +362,37 @@ FLECTO_ALLOW_SYMLINK_TARGETS=1 flecto ci "config/**/*.yaml"
 It refuses rather than skipping, deliberately: a target that stopped being
 scanned without saying so would weaken a gate you believe is in place.
 
+## Where Flecto is allowed to write
+
+Two options name a file Flecto *writes*: `--output` (`flecto report`) and
+`--baseline` (`flecto ci`). Both can also be declared in `.flectorc` — and on an
+untrusted pull request, `.flectorc` is a file the attacker wrote. Both files
+carry content that pull request partly chose, so an unconstrained destination is
+an overwrite of any file the job can reach, with content it helped write.
+
+So a destination declared in `.flectorc` must resolve **inside the project**, and
+a destination that leaves the project through a **symlink** is refused whoever
+named it:
+
+```
+[error] Refusing to write "--output" to /home/runner/.bashrc: .flectorc points it
+outside the project.
+```
+
+Naming a destination on the command line is operator intent and is untouched —
+`flecto report --output /tmp/drift.html` still works. For a repository that
+genuinely configures a destination elsewhere in its `.flectorc`:
+
+```bash
+FLECTO_ALLOW_RC_WRITES=1 flecto report
+```
+
+`--update-baseline` goes further: it is refused from `.flectorc` altogether, with
+no opt-out. It accepts every finding of the current run, so honoring it from a
+file a pull request can edit would let that pull request turn its own failing
+gate green — including one whose `--fail-on` was given on the command line. It is
+an action, not a setting, and the command line is where it belongs.
+
 ## Watching on network drives
 
 Native filesystem events are used by default. Some network drives and editors

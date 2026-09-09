@@ -217,6 +217,87 @@ export function assertTargetContained(file, cwd = process.cwd()) {
 }
 
 /**
+ * Has the operator explicitly opted in to write destinations that `.flectorc`
+ * points outside the project?
+ * @returns {boolean}
+ */
+function rcWritesAllowed() {
+  const raw = process.env.FLECTO_ALLOW_RC_WRITES;
+  return raw === '1' || String(raw).toLowerCase() === 'true';
+}
+
+/**
+ * Refuse a *write* destination that leaves the project.
+ *
+ * The read rule ({@link assertTargetContained}) is about escape, and treats a
+ * path named from outside the project as operator intent. A write cannot be read
+ * that way, because the path is not always the operator's: `output` and
+ * `baseline` can be declared in `.flectorc`, and on an untrusted pull request
+ * `.flectorc` is attacker-controlled. Both destinations carry content the
+ * attacker partly controls — the report embeds config values and file names, a
+ * baseline embeds rule ids, paths, and messages — so an unconstrained
+ * destination is an arbitrary file overwrite with partly chosen content, which
+ * on a CI runner is a shell profile, a workflow file, or an SSH config.
+ *
+ * Two rules, matching the provenance:
+ *
+ * - **Declared in `.flectorc`** — must resolve inside the project.
+ *   `FLECTO_ALLOW_RC_WRITES=1` opts out, for a repository that genuinely
+ *   configures a destination elsewhere.
+ * - **Any source** — must not leave the project through a symlink, on the path
+ *   itself or on the directory it is written into. That is the shape a pull
+ *   request can author without touching the workflow, and it is refused for the
+ *   same reason a symlinked *target* is; `FLECTO_ALLOW_SYMLINK_TARGETS=1` opts
+ *   out of this half, as it does for reads.
+ *
+ * Refusing loudly rather than falling back to a default path is deliberate: a
+ * report that silently went somewhere else is worse than one that was not
+ * written.
+ * @param {string} file destination path, already resolved against the cwd
+ * @param {{ option: string, fromCli?: boolean, cwd?: string }} context
+ * @throws {Error} when the destination escapes the project
+ */
+export function assertWriteDestinationContained(file, context) {
+  const { option, fromCli = false } = context;
+  const cwd = context.cwd ?? process.cwd();
+  const root = canonical(resolve(cwd));
+  const given = resolve(cwd, file);
+  const nominal = join(canonical(dirname(given)), basename(given));
+  const shown = relative(root, given).split(sep).join('/') || given;
+
+  if (!fromCli && !rcWritesAllowed() && !isInside(nominal, root)) {
+    throw new Error(
+      `Refusing to write "${option}" to ${given}: .flectorc points it outside the project.\n`
+      + '.flectorc is attacker-controlled on an untrusted pull request, and this file carries '
+      + 'config values and file names into whatever it overwrites.\n'
+      + `Pass ${option} on the command line for a destination outside the project, or set `
+      + 'FLECTO_ALLOW_RC_WRITES=1 if this repository genuinely configures one.',
+    );
+  }
+
+  if (symlinkTargetsAllowed()) return;
+
+  // The destination itself, when it already exists as a link, and the directory
+  // it lands in, which is the case a not-yet-created file goes through.
+  for (const candidate of [given, dirname(given)]) {
+    if (!existsSync(candidate)) continue;
+    const nominalCandidate = candidate === given
+      ? nominal
+      : join(canonical(dirname(candidate)), basename(candidate));
+    if (!isInside(nominalCandidate, root)) continue;
+    const real = canonical(candidate);
+    if (isInside(real, root)) continue;
+    throw new Error(
+      `Refusing to write "${option}" to "${shown}": it is a link out of the project, `
+      + `resolving to ${real}.\n`
+      + 'File names and links are attacker-controlled on an untrusted pull request, and '
+      + 'writing through one would overwrite a file outside the repository.\n'
+      + 'Set FLECTO_ALLOW_SYMLINK_TARGETS=1 if this link is intentional.',
+    );
+  }
+}
+
+/**
  * Split a policy list that may arrive as an array or a comma-separated string.
  * @param {unknown} raw
  * @param {string[]} fallback
