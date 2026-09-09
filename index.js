@@ -87,16 +87,6 @@ const PLAN_DEFAULT_FAIL_ON = 'error';
 const PLAN_DEFAULT_POLICIES = 'terraform';
 
 /**
- * Resolve the snapshot store a command should read and write (#141).
- *
- * Every snapshot consumer goes through this, so `--snapshot-store shared` in
- * `.flectorc` means the same thing to `watch`, `ci`, `history`, and `report` —
- * a store the editor of the config and the runner gating it disagree about
- * would be worse than having only the local one.
- * @param {Record<string, unknown>} effective
- * @returns {import('./src/snapshot-store.js').SnapshotStore}
- */
-/**
  * Put the live side of a diff in the same form the store recorded the baseline
  * in.
  *
@@ -115,6 +105,16 @@ function alignStateWithStore(state, store) {
   return store.maskMode === 'hash' ? /** @type {T} */ (maskState(state)) : state;
 }
 
+/**
+ * Resolve the snapshot store a command should read and write (#141).
+ *
+ * Every snapshot consumer goes through this, so `--snapshot-store shared` in
+ * `.flectorc` means the same thing to `watch`, `ci`, `history`, and `report` —
+ * a store the editor of the config and the runner gating it disagree about
+ * would be worse than having only the local one.
+ * @param {Record<string, unknown>} effective
+ * @returns {import('./src/snapshot-store.js').SnapshotStore}
+ */
 function snapshotStoreFromEffective(effective) {
   return resolveSnapshotStore({
     store: effective.snapshotStore,

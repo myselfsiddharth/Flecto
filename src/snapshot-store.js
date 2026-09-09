@@ -11,7 +11,7 @@ import { createHash } from 'crypto';
 import { execFileSync } from 'child_process';
 import { dirname, join, relative, resolve, sep } from 'path';
 
-import { containsSecret } from './secrets.js';
+import { containsSecret, looksLikeSecretPath } from './secrets.js';
 import { documentKeysOf, withDocumentKeys } from './documents.js';
 
 /**
@@ -604,30 +604,65 @@ export function isMaskedDigest(value) {
 }
 
 /**
- * Replace every secret-like string in a parsed state with its digest.
+ * Replace every secret-like value in a parsed state with its digest.
  *
- * Whole values, not just the matched span: a connection string keeps its shape
- * under `redactSecretString`, and a shape that stays constant while the embedded
- * credential rotates is exactly the silent all-clear a drift store must not
- * produce. The digest changes when any part of the value does.
+ * Two things make a value secret-like, and the store needs both:
+ *
+ * - **Its shape** — an opaque high-entropy string, a private key block, a URL
+ *   with credentials in it. Whole values, not just the matched span: a
+ *   connection string keeps its shape under `redactSecretString`, and a shape
+ *   that stays constant while the embedded credential rotates is exactly the
+ *   silent all-clear a drift store must not produce.
+ * - **Its key name** — `password: hunter2` is a credential and looks like
+ *   nothing at all. This is the half the terminal has always masked, and it is
+ *   the half that matters more here: `--mask-secrets` keeps a value out of a
+ *   log that scrolls away, while this store is *committed*, so a value it
+ *   records in plaintext is in git history permanently.
+ *
+ * Matching the two makes the store no more permissive than the renderer, which
+ * is the only defensible relationship between them.
+ *
+ * Containers are walked rather than collapsed. The renderer replaces a whole
+ * subtree under a secret-looking key with `***`, which is right for display and
+ * wrong for a store: a single digest standing in for an object would report
+ * "something under here changed" without ever saying what, and the point of the
+ * store is that a real change produces exactly the lines that changed.
  * @param {unknown} state
+ * @param {string} [path] configuration path of `state`, for key-name matching
  * @returns {unknown}
  */
-export function maskState(state) {
-  if (typeof state === 'string') {
-    if (isMaskedDigest(state)) return state;
-    return containsSecret(state) ? maskedDigest(state) : state;
+export function maskState(state, path = '') {
+  if (Array.isArray(state)) return state.map((entry, index) => maskState(entry, `${path}[${index}]`));
+
+  if (isPlainObject(state)) {
+    const documents = documentKeysOf(state);
+    const documentKeys = new Set(documents ?? []);
+    const masked = Object.fromEntries(
+      Object.entries(/** @type {Record<string, unknown>} */ (state)).map(([key, value]) => [
+        key,
+        // A document identity is a resource name the user chose, not a key
+        // name: a Deployment called `token-service` must not make every value
+        // inside it read as a secret. The renderer strips the same prefix via
+        // `secretMatchPath`; here the document keys are the root keys, so
+        // skipping them in the path is the same rule.
+        maskState(value, documentKeys.has(key) ? path : (path ? `${path}.${key}` : key)),
+      ]),
+    );
+    // Rebuilding the root drops the parser's multi-document marking, which the
+    // stripping above reads. Carry it across rather than making the masked tree
+    // look single-document.
+    return documents ? withDocumentKeys(masked, documents) : masked;
   }
-  if (Array.isArray(state)) return state.map(maskState);
-  if (!isPlainObject(state)) return state;
-  const masked = Object.fromEntries(
-    Object.entries(/** @type {Record<string, unknown>} */ (state))
-      .map(([key, value]) => [key, maskState(value)]),
-  );
-  // Rebuilding the root drops the parser's multi-document marking, which
-  // secret-name matching reads to tell a resource *named* `token-service` from a
-  // secret. Carry it across rather than making the masked tree look
-  // single-document.
-  const documents = documentKeysOf(state);
-  return documents ? withDocumentKeys(masked, documents) : masked;
+
+  // Nothing to hide in an absent value, and digesting it would invent a secret
+  // where the config says there is none.
+  if (state === null || state === undefined) return state;
+  // Idempotent: re-masking a store that already holds digests must not digest
+  // the digests.
+  if (isMaskedDigest(state)) return state;
+  // `String(state)` because a credential is not always a string — `password:
+  // 12345` parses as a number, and it is still the password.
+  if (looksLikeSecretPath(path)) return maskedDigest(String(state));
+  if (typeof state === 'string') return containsSecret(state) ? maskedDigest(state) : state;
+  return state;
 }

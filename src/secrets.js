@@ -331,6 +331,33 @@ export function redactSecretString(value) {
 }
 
 /**
+ * Key names that mean "this value is a credential".
+ *
+ * Matched against the *configuration* path only. A multi-document file prefixes
+ * every path with the document's identity — `Deployment/prod/token-service.…` —
+ * and that identity is a resource name the user chose, not a key name. Letting
+ * it match masks every value in the document, numbers and booleans included, so
+ * callers strip the document prefix before matching: see `secretMatchPath` in
+ * differ.js, and the document handling in `maskState`.
+ */
+export const SECRET_PATH_RE = /(secret|token|password|api[_-]?key|private[_-]?key|credential)/i;
+
+/**
+ * True when a configuration path names a credential.
+ *
+ * Lives here rather than beside either caller because there are two of them —
+ * the renderer masking a diff for display, and the snapshot store masking a
+ * state for a commit — and a store that recognized fewer key names than the
+ * terminal did would write into git history exactly the values the terminal
+ * thought were too sensitive to print.
+ * @param {string} path
+ * @returns {boolean}
+ */
+export function looksLikeSecretPath(path) {
+  return SECRET_PATH_RE.test(path);
+}
+
+/**
  * True when a value — or any string nested inside a plain object or array —
  * looks like a secret.
  * @param {unknown} value

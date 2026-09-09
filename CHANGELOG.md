@@ -24,8 +24,9 @@ The format is based on [Keep a Changelog], and this project adheres to
   message names the store it looked in.
 
   **Committing snapshots commits config values into git history permanently**, so
-  the shared store masks by default: values that trip Flecto's secret detection
-  are stored as `flecto:sha256:<digest>`. The digest is a change detector, not a
+  the shared store masks by default: values that trip Flecto's secret detection —
+  by shape *or* by key name, the same names `--mask-secrets` recognizes — are
+  stored as `flecto:sha256:<digest>`. The digest is a change detector, not a
   vault — a rotated credential still reports as drift, because a store that
   silently missed one would be worse than no store, and the live side of a diff is
   masked the same way so an untouched secret produces no change.

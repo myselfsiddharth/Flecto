@@ -21,6 +21,7 @@ import {
   resolveSnapshotStore,
   stableStringify,
 } from '../src/snapshot-store.js';
+import { withDocumentKeys } from '../src/documents.js';
 
 const ROOT_INDEX = resolve(process.cwd(), 'index.js');
 
@@ -128,6 +129,72 @@ test('a shared store masks secret-like values into digests by default', () => {
     const stored = JSON.parse(raw);
     assert.ok(isMaskedDigest(stored.snapshots[0].state.apiKey));
     assert.equal(stored.snapshots[0].state.replicas, 2, 'ordinary values are untouched');
+  });
+});
+
+test('a value is masked for its key name, not only for its shape', () => {
+  // The half that shape-matching alone misses, and the half that matters most
+  // for a store headed into a commit: `password: hunter2` is a credential and
+  // looks like nothing. The terminal has always masked it by key name, and a
+  // store that recorded it in plaintext would put in git history permanently
+  // exactly what `--mask-secrets` considers too sensitive to print.
+  const masked = maskState({
+    database: { password: 'hunter2', host: 'db.internal', port: 5432 },
+    api: { secret_key: 'correct-horse', timeout: 30 },
+  });
+
+  assert.ok(isMaskedDigest(masked.database.password));
+  assert.ok(isMaskedDigest(masked.api.secret_key));
+  assert.equal(masked.database.host, 'db.internal', 'ordinary values stay readable');
+  assert.equal(masked.database.port, 5432);
+  assert.equal(masked.api.timeout, 30);
+});
+
+test('a low-entropy credential under a secret key still reports when it rotates', () => {
+  const before = maskState({ db: { password: 'hunter2' } });
+  const after = maskState({ db: { password: 'hunter3' } });
+  assert.notEqual(before.db.password, after.db.password);
+  assert.deepEqual(maskState(before), before, 'and masking stays idempotent');
+});
+
+test('a non-string credential is masked too, because a password can parse as a number', () => {
+  const masked = maskState({ password: 12345, enabled: true });
+  assert.ok(isMaskedDigest(masked.password));
+  assert.equal(masked.enabled, true);
+});
+
+test('an absent value under a secret key is left absent rather than digested', () => {
+  // Digesting `null` would invent a secret where the config says there is none,
+  // and make an unset password look like a set one in review.
+  assert.deepEqual(maskState({ password: null }), { password: null });
+});
+
+test('a document named token-service does not mask every value inside it', () => {
+  // Same rule the renderer follows through `secretMatchPath`: a document
+  // identity is a resource name the user chose, not a key name. Masking on it
+  // would collapse a whole document into digests and hide all real drift in it.
+  const state = withDocumentKeys({
+    'Deployment/prod/token-service': { replicas: 3, image: 'app:1.2.3', password: 'hunter2' },
+  }, ['Deployment/prod/token-service']);
+
+  const masked = maskState(state);
+  const doc = masked['Deployment/prod/token-service'];
+  assert.equal(doc.replicas, 3, 'the document name is not a secret key name');
+  assert.equal(doc.image, 'app:1.2.3');
+  assert.ok(isMaskedDigest(doc.password), 'a genuinely sensitive key inside it is still masked');
+});
+
+test('the shared store the CLI writes carries no plaintext credential', () => {
+  withTempDir('flecto-store-keymask-', (dir) => {
+    const file = join(dir, 'prod.yaml');
+    writeFileSync(file, 'database:\n  password: hunter2\n  host: db.internal\n', 'utf8');
+
+    const { path } = sharedStore(dir).write(file, {
+      state: { database: { password: 'hunter2', host: 'db.internal' } },
+    });
+    const raw = readFileSync(path, 'utf8');
+    assert.doesNotMatch(raw, /hunter2/, 'the committed file holds no plaintext password');
+    assert.match(raw, /db\.internal/, 'and stays reviewable for everything else');
   });
 });
 

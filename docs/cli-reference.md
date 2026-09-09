@@ -486,6 +486,15 @@ history.
 shared store masks by default: every value that trips Flecto's secret detection
 is stored as `flecto:sha256:<digest>` rather than in the clear.
 
+Detection is the same on both counts `--mask-secrets` uses — the *shape* of a
+value (an opaque high-entropy string, a private key block, a URL with credentials
+in it) and the *name of its key* (`password`, `token`, `secret`, `api_key`,
+`private_key`, `credential`). The key-name half is the one that catches
+`password: hunter2`, which looks like nothing at all, and it matters more here
+than in the terminal: a log scrolls away, a commit does not. Keys are matched on
+the configuration path, so a Kubernetes resource *named* `token-service` does not
+turn every value inside it into a digest.
+
 The digest is a *change detector*, not a vault. Rotating a credential changes the
 digest, so drift is still reported — the point of a store that silently missed a
 rotated key would be hard to defend — but a digest of a low-entropy value can be
