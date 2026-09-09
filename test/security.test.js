@@ -487,6 +487,72 @@ describe('write destinations a pull request can redirect (#121)', () => {
     }
   });
 
+  test('a --output link whose target does not exist yet is refused too', () => {
+    // The sharper half of the same attack: `existsSync` follows links, so a link
+    // to a file the runner does not have *yet* reports as absent and skips the
+    // check — and the write then creates it. On a runner that is
+    // `~/.ssh/authorized_keys` or an unused git hook, which is a better prize
+    // than overwriting a file that was already there.
+    const { dir, root } = repoWithOutsideFile();
+    const absent = join(root, 'authorized_keys');
+    try {
+      symlinkSync(absent, join(dir, 'report.html'));
+      spawnSync(process.execPath, [rootIndex, 'watch', 'prod.yaml', '--snapshot'], { cwd: dir, encoding: 'utf8' });
+
+      const run = spawnSync(
+        process.execPath,
+        [rootIndex, 'report', '--output', 'report.html'],
+        { cwd: dir, encoding: 'utf8' },
+      );
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /link out of the project/);
+      assert.ok(!existsSync(absent), 'the write never created the file outside the project');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('a chain of links out of the project is followed to the end', () => {
+    const { dir, root } = repoWithOutsideFile();
+    const absent = join(root, 'authorized_keys');
+    try {
+      symlinkSync(absent, join(dir, 'hop.html'));
+      symlinkSync(join(dir, 'hop.html'), join(dir, 'report.html'));
+      spawnSync(process.execPath, [rootIndex, 'watch', 'prod.yaml', '--snapshot'], { cwd: dir, encoding: 'utf8' });
+
+      const run = spawnSync(
+        process.execPath,
+        [rootIndex, 'report', '--output', 'report.html'],
+        { cwd: dir, encoding: 'utf8' },
+      );
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /link out of the project/);
+      assert.ok(!existsSync(absent));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('an in-project link is still a fine place to write', () => {
+    // The rule is about escape, not about links: a repository that points its
+    // report at another name inside the checkout keeps working.
+    const { dir, root } = repoWithOutsideFile();
+    try {
+      symlinkSync(join(dir, 'real-report.html'), join(dir, 'report.html'));
+      spawnSync(process.execPath, [rootIndex, 'watch', 'prod.yaml', '--snapshot'], { cwd: dir, encoding: 'utf8' });
+
+      const run = spawnSync(
+        process.execPath,
+        [rootIndex, 'report', '--output', 'report.html'],
+        { cwd: dir, encoding: 'utf8' },
+      );
+      assert.equal(run.status, 0, run.stderr);
+      assert.ok(existsSync(join(dir, 'real-report.html')));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test('.flectorc cannot point --baseline out of the project', () => {
     const { dir, root } = repoWithOutsideFile({ baseline: '../accepted.json' });
     try {

@@ -24,8 +24,10 @@ The format is based on [Keep a Changelog], and this project adheres to
   pull request partly wrote. A destination declared in `.flectorc` must now
   resolve inside the project (`FLECTO_ALLOW_RC_WRITES=1` opts out), and a
   destination that leaves the project through a symlink is refused whoever named
-  it (`FLECTO_ALLOW_SYMLINK_TARGETS=1` opts out). A destination named on the
-  command line is operator intent and is unchanged.
+  it (`FLECTO_ALLOW_SYMLINK_TARGETS=1` opts out) — including a link whose target
+  does not exist yet, which `existsSync` reports as absent and which would have
+  Flecto *create* a file outside the repository rather than overwrite one. A
+  destination named on the command line is operator intent and is unchanged.
 
 - **The GitLab token followed redirects** ([#121]). `fetch` strips
   `Authorization` when a redirect crosses origins and strips only that header;

@@ -1,4 +1,13 @@
-import { existsSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'fs';
+import {
+  existsSync,
+  lstatSync,
+  readFileSync,
+  readdirSync,
+  readlinkSync,
+  realpathSync,
+  statSync,
+  writeFileSync,
+} from 'fs';
 import { basename, dirname, join, relative, resolve, sep } from 'path';
 import fg from 'fast-glob';
 import yaml from 'js-yaml';
@@ -292,10 +301,11 @@ export function assertWriteDestinationContained(file, context) {
   // the nearest directory that exists on the way to it is. The second covers a
   // path several levels deep whose parents have not been created yet.
   for (const candidate of [given, base]) {
-    if (!existsSync(candidate)) continue;
+    const real = linkDestination(candidate);
+    // Nothing there at all: no link to follow, so nothing to refuse.
+    if (real === null) continue;
     // Named from outside the project: nothing escaped, it was never inside.
     if (!isInside(candidate, lexicalRoot)) continue;
-    const real = canonical(candidate);
     if (isInside(real, root)) continue;
     throw new Error(
       `Refusing to write "${option}" to "${shown}": it is a link out of the project, `
@@ -305,6 +315,44 @@ export function assertWriteDestinationContained(file, context) {
       + 'Set FLECTO_ALLOW_SYMLINK_TARGETS=1 if this link is intentional.',
     );
   }
+}
+
+/**
+ * How many links to walk before giving up. The OS gives up around 40; this only
+ * needs to outlast any chain a repository would legitimately contain.
+ */
+const MAX_LINK_HOPS = 32;
+
+/**
+ * Where a path actually lands, following links even when the chain ends
+ * somewhere that does not exist yet.
+ *
+ * `existsSync` follows links, so it reports *nothing* for a link whose target is
+ * missing — and `realpathSync` fails on one, leaving {@link canonical} to fall
+ * back to the path as written, which is still inside the project. So a link to a
+ * file the runner does not have yet reads as contained twice over. That is not
+ * the weaker half of this attack but the stronger one: a pull request adding
+ * `report.html` as a link to `~/.ssh/authorized_keys` or an unused git hook
+ * *creates* the file rather than overwriting one, and Flecto writes the content.
+ *
+ * So the link is resolved by hand, hop by hop, and judged wherever it ends up.
+ * @param {string} path
+ * @param {number} [depth]
+ * @returns {string | null} null when there is nothing at `path` at all
+ */
+function linkDestination(path, depth = 0) {
+  const stats = lstatSync(path, { throwIfNoEntry: false });
+  if (!stats) return null;
+  if (!stats.isSymbolicLink()) return canonical(path);
+
+  const target = resolve(dirname(path), readlinkSync(path));
+  // A cycle, or a chain long enough that the write would fail with ELOOP
+  // anyway: judge the hop we have rather than walking forever.
+  if (depth >= MAX_LINK_HOPS) return target;
+  // The next hop may not exist; normalize what is there and keep the rest as
+  // written, the same way an ordinary destination is normalized above.
+  const { base, rest } = nearestExistingDir(dirname(target));
+  return linkDestination(target, depth + 1) ?? join(canonical(base), ...rest, basename(target));
 }
 
 /**

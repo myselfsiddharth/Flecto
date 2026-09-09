@@ -179,6 +179,12 @@ workflow files, and SSH config.
   destination itself and on the directory it lands in.
   `FLECTO_ALLOW_SYMLINK_TARGETS=1` opts out of this half, as it does for reads.
 
+The link check resolves the chain by hand rather than asking whether the
+destination exists. `existsSync` follows links, so a link whose target is *not
+there yet* reports as absent and would skip the check — and that is the sharper
+half of the attack, not the weaker one: a link to `~/.ssh/authorized_keys` or an
+unused git hook has Flecto **create** the file rather than overwrite one.
+
 A destination named on the **command line** is operator intent and is untouched,
 the same distinction the read rule already draws: `flecto report --output
 /tmp/drift.html` still works.
