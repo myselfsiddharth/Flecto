@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 
 import { program } from 'commander';
-import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, realpathSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, realpathSync } from 'fs';
 import { resolve, relative, dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import { createHash } from 'crypto';
 import { execFileSync } from 'child_process';
 import chalk from 'chalk';
 
@@ -36,6 +35,12 @@ import { fireAlerts } from './src/alerter.js';
 import { resolveWebhookFormat, WEBHOOK_FORMAT_CHOICES } from './src/notifiers.js';
 import { createEnvelope } from './src/envelope.js';
 import { buildSarif } from './src/sarif.js';
+import {
+  maskState,
+  resolveSnapshotStore,
+  SNAPSHOT_MASK_MODES,
+  SNAPSHOT_STORE_IDS,
+} from './src/snapshot-store.js';
 import {
   loadBaseline,
   applyBaseline,
@@ -69,7 +74,6 @@ const PKG = JSON.parse(
   readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'package.json'), 'utf8'),
 );
 
-const SNAPSHOT_DIR = '.flecto-snapshots';
 const FAIL_ON_CHOICES = ['changed', 'added', 'removed', 'policy', 'error', 'warn'];
 
 /**
@@ -82,85 +86,42 @@ const FAIL_ON_CHOICES = ['changed', 'added', 'removed', 'policy', 'error', 'warn
 const PLAN_DEFAULT_FAIL_ON = 'error';
 const PLAN_DEFAULT_POLICIES = 'terraform';
 
-function snapshotIdForPath(absPath) {
-  const normalized = absPath.replaceAll('\\', '/');
-  return createHash('sha256').update(normalized).digest('hex').slice(0, 16);
-}
-
-function snapshotPathForFile(absPath) {
-  const id = snapshotIdForPath(absPath);
-  return resolve(`${SNAPSHOT_DIR}/${id}.json`);
-}
-
-function snapshotHistoryPathForFile(absPath) {
-  const id = snapshotIdForPath(absPath);
-  let timestamp = Date.now();
-  let path = resolve(`${SNAPSHOT_DIR}/${id}.${timestamp}.json`);
-  while (existsSync(path)) {
-    timestamp += 1;
-    path = resolve(`${SNAPSHOT_DIR}/${id}.${timestamp}.json`);
-  }
-  return path;
-}
-
 /**
- * Snapshot ids that already have at least one timestamped history entry.
+ * Resolve the snapshot store a command should read and write (#141).
  *
- * Listed once per run and threaded through the snapshot loop: probing the
- * directory per file made writing N baselines cost N listings of O(N) entries
- * each, which is quadratic in the number of tracked files.
- * @returns {Set<string>}
+ * Every snapshot consumer goes through this, so `--snapshot-store shared` in
+ * `.flectorc` means the same thing to `watch`, `ci`, `history`, and `report` —
+ * a store the editor of the config and the runner gating it disagree about
+ * would be worse than having only the local one.
+ * @param {Record<string, unknown>} effective
+ * @returns {import('./src/snapshot-store.js').SnapshotStore}
  */
-function snapshotIdsWithHistory() {
-  /** @type {Set<string>} */
-  const ids = new Set();
-  if (!existsSync(SNAPSHOT_DIR)) return ids;
-  for (const name of readdirSync(SNAPSHOT_DIR)) {
-    const match = /^([a-f0-9]{16})\.\d+\.json$/.exec(name);
-    if (match) ids.add(match[1]);
-  }
-  return ids;
+/**
+ * Put the live side of a diff in the same form the store recorded the baseline
+ * in.
+ *
+ * A masked store holds `flecto:sha256:…` where a secret was. Diffing that
+ * against the plaintext on disk would report every secret in the file as changed
+ * on every single run — noise that would train a team to ignore the tool, from a
+ * store whose whole purpose is to be trusted. Masking both sides compares digest
+ * to digest, so a rotated credential still reports as changed and an untouched
+ * one reports nothing.
+ * @template T
+ * @param {T} state
+ * @param {import('./src/snapshot-store.js').SnapshotStore} store
+ * @returns {T}
+ */
+function alignStateWithStore(state, store) {
+  return store.maskMode === 'hash' ? /** @type {T} */ (maskState(state)) : state;
 }
 
-function preserveLegacySnapshotForHistory(absPath, snapshotPath, idsWithHistory) {
-  if (!existsSync(snapshotPath) || idsWithHistory.has(snapshotIdForPath(absPath))) return;
-
-  const legacy = JSON.parse(readFileSync(snapshotPath, 'utf8'));
-  writeFileSync(
-    snapshotHistoryPathForFile(absPath),
-    JSON.stringify({
-      file: legacy.file ?? absPath,
-      state: legacy.state ?? legacy,
-      ...(Array.isArray(legacy.documents) ? { documents: legacy.documents } : {}),
-      createdAt: legacy.createdAt ?? statSync(snapshotPath).mtime.toISOString(),
-    }, null, 2),
-    'utf8',
-  );
-}
-
-function readLocalSnapshotHistory() {
-  if (!existsSync(SNAPSHOT_DIR)) return [];
-
-  const entries = readdirSync(SNAPSHOT_DIR, { withFileTypes: true })
-    .filter((entry) => entry.isFile() && entry.name.endsWith('.json'));
-  const historyEntries = entries.filter((entry) => /^[a-f0-9]{16}\.\d+\.json$/.test(entry.name));
-  const historyIds = new Set(historyEntries.map((entry) => entry.name.slice(0, 16)));
-  const legacyEntries = entries.filter((entry) =>
-    /^[a-f0-9]{16}\.json$/.test(entry.name) && !historyIds.has(entry.name.slice(0, 16)));
-  const snapshotEntries = [...historyEntries, ...legacyEntries];
-
-  return snapshotEntries.map((entry) => {
-    const path = resolve(SNAPSHOT_DIR, entry.name);
-    const snapshot = JSON.parse(readFileSync(path, 'utf8'));
-    const state = restoreSnapshotDocumentKeys(snapshot?.state ?? snapshot, snapshot);
-    if (typeof snapshot?.file !== 'string') {
-      throw new Error(`Invalid snapshot file: ${path}`);
-    }
-    return {
-      file: snapshot.file,
-      state,
-      createdAt: snapshot.createdAt ?? statSync(path).mtime.toISOString(),
-    };
+function snapshotStoreFromEffective(effective) {
+  return resolveSnapshotStore({
+    store: effective.snapshotStore,
+    dir: effective.snapshotDir,
+    mask: effective.snapshotMask,
+    retention: effective.snapshotRetention,
+    cwd: process.cwd(),
   });
 }
 
@@ -402,21 +363,18 @@ function canonicalPath(path) {
   }
 }
 
-function readSnapshotStateFromRef(filePath, snapshotRef) {
+function readSnapshotStateFromRef(filePath, snapshotRef, store) {
   if (!snapshotRef) {
-    const snapshotPath = snapshotPathForFile(filePath);
     // Failing closed here is right — a diff with no baseline is not a clean
-    // diff — but an ENOENT on a hashed filename explains nothing. Snapshot
-    // history is local to the working directory, so this is what an ephemeral
-    // CI runner hits on every run (#141).
-    if (!existsSync(snapshotPath)) {
-      throw new Error(
-        `no local snapshot has been saved for this file (${SNAPSHOT_DIR}/ holds none).`
-          + ' Save one with "flecto watch <file> --snapshot", or pass --snapshot-ref'
-          + ' <git-ref> to diff against a committed revision instead',
-      );
+    // diff — but an ENOENT on a hashed filename explains nothing. The default
+    // store is local to the working directory, so this is what an ephemeral CI
+    // runner hits on every run; the message names the store it looked in and
+    // the two ways to give it one (#141).
+    const record = store.readLatest(filePath);
+    if (!record) {
+      throw new Error(`no snapshot has been saved for this file (${store.emptyHint})`);
     }
-    return readSnapshotStateFromFile(snapshotPath);
+    return record.state;
   }
   const maybePath = resolve(snapshotRef);
   if (existsSync(maybePath)) {
@@ -684,6 +642,10 @@ program
   .option('--mask-secrets-webhooks', 'Also mask secrets in webhook payloads', false)
   .option('--snapshot', 'Save current state as baseline instead of watching')
   .option('--diff', 'Diff current file against saved baseline and exit')
+  .option('--snapshot-store <id>', `Snapshot store: ${SNAPSHOT_STORE_IDS.join(' | ')} (shared is repo-relative and meant to be committed)`)
+  .option('--snapshot-dir <path>', 'Directory holding the snapshot store (default: .flecto-snapshots local, .flecto/snapshots shared)')
+  .option('--snapshot-mask <mode>', `How the store records secret-like values: ${SNAPSHOT_MASK_MODES.join(' | ')} (default: hash for shared, none for local)`)
+  .option('--snapshot-retention <n>', 'Snapshots kept per file, 0 keeps every one (default: 20 for shared, unlimited for local)')
   .option('--allow-empty', 'Allow --snapshot to succeed when nothing was written', false)
   .action(async (files, opts, command) => {
     try {
@@ -707,16 +669,18 @@ program
       const maskSecretsWebhooks = Boolean(effective.maskSecretsWebhooks);
       const webhookFormat = resolveWebhookFormat(effective.webhookFormat, effective.webhook);
       const dOpts = diffOptionsFromEffective(effective, ignorePaths);
+      const snapshotStore = snapshotStoreFromEffective(effective);
 
       if (effective.snapshot) {
-        mkdirSync(SNAPSHOT_DIR, { recursive: true });
-        // Snapshots carry config values, so a .flecto-snapshots/ that is itself a
+        mkdirSync(snapshotStore.root, { recursive: true });
+        // Snapshots carry config values, so a store directory that is itself a
         // link out of the project would write them somewhere the repository does
         // not control. Same rule as a target, checked after mkdir so an existing
         // link is seen rather than a path that does not exist yet.
-        assertTargetContained(resolve(SNAPSHOT_DIR), process.cwd());
-        const idsWithHistory = snapshotIdsWithHistory();
+        assertTargetContained(snapshotStore.root, process.cwd());
         let written = 0;
+        let pruned = 0;
+        const warnings = new Set();
         for (const filepath of targets) {
           if (!existsSync(filepath)) {
             renderWarn(`Skipping missing file: ${filepath}`);
@@ -727,24 +691,31 @@ program
             continue;
           }
           const state = parseFile(filepath);
-          const snapshotPath = snapshotPathForFile(filepath);
-          preserveLegacySnapshotForHistory(filepath, snapshotPath, idsWithHistory);
           // Only a multi-document file records `documents`, so an ordinary
           // snapshot is byte-for-byte what it was before this field existed.
-          const documents = documentKeysOf(state) ?? [];
-          const snapshot = {
-            file: filepath,
+          const result = snapshotStore.write(filepath, {
             state,
-            ...(documents.length > 0 ? { documents: [...documents] } : {}),
-            createdAt: new Date().toISOString(),
-          };
-          writeFileSync(snapshotPath, JSON.stringify(snapshot, null, 2), 'utf8');
-          writeFileSync(snapshotHistoryPathForFile(filepath), JSON.stringify(snapshot, null, 2), 'utf8');
-          // Keep the set in step with what this run has written, so a repeated
-          // target behaves exactly as it did when the check hit the disk.
-          idsWithHistory.add(snapshotIdForPath(filepath));
-          console.log(chalk.green(`✓ Snapshot saved: ${snapshotPath}`));
+            documents: documentKeysOf(state) ?? [],
+          });
+          if (result.warning) warnings.add(result.warning);
+          pruned += result.pruned;
+          console.log(chalk.green(`✓ Snapshot saved: ${result.path}`));
           written += 1;
+        }
+        for (const warning of warnings) renderWarn(warning);
+        if (pruned > 0) {
+          renderNote(
+            `Pruned ${pruned} snapshot${pruned === 1 ? '' : 's'} beyond the`
+            + ` ${snapshotStore.retention}-entry retention of the ${snapshotStore.id} store.`,
+          );
+        }
+        if (written > 0 && snapshotStore.id === 'shared') {
+          renderNote(
+            `Shared store: commit ${snapshotStore.label} so every runner reads the same history.`
+            + (snapshotStore.maskMode === 'none'
+              ? ' Masking is off, so these files carry config values verbatim into git history.'
+              : ' Secret-like values are stored as digests, not plaintext.'),
+          );
         }
         if (written === 0 && !effective.allowEmpty) {
           throw new Error(
@@ -760,14 +731,14 @@ program
         let compared = 0;
         let missing = 0;
         for (const filepath of targets) {
-          const snapshotPath = snapshotPathForFile(filepath);
-          if (!existsSync(snapshotPath)) {
-            renderWarn(`No snapshot found for "${filepath}"`);
+          const record = snapshotStore.readLatest(filepath);
+          if (!record) {
+            renderWarn(`No snapshot found for "${filepath}" in ${snapshotStore.label}`);
             missing += 1;
             continue;
           }
-          const before = readSnapshotStateFromFile(snapshotPath);
-          const after = parseFile(filepath);
+          const before = record.state;
+          const after = alignStateWithStore(parseFile(filepath), snapshotStore);
           const events = diffTrees(before, after, dOpts);
           renderDiff(filepath, events, { maskSecrets });
           compared += 1;
@@ -779,7 +750,7 @@ program
         // is the normal state of a fresh CI runner.
         if (compared === 0) {
           throw new Error(
-            'No snapshot found for any target, so nothing was compared.'
+            `No snapshot found for any target in ${snapshotStore.label}, so nothing was compared.`
               + ' Run "flecto watch <file> --snapshot" first — no history is not no drift.',
           );
         }
@@ -897,8 +868,10 @@ program
 
 program
   .command('history [files...]')
-  .description('Summarize drift across local snapshots')
+  .description('Summarize drift across saved snapshots')
   .option('-l, --limit <n>', 'Number of recent snapshots to show', '10')
+  .option('--snapshot-store <id>', `Snapshot store to read: ${SNAPSHOT_STORE_IDS.join(' | ')}`)
+  .option('--snapshot-dir <path>', 'Directory holding the snapshot store (default: .flecto-snapshots local, .flecto/snapshots shared)')
   .option('-p, --profile <name>', 'Use profile from .flectorc (else FLECTO_PROFILE)')
   .option('--ignore <keys>', 'Comma-separated key paths to ignore (e.g. "updated_at,meta.ts")')
   .option('--array-id-key <key>', 'Diff arrays by this object identity key (opt-in)')
@@ -917,7 +890,8 @@ program
       const ignorePaths = parseCsv(effective.ignore);
       const dOpts = diffOptionsFromEffective(effective, ignorePaths);
 
-      const allSnapshots = readLocalSnapshotHistory();
+      const snapshotStore = snapshotStoreFromEffective(effective);
+      const allSnapshots = snapshotStore.readHistory();
       let snapshots = allSnapshots;
       if (files.length > 0) {
         const targets = new Set((await resolveTargetFiles(files, config)).map((file) => resolve(file)));
@@ -928,13 +902,20 @@ program
       if (summaries.length === 0) {
         if (files.length > 0 && allSnapshots.length > 0) {
           throw new Error(
-            'No local snapshots matched the given files. Omit files to view all saved snapshot history.',
+            `No snapshots in ${snapshotStore.label} matched the given files.`
+            + ' Omit files to view all saved snapshot history.',
           );
         }
-        throw new Error('No local snapshots found. Run "flecto watch <file> --snapshot" first.');
+        throw new Error(
+          `No snapshots found in ${snapshotStore.label}.`
+          + ` Run "flecto watch <file> --snapshot${snapshotStore.id === 'shared' ? ' --snapshot-store shared' : ''}" first`
+          + ' — no history is not no drift.',
+        );
       }
 
-      console.log(`Local snapshot history (${summaries.length} snapshots)`);
+      console.log(
+        `Snapshot history from ${snapshotStore.label} (${summaries.length} snapshots, ${snapshotStore.id} store)`,
+      );
       let baselines = 0;
       for (const snapshot of summaries) {
         const file = relative(process.cwd(), snapshot.file) || snapshot.file;
@@ -965,8 +946,10 @@ program
 
 program
   .command('report [files...]')
-  .description('Render local snapshot history as a self-contained HTML report')
+  .description('Render saved snapshot history as a self-contained HTML report')
   .option('-o, --output <path>', 'Write the report to this path', 'flecto-report.html')
+  .option('--snapshot-store <id>', `Snapshot store to read: ${SNAPSHOT_STORE_IDS.join(' | ')}`)
+  .option('--snapshot-dir <path>', 'Directory holding the snapshot store (default: .flecto-snapshots local, .flecto/snapshots shared)')
   .option('-l, --limit <n>', 'Number of recent snapshots to include', '10')
   .option('-p, --profile <name>', 'Use profile from .flectorc (else FLECTO_PROFILE)')
   .option('--ignore <keys>', 'Comma-separated key paths to ignore (e.g. "updated_at,meta.ts")')
@@ -995,7 +978,8 @@ program
 
       // Same snapshot source, filtering, and errors as `flecto history` — this
       // command only changes how that history is rendered.
-      const allSnapshots = readLocalSnapshotHistory();
+      const snapshotStore = snapshotStoreFromEffective(effective);
+      const allSnapshots = snapshotStore.readHistory();
       let snapshots = allSnapshots;
       if (files.length > 0) {
         const targets = new Set((await resolveTargetFiles(files, config)).map((file) => resolve(file)));
@@ -1006,10 +990,15 @@ program
       if (summaries.length === 0) {
         if (files.length > 0 && allSnapshots.length > 0) {
           throw new Error(
-            'No local snapshots matched the given files. Omit files to report on all saved snapshot history.',
+            `No snapshots in ${snapshotStore.label} matched the given files.`
+            + ' Omit files to report on all saved snapshot history.',
           );
         }
-        throw new Error('No local snapshots found. Run "flecto watch <file> --snapshot" first.');
+        throw new Error(
+          `No snapshots found in ${snapshotStore.label}.`
+          + ` Run "flecto watch <file> --snapshot${snapshotStore.id === 'shared' ? ' --snapshot-store shared' : ''}" first`
+          + ' — no history is not no drift.',
+        );
       }
 
       const reportSnapshots = [];
@@ -1043,6 +1032,7 @@ program
         version: PKG.version,
         limit,
         maskSecrets,
+        store: snapshotStore.label,
       });
       mkdirSync(dirname(outputPath), { recursive: true });
       writeFileSync(outputPath, html, 'utf8');
@@ -1060,6 +1050,8 @@ program
   .description('Run semantic diff in CI mode')
   .option('-p, --profile <name>', 'Use profile from .flectorc (else FLECTO_PROFILE)')
   .option('--snapshot-ref <ref>', 'Snapshot reference: snapshot path or git ref')
+  .option('--snapshot-store <id>', `Snapshot store to read: ${SNAPSHOT_STORE_IDS.join(' | ')}`)
+  .option('--snapshot-dir <path>', 'Directory holding the snapshot store (default: .flecto-snapshots local, .flecto/snapshots shared)')
   .option('--format <type>', 'Output format: json | ndjson | sarif | github-annotations | pr-comment', 'json')
   .option('--pr-comment-post', 'With --format pr-comment, upsert the comment on the PR (needs a token + merge request context)', false)
   .option('--pr-provider <name>', `Force the comment delivery target: ${PR_PROVIDER_IDS.join(' | ')} (default: detect from CI)`)
@@ -1112,6 +1104,8 @@ program
       }
       const dOpts = diffOptionsFromEffective(effective, ignorePaths);
 
+      const snapshotStore = snapshotStoreFromEffective(effective);
+
       const cwd = process.cwd();
       const baselinePath = effective.baseline ? resolve(cwd, String(effective.baseline)) : null;
       const updateBaseline = Boolean(effective.updateBaseline);
@@ -1134,10 +1128,14 @@ program
           renderWarn(`Skipping unsupported file: ${filepath}`);
           continue;
         }
-        const after = parseFile(filepath);
+        // A `--snapshot-ref` baseline is read straight from git, so it is never
+        // masked; only a store-provided baseline needs the live side aligned.
+        const after = effective.snapshotRef
+          ? parseFile(filepath)
+          : alignStateWithStore(parseFile(filepath), snapshotStore);
         let before;
         try {
-          before = readSnapshotStateFromRef(filepath, effective.snapshotRef);
+          before = readSnapshotStateFromRef(filepath, effective.snapshotRef, snapshotStore);
         } catch (err) {
           throw new Error(
             `Failed to resolve snapshot baseline for "${filepath}"` +

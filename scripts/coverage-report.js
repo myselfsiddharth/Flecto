@@ -34,6 +34,7 @@ const SECURITY_RELEVANT = [
   ['src/encrypted.js', 'encrypted files, which must be read for structure and never decrypted'],
   ['src/pr-comment.js', 'sticky-comment rendering and GitHub comment output'],
   ['src/pr-providers.js', 'provider tokens (GitHub, GitLab, Bitbucket) and redaction of them from errors'],
+  ['src/snapshot-store.js', 'the shared store writes config values to a committed path, and masks them on the way'],
 ];
 
 const LCOV_PATH = process.argv[2] ?? 'coverage.lcov';

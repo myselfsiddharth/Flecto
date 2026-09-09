@@ -50,6 +50,12 @@ If you omit `files`, Flecto uses the `files` / `include` patterns from `.flector
 | `--snapshot` | — | Save current state as a baseline instead of watching |
 | `--diff` | — | Diff against the saved baseline and exit |
 | `--allow-empty` | off | Let `--snapshot` succeed when nothing was written |
+| `--snapshot-store <id>` | `local` | Where snapshots live: `local` or `shared` |
+| `--snapshot-dir <path>` | per store | Override the store directory |
+| `--snapshot-mask <mode>` | per store | How the store records secret-like values: `hash` or `none` |
+| `--snapshot-retention <n>` | per store | Snapshots kept per file; `0` keeps every one |
+
+See [Snapshot stores](#snapshot-stores) for what the two stores are for.
 
 **Exit codes:** watch mode runs until interrupted (`0` on clean shutdown).
 With `--diff`: `0` when the file matches the baseline, `1` when it differs, and
@@ -105,11 +111,15 @@ Two things fail closed by design: an unresolved `--snapshot-ref` is an error
 rather than a silently empty baseline, and a run where every target is missing or
 unsupported exits non-zero unless you pass `--allow-empty`.
 
-With no `--snapshot-ref`, the baseline is the local snapshot in
-`.flecto-snapshots/`, which is not committed and does not survive an ephemeral
-runner. A file with no saved snapshot is an error naming both ways out — save one
-with `flecto watch <file> --snapshot`, or diff against a committed revision with
+With no `--snapshot-ref`, the baseline comes from the snapshot store — by default
+the local one in `.flecto-snapshots/`, which is not committed and does not survive
+an ephemeral runner. A file with no saved snapshot is an error naming the store it
+looked in and the ways out — save one with `flecto watch <file> --snapshot`, commit
+a `--snapshot-store shared` store, or diff against a committed revision with
 `--snapshot-ref <git-ref>` — rather than a diff against nothing.
+
+`--snapshot-store <id>` and `--snapshot-dir <path>` select which store `ci` reads.
+See [Snapshot stores](#snapshot-stores).
 
 `--format pr-comment` prints a markdown risk summary to stdout. It posts that
 summary as a single sticky pull request comment only when `--pr-comment-post` is
@@ -216,8 +226,9 @@ Full guide, including the `terraform` policy pack and CI wiring:
 
 ## `flecto history [files...]`
 
-Summarize drift across local snapshots in `.flecto-snapshots/`. Omit `files` to
-show all saved history.
+Summarize drift across saved snapshots. Omit `files` to show all saved history.
+Reads whichever [snapshot store](#snapshot-stores) is selected — the local one in
+`.flecto-snapshots/` by default.
 
 ```bash
 flecto history config/prod.yaml --limit 10
@@ -227,13 +238,16 @@ flecto history config/prod.yaml --limit 10
 |---|---|---|
 | `-l, --limit <n>` | `10` | Number of recent snapshots to show |
 | `-p, --profile <name>` | — | Use a profile from `.flectorc` (else `FLECTO_PROFILE`) |
+| `--snapshot-store <id>` | `local` | Store to read: `local` or `shared` |
+| `--snapshot-dir <path>` | per store | Override the store directory |
 | `--ignore <keys>` | — | Comma-separated key paths to ignore |
 | `--array-id-key <key>` | auto | Diff arrays by this identity key |
 | `--array-ignore-order` | off | Treat array order as insignificant |
 
 Change counts use the same ignore paths, array identity, and order settings as
 `flecto watch --diff`. This command is entirely local — it reads snapshot files
-and sends nothing anywhere.
+and sends nothing anywhere. The header names the store it read and how many
+snapshots it found, so an empty answer is never mistaken for a clean one.
 
 **A snapshot with nothing before it reads as `baseline`, not `0 changes`.** The
 first snapshot of a file was never compared against anything, so a change count
@@ -259,6 +273,8 @@ flecto report --profile prod --mask-secrets
 | `-o, --output <path>` | `flecto-report.html` | Where to write the report |
 | `-l, --limit <n>` | `10` | Number of recent snapshots to include |
 | `-p, --profile <name>` | — | Use a profile from `.flectorc` (else `FLECTO_PROFILE`) |
+| `--snapshot-store <id>` | `local` | Store to read: `local` or `shared` |
+| `--snapshot-dir <path>` | per store | Override the store directory |
 | `--ignore <keys>` | — | Comma-separated key paths to ignore |
 | `--policies <ids>` | `default` | Comma-separated policy pack ids |
 | `--plugins <paths>` | — | Comma-separated local ESM plugin paths |
@@ -274,9 +290,9 @@ severity. Missing directories in `--output` are created.
 
 **The file is self-contained.** Inline CSS, one small inline script for
 filtering and collapsing, and nothing else: no fonts, no images, no CDN scripts,
-no analytics, no network access when it is opened. It reads the same
-`.flecto-snapshots/` history `flecto history` reads, so nothing new is
-collected and nothing leaves your machine. It follows the viewer's light or dark
+no analytics, no network access when it is opened. It reads the same snapshot
+store `flecto history` reads, so nothing new is collected and nothing leaves your
+machine. It follows the viewer's light or dark
 theme and prints reasonably.
 
 Every config value, path, and message is HTML-escaped, so a value containing
@@ -286,9 +302,10 @@ profile) whenever you plan to share one: masking uses the same key-name and
 value-pattern detection as everywhere else, and it also redacts policy messages
 that interpolate values.
 
-**Snapshot history is local to the working directory.** `.flecto-snapshots/` is
-not committed and does not survive an ephemeral CI runner, so a pipeline that
-runs `flecto report` without first saving snapshots has nothing to report on. A
+**The default store is local to the working directory.** `.flecto-snapshots/` is
+not committed and does not survive an ephemeral CI runner, so a pipeline that runs
+`flecto report` without first saving snapshots has nothing to report on — use
+`--snapshot-store shared` and commit it to report on a runner. A
 report whose snapshots are all first-of-their-file says so in a banner and in a
 **Comparisons** tile reading `0` — an empty report is *no history*, never an
 all-clear. Individual first snapshots are labelled `baseline` rather than
@@ -423,6 +440,80 @@ flecto doctor
 
 **Exit codes:** `0` when the environment is usable, `1` on an unsupported Node.js
 version or a broken config.
+
+---
+
+## Snapshot stores
+
+Snapshots are the baseline every drift feature measures against: `watch --diff`,
+`ci` without `--snapshot-ref`, `history`, and `report` all read one. Where they
+live is selectable (#141), and the two stores answer different questions.
+
+| | `local` (default) | `shared` |
+|---|---|---|
+| Directory | `.flecto-snapshots/` | `.flecto/snapshots/` |
+| Keyed by | absolute path hash | repo-relative path |
+| Layout | one file per snapshot | one file per config file, history inside |
+| Masking | off | `hash` — secret-like values stored as digests |
+| Retention | unlimited | 20 snapshots per file |
+| Committed | no (gitignored) | **yes, that is the point** |
+
+**`local`** is a scratch directory on your machine. It is keyed by the file's
+absolute path, so it means nothing on another checkout, and nothing about it
+changed in this release.
+
+**`shared`** is meant to be committed. Because it is keyed by repo-relative path
+and serialized deterministically, the snapshot you save on a laptop is the
+baseline a CI runner reads on a checkout it has never seen before:
+
+```bash
+flecto watch "config/**/*.yaml" --snapshot --snapshot-store shared
+git add .flecto/snapshots && git commit -m "chore: update config baseline"
+```
+
+```bash
+# on the runner — no --snapshot-ref, no cache, no setup step
+flecto ci "config/**/*.yaml" --snapshot-store shared
+```
+
+Set it once in `.flectorc` (`"defaults": { "snapshotStore": "shared" }`) so the
+editor of a config and the gate that blocks their pull request read the same
+history.
+
+### Committing snapshots means committing config
+
+**Snapshots carry config values, and git history is permanent.** That is why the
+shared store masks by default: every value that trips Flecto's secret detection
+is stored as `flecto:sha256:<digest>` rather than in the clear.
+
+The digest is a *change detector*, not a vault. Rotating a credential changes the
+digest, so drift is still reported — the point of a store that silently missed a
+rotated key would be hard to defend — but a digest of a low-entropy value can be
+brute-forced, so a masked snapshot is not a safe place to put something that was
+never meant to be committed. `--snapshot-mask none` turns masking off and writes
+values verbatim; the CLI says so when it does.
+
+Masking is recorded in each store file. Switching modes mid-history warns,
+because entries written in the other form will read as changed on the next diff.
+
+### Diffs against a masked store
+
+When the baseline is masked, the live file is masked the same way before the two
+are compared, so an untouched secret produces no change and a rotated one shows
+as `flecto:sha256:aaa…` → `flecto:sha256:bbb…`. Neither value appears anywhere.
+
+### Retention
+
+`--snapshot-retention <n>` caps how many snapshots a file keeps, oldest pruned
+first; `0` keeps every one. The shared store defaults to 20 because an
+append-forever directory inside a repository becomes its own problem. The local
+store defaults to unlimited, as it always has.
+
+### Serialization
+
+Shared-store files sort object keys at every level and end with a newline, so
+reordering keys in a config produces no diff at all and a real change produces
+exactly the lines that changed. A snapshot commit is meant to be reviewable.
 
 ---
 

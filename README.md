@@ -263,7 +263,10 @@ flecto history config/prod.yaml --limit 10
 ```
 
 Snapshots stay on your machine in `.flecto-snapshots/`. Nothing is uploaded and
-no account is required. → **[CLI reference](docs/cli-reference.md#flecto-history-files)**
+no account is required. To read the same history on a CI runner, save it to the
+git-tracked store instead — `--snapshot-store shared` writes a committable
+`.flecto/snapshots/`, masking secret-like values into digests as it goes.
+→ **[CLI reference](docs/cli-reference.md#flecto-history-files)**
 
 ### Share what changed before the incident
 

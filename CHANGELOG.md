@@ -7,6 +7,35 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- **A shared, git-tracked snapshot store** ([#141]). Snapshot history lived in
+  `.flecto-snapshots/`, keyed by each file's *absolute* path — right for a laptop
+  and meaningless anywhere else. An ephemeral runner starts with that directory
+  empty on every run, so `history` and `report` were local-only by construction
+  and `ci` had to be handed `--snapshot-ref`.
+
+  `--snapshot-store shared` (or `"snapshotStore": "shared"` in `.flectorc`, which
+  is the better place for it) writes `.flecto/snapshots/` instead: keyed by
+  repo-relative path, one file per config file with its history inside, keys
+  sorted at every level. Commit it and every runner reads the baseline the author
+  saved, with no cache, no ref, and no setup step. `watch`, `ci`, `history`, and
+  `report` all read whichever store is selected, and every "nothing found"
+  message names the store it looked in.
+
+  **Committing snapshots commits config values into git history permanently**, so
+  the shared store masks by default: values that trip Flecto's secret detection
+  are stored as `flecto:sha256:<digest>`. The digest is a change detector, not a
+  vault — a rotated credential still reports as drift, because a store that
+  silently missed one would be worse than no store, and the live side of a diff is
+  masked the same way so an untouched secret produces no change.
+  `--snapshot-mask none` opts out and says so.
+
+  Retention (`--snapshot-retention`, 20 per file in the shared store) prunes
+  oldest-first, because an append-forever store inside a repository becomes its
+  own problem. The `local` store is untouched: same filenames, same JSON, same
+  unbounded history, still the default.
+
 ## [3.0.2] - 2026-09-06
 
 ### Security
