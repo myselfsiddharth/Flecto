@@ -536,6 +536,43 @@ describe('write destinations a pull request can redirect (#121)', () => {
     }
   });
 
+  test('a destination whose parent directories do not exist yet is still allowed', () => {
+    // The check normalizes from the nearest ancestor that exists, because a path
+    // that is not there cannot be canonicalized — and on Windows the fallback
+    // spelling (an 8.3 short name) compares as a different directory from the
+    // project root, which made an in-project path look external.
+    const { dir, root } = repoWithOutsideFile({ output: 'out/reports/2026/drift.html' });
+    try {
+      spawnSync(process.execPath, [rootIndex, 'watch', 'prod.yaml', '--snapshot'], { cwd: dir, encoding: 'utf8' });
+      const run = spawnSync(process.execPath, [rootIndex, 'report'], { cwd: dir, encoding: 'utf8' });
+      assert.equal(run.status, 0, run.stderr);
+      assert.ok(existsSync(join(dir, 'out', 'reports', '2026', 'drift.html')));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('a symlinked directory on the way to the destination is refused', () => {
+    const { dir, root } = repoWithOutsideFile();
+    try {
+      const elsewhere = join(root, 'elsewhere');
+      mkdirSync(elsewhere, { recursive: true });
+      symlinkSync(elsewhere, join(dir, 'reports'));
+      spawnSync(process.execPath, [rootIndex, 'watch', 'prod.yaml', '--snapshot'], { cwd: dir, encoding: 'utf8' });
+
+      const run = spawnSync(
+        process.execPath,
+        [rootIndex, 'report', '--output', 'reports/nested/drift.html'],
+        { cwd: dir, encoding: 'utf8' },
+      );
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /link out of the project/);
+      assert.ok(!existsSync(join(elsewhere, 'nested')));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test('an in-project destination is untouched by any of this', () => {
     const { dir, root } = repoWithOutsideFile({ output: 'reports/drift.html' });
     try {

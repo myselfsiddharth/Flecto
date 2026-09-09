@@ -260,12 +260,23 @@ function rcWritesAllowed() {
 export function assertWriteDestinationContained(file, context) {
   const { option, fromCli = false } = context;
   const cwd = context.cwd ?? process.cwd();
-  const root = canonical(resolve(cwd));
+  const lexicalRoot = resolve(cwd);
+  const root = canonical(lexicalRoot);
   const given = resolve(cwd, file);
-  const nominal = join(canonical(dirname(given)), basename(given));
-  const shown = relative(root, given).split(sep).join('/') || given;
+  const shown = relative(lexicalRoot, given).split(sep).join('/') || given;
 
-  if (!fromCli && !rcWritesAllowed() && !isInside(nominal, root)) {
+  // A destination need not exist yet, and neither need the directories above it,
+  // so normalize from the nearest ancestor that does: canonical() cannot resolve
+  // a path that is not there, and its fallback leaves the spelling as written —
+  // which on Windows is an 8.3 short name that compares as a different directory
+  // from the long form `root` carries, making an in-project path look external.
+  const { base, rest } = nearestExistingDir(dirname(given));
+  const nominal = join(canonical(base), ...rest, basename(given));
+  // Either spelling counts as inside: the lexical form covers a path derived
+  // from the cwd, the canonical form a path named some other way.
+  const insideProject = isInside(given, lexicalRoot) || isInside(nominal, root);
+
+  if (!fromCli && !rcWritesAllowed() && !insideProject) {
     throw new Error(
       `Refusing to write "${option}" to ${given}: .flectorc points it outside the project.\n`
       + '.flectorc is attacker-controlled on an untrusted pull request, and this file carries '
@@ -277,14 +288,13 @@ export function assertWriteDestinationContained(file, context) {
 
   if (symlinkTargetsAllowed()) return;
 
-  // The destination itself, when it already exists as a link, and the directory
-  // it lands in, which is the case a not-yet-created file goes through.
-  for (const candidate of [given, dirname(given)]) {
+  // Two ways a write leaves through a link: the destination is itself a link, or
+  // the nearest directory that exists on the way to it is. The second covers a
+  // path several levels deep whose parents have not been created yet.
+  for (const candidate of [given, base]) {
     if (!existsSync(candidate)) continue;
-    const nominalCandidate = candidate === given
-      ? nominal
-      : join(canonical(dirname(candidate)), basename(candidate));
-    if (!isInside(nominalCandidate, root)) continue;
+    // Named from outside the project: nothing escaped, it was never inside.
+    if (!isInside(candidate, lexicalRoot)) continue;
     const real = canonical(candidate);
     if (isInside(real, root)) continue;
     throw new Error(
@@ -295,6 +305,25 @@ export function assertWriteDestinationContained(file, context) {
       + 'Set FLECTO_ALLOW_SYMLINK_TARGETS=1 if this link is intentional.',
     );
   }
+}
+
+/**
+ * The nearest ancestor of a path that exists on disk, plus the segments below it
+ * that do not.
+ * @param {string} path
+ * @returns {{ base: string, rest: string[] }}
+ */
+function nearestExistingDir(path) {
+  let current = resolve(path);
+  /** @type {string[]} */
+  const rest = [];
+  while (!existsSync(current)) {
+    const parent = dirname(current);
+    if (parent === current) break;
+    rest.unshift(basename(current));
+    current = parent;
+  }
+  return { base: current, rest };
 }
 
 /**
