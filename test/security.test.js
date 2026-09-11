@@ -1,6 +1,15 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, writeFileSync, rmSync, existsSync, realpathSync, symlinkSync } from 'fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  writeFileSync,
+  readFileSync,
+  rmSync,
+  existsSync,
+  realpathSync,
+  symlinkSync,
+} from 'fs';
 import { join, resolve } from 'path';
 import { tmpdir } from 'os';
 import { spawnSync } from 'child_process';
@@ -414,5 +423,305 @@ describe('prototype pollution from config file contents (#121)', () => {
     assert.equal(Object.getPrototypeOf(masked), Object.prototype);
     assert.notEqual(masked['__proto__'].api_key, 'AKIAIOSFODNN7EXAMPLE');
     assert.equal(({}).api_key, undefined);
+  });
+});
+
+describe('write destinations a pull request can redirect (#121)', () => {
+  /**
+   * A repository whose CI runs Flecto, plus a file outside it that a runner
+   * would have but a pull request could not commit — the thing a redirected
+   * write lands on.
+   * @param {Record<string, unknown>} [rc] `.flectorc` defaults for this repo
+   */
+  function repoWithOutsideFile(rc) {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'flecto-sec-write-')));
+    const dir = join(root, 'repo');
+    mkdirSync(dir, { recursive: true });
+    const outside = join(root, 'profile.sh');
+    writeFileSync(outside, '# original\n', 'utf8');
+    writeFileSync(join(dir, 'prod.yaml'), 'debug: true\n', 'utf8');
+    writeFileSync(join(dir, 'snap.json'), JSON.stringify({ state: { debug: false } }), 'utf8');
+    if (rc) writeFileSync(join(dir, '.flectorc'), JSON.stringify({ defaults: rc }), 'utf8');
+    return { dir, outside, root };
+  }
+
+  test('.flectorc cannot point --output out of the project', () => {
+    // The report embeds config values and file names, both of which the pull
+    // request wrote, so an unconstrained destination is a partly-chosen
+    // overwrite of any file the job can reach.
+    const { dir, outside, root } = repoWithOutsideFile({ output: '../profile.sh' });
+    try {
+      const snapshot = spawnSync(
+        process.execPath,
+        [rootIndex, 'watch', 'prod.yaml', '--snapshot'],
+        { cwd: dir, encoding: 'utf8' },
+      );
+      assert.equal(snapshot.status, 0, snapshot.stderr);
+
+      const run = spawnSync(process.execPath, [rootIndex, 'report'], { cwd: dir, encoding: 'utf8' });
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /Refusing to write "--output"/);
+      assert.match(run.stderr, /FLECTO_ALLOW_RC_WRITES/);
+      assert.equal(readFileSync(outside, 'utf8'), '# original\n');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('a symlinked --output destination is refused however it was named', () => {
+    const { dir, outside, root } = repoWithOutsideFile();
+    try {
+      symlinkSync(outside, join(dir, 'report.html'));
+      spawnSync(process.execPath, [rootIndex, 'watch', 'prod.yaml', '--snapshot'], { cwd: dir, encoding: 'utf8' });
+
+      const run = spawnSync(
+        process.execPath,
+        [rootIndex, 'report', '--output', 'report.html'],
+        { cwd: dir, encoding: 'utf8' },
+      );
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /link out of the project/);
+      assert.equal(readFileSync(outside, 'utf8'), '# original\n');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('a --output link whose target does not exist yet is refused too', () => {
+    // The sharper half of the same attack: `existsSync` follows links, so a link
+    // to a file the runner does not have *yet* reports as absent and skips the
+    // check — and the write then creates it. On a runner that is
+    // `~/.ssh/authorized_keys` or an unused git hook, which is a better prize
+    // than overwriting a file that was already there.
+    const { dir, root } = repoWithOutsideFile();
+    const absent = join(root, 'authorized_keys');
+    try {
+      symlinkSync(absent, join(dir, 'report.html'));
+      spawnSync(process.execPath, [rootIndex, 'watch', 'prod.yaml', '--snapshot'], { cwd: dir, encoding: 'utf8' });
+
+      const run = spawnSync(
+        process.execPath,
+        [rootIndex, 'report', '--output', 'report.html'],
+        { cwd: dir, encoding: 'utf8' },
+      );
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /link out of the project/);
+      assert.ok(!existsSync(absent), 'the write never created the file outside the project');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('a chain of links out of the project is followed to the end', () => {
+    const { dir, root } = repoWithOutsideFile();
+    const absent = join(root, 'authorized_keys');
+    try {
+      symlinkSync(absent, join(dir, 'hop.html'));
+      symlinkSync(join(dir, 'hop.html'), join(dir, 'report.html'));
+      spawnSync(process.execPath, [rootIndex, 'watch', 'prod.yaml', '--snapshot'], { cwd: dir, encoding: 'utf8' });
+
+      const run = spawnSync(
+        process.execPath,
+        [rootIndex, 'report', '--output', 'report.html'],
+        { cwd: dir, encoding: 'utf8' },
+      );
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /link out of the project/);
+      assert.ok(!existsSync(absent));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('an in-project link is still a fine place to write', () => {
+    // The rule is about escape, not about links: a repository that points its
+    // report at another name inside the checkout keeps working.
+    const { dir, root } = repoWithOutsideFile();
+    try {
+      symlinkSync(join(dir, 'real-report.html'), join(dir, 'report.html'));
+      spawnSync(process.execPath, [rootIndex, 'watch', 'prod.yaml', '--snapshot'], { cwd: dir, encoding: 'utf8' });
+
+      const run = spawnSync(
+        process.execPath,
+        [rootIndex, 'report', '--output', 'report.html'],
+        { cwd: dir, encoding: 'utf8' },
+      );
+      assert.equal(run.status, 0, run.stderr);
+      assert.ok(existsSync(join(dir, 'real-report.html')));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('.flectorc cannot point --baseline out of the project', () => {
+    const { dir, root } = repoWithOutsideFile({ baseline: '../accepted.json' });
+    try {
+      const run = spawnSync(
+        process.execPath,
+        [rootIndex, 'ci', 'prod.yaml', '--snapshot-ref', 'snap.json', '--fail-on', 'error'],
+        { cwd: dir, encoding: 'utf8' },
+      );
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /Refusing to write "--baseline"/);
+      assert.ok(!existsSync(join(root, 'accepted.json')));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('an operator naming a destination on the command line is still trusted', () => {
+    const { dir, root } = repoWithOutsideFile();
+    try {
+      spawnSync(process.execPath, [rootIndex, 'watch', 'prod.yaml', '--snapshot'], { cwd: dir, encoding: 'utf8' });
+      const target = join(root, 'chosen.html');
+      const run = spawnSync(
+        process.execPath,
+        [rootIndex, 'report', '--output', target],
+        { cwd: dir, encoding: 'utf8' },
+      );
+      assert.equal(run.status, 0, run.stderr);
+      assert.ok(existsSync(target), 'an explicit CLI destination outside the project still works');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('FLECTO_ALLOW_RC_WRITES=1 opts a deliberate rc destination back in', () => {
+    const { dir, outside, root } = repoWithOutsideFile({ output: '../profile.sh' });
+    try {
+      spawnSync(process.execPath, [rootIndex, 'watch', 'prod.yaml', '--snapshot'], { cwd: dir, encoding: 'utf8' });
+      const run = spawnSync(process.execPath, [rootIndex, 'report'], {
+        cwd: dir,
+        encoding: 'utf8',
+        env: { ...process.env, FLECTO_ALLOW_RC_WRITES: '1' },
+      });
+      assert.equal(run.status, 0, run.stderr);
+      assert.match(readFileSync(outside, 'utf8'), /<!doctype html>/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('a destination whose parent directories do not exist yet is still allowed', () => {
+    // The check normalizes from the nearest ancestor that exists, because a path
+    // that is not there cannot be canonicalized — and on Windows the fallback
+    // spelling (an 8.3 short name) compares as a different directory from the
+    // project root, which made an in-project path look external.
+    const { dir, root } = repoWithOutsideFile({ output: 'out/reports/2026/drift.html' });
+    try {
+      spawnSync(process.execPath, [rootIndex, 'watch', 'prod.yaml', '--snapshot'], { cwd: dir, encoding: 'utf8' });
+      const run = spawnSync(process.execPath, [rootIndex, 'report'], { cwd: dir, encoding: 'utf8' });
+      assert.equal(run.status, 0, run.stderr);
+      assert.ok(existsSync(join(dir, 'out', 'reports', '2026', 'drift.html')));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('a symlinked directory on the way to the destination is refused', () => {
+    const { dir, root } = repoWithOutsideFile();
+    try {
+      const elsewhere = join(root, 'elsewhere');
+      mkdirSync(elsewhere, { recursive: true });
+      symlinkSync(elsewhere, join(dir, 'reports'));
+      spawnSync(process.execPath, [rootIndex, 'watch', 'prod.yaml', '--snapshot'], { cwd: dir, encoding: 'utf8' });
+
+      const run = spawnSync(
+        process.execPath,
+        [rootIndex, 'report', '--output', 'reports/nested/drift.html'],
+        { cwd: dir, encoding: 'utf8' },
+      );
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /link out of the project/);
+      assert.ok(!existsSync(join(elsewhere, 'nested')));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('an in-project destination is untouched by any of this', () => {
+    const { dir, root } = repoWithOutsideFile({ output: 'reports/drift.html' });
+    try {
+      spawnSync(process.execPath, [rootIndex, 'watch', 'prod.yaml', '--snapshot'], { cwd: dir, encoding: 'utf8' });
+      const run = spawnSync(process.execPath, [rootIndex, 'report'], { cwd: dir, encoding: 'utf8' });
+      assert.equal(run.status, 0, run.stderr);
+      assert.ok(existsSync(join(dir, 'reports', 'drift.html')));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('the merge gate cannot be turned green from .flectorc (#121)', () => {
+  /** A repo whose config trips an error-severity rule against its snapshot. */
+  function failingRepo(rc) {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'flecto-sec-baseline-')));
+    writeFileSync(join(dir, 'prod.yaml'), 'debug: true\n', 'utf8');
+    writeFileSync(join(dir, 'snap.json'), JSON.stringify({ state: { debug: false } }), 'utf8');
+    if (rc) writeFileSync(join(dir, '.flectorc'), JSON.stringify({ defaults: rc }), 'utf8');
+    return dir;
+  }
+
+  const gate = ['ci', 'prod.yaml', '--snapshot-ref', 'snap.json', '--fail-on', 'error'];
+
+  test('the gate fails on the finding to begin with', () => {
+    const dir = failingRepo(null);
+    try {
+      const run = spawnSync(process.execPath, [rootIndex, ...gate], { cwd: dir, encoding: 'utf8' });
+      assert.equal(run.status, 1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('updateBaseline declared in .flectorc is refused, not honored', () => {
+    // --update-baseline records every current finding as accepted, so honoring
+    // it from a file a pull request can add would let that pull request accept
+    // its own findings -- overriding even a --fail-on named on the command line.
+    const dir = failingRepo({ baseline: 'accepted.json', updateBaseline: true });
+    try {
+      const run = spawnSync(process.execPath, [rootIndex, ...gate], { cwd: dir, encoding: 'utf8' });
+      assert.equal(run.status, 1, 'the gate still fails');
+      assert.match(run.stderr, /updateBaseline is declared in \.flectorc, and it is refused there/);
+      assert.ok(!existsSync(join(dir, 'accepted.json')), 'and no baseline was written');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a profile is not a way around it either', () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'flecto-sec-baseline-profile-')));
+    try {
+      writeFileSync(join(dir, 'prod.yaml'), 'debug: true\n', 'utf8');
+      writeFileSync(join(dir, 'snap.json'), JSON.stringify({ state: { debug: false } }), 'utf8');
+      writeFileSync(join(dir, '.flectorc'), JSON.stringify({
+        profiles: { ci: { baseline: 'accepted.json', updateBaseline: true } },
+      }), 'utf8');
+
+      const run = spawnSync(
+        process.execPath,
+        [rootIndex, ...gate, '--profile', 'ci'],
+        { cwd: dir, encoding: 'utf8' },
+      );
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /refused there/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('--update-baseline on the command line still works, because it is the operator', () => {
+    const dir = failingRepo({ baseline: 'accepted.json' });
+    try {
+      const run = spawnSync(
+        process.execPath,
+        [rootIndex, ...gate, '--update-baseline'],
+        { cwd: dir, encoding: 'utf8' },
+      );
+      assert.equal(run.status, 0, run.stderr);
+      assert.ok(existsSync(join(dir, 'accepted.json')));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

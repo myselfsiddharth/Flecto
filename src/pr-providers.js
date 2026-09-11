@@ -229,8 +229,15 @@ const bitbucket = {
   readOne: (payload) => ({ url: payload?.links?.html?.href }),
 };
 
+/**
+ * Comments collection for the pull request. The workspace and slug are encoded
+ * for the same reason GitLab's project id is: they are interpolated into a URL
+ * path, and a value carrying `/`, `?`, or `#` would otherwise restructure the
+ * request rather than name a repository.
+ */
 function bitbucketCommentsBase(c) {
-  return `${c.apiUrl}/repositories/${c.workspace}/${c.repoSlug}/pullrequests/${c.prNumber}/comments`;
+  return `${c.apiUrl}/repositories/${encodeURIComponent(c.workspace)}`
+    + `/${encodeURIComponent(c.repoSlug)}/pullrequests/${c.prNumber}/comments`;
 }
 
 /** Detection order. GitHub stays first so its behavior is unchanged. */

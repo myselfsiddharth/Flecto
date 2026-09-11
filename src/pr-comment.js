@@ -297,6 +297,33 @@ async function errorDetail(response, token) {
 }
 
 /**
+ * @param {Response} response
+ * @returns {boolean}
+ */
+function isRedirect(response) {
+  // `redirect: 'manual'` surfaces the 3xx itself in Node; a browser-shaped
+  // opaque redirect reports status 0 with `type: 'opaqueredirect'`.
+  return (response.status >= 300 && response.status < 400) || response.type === 'opaqueredirect';
+}
+
+/**
+ * The origin a redirect points at, for the error message. Only the origin: the
+ * rest of a `Location` is not worth echoing into a log.
+ * @param {Response} response
+ * @param {string} url
+ * @returns {string}
+ */
+function redirectTarget(response, url) {
+  const location = response.headers?.get?.('location');
+  if (!location) return '';
+  try {
+    return ` to ${new URL(location, url).origin}`;
+  } catch {
+    return '';
+  }
+}
+
+/**
  * @param {{ fetchImpl: typeof fetch, provider: object, url: string, method: string, token: string, body?: unknown, timeoutMs: number }} request
  * @returns {Promise<Response>}
  */
@@ -315,6 +342,13 @@ async function apiRequest({ fetchImpl, provider, url, method, token, body, timeo
       },
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: controller.signal,
+      // Never follow a redirect with a credential attached. `fetch` strips
+      // `Authorization` when a redirect crosses origins, but it strips *only*
+      // that header — GitLab authenticates with `PRIVATE-TOKEN`, which is
+      // forwarded to wherever the API host points, verified against a local
+      // server. Refusing the redirect is the whole fix: these endpoints do not
+      // legitimately redirect, and one that does is worth seeing.
+      redirect: 'manual',
     });
   } catch (err) {
     const reason = err?.name === 'AbortError'
@@ -323,6 +357,14 @@ async function apiRequest({ fetchImpl, provider, url, method, token, body, timeo
     throw new Error(`${provider.label} API ${method} failed: ${reason}`);
   } finally {
     clearTimeout(timer);
+  }
+
+  if (isRedirect(response)) {
+    throw new Error(
+      `${provider.label} API ${method} was redirected (HTTP ${response.status}`
+      + `${redirectTarget(response, url)}), and Flecto does not follow a redirect with an API`
+      + ' token attached. Point the API URL at the host that answers directly.',
+    );
   }
 
   if (!response.ok) {

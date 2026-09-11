@@ -68,6 +68,7 @@ import {
   resolveProfileName,
   resolvePolicyOptions,
   assertTargetContained,
+  assertWriteDestinationContained,
 } from './src/config.js';
 
 const PKG = JSON.parse(
@@ -975,6 +976,10 @@ program
       const dOpts = diffOptionsFromEffective(effective, ignorePaths);
       const maskSecrets = Boolean(effective.maskSecrets);
       const outputPath = resolve(String(effective.output ?? 'flecto-report.html'));
+      assertWriteDestinationContained(outputPath, {
+        option: '--output',
+        fromCli: cliOverrides.output !== undefined,
+      });
 
       // Same snapshot source, filtering, and errors as `flecto history` — this
       // command only changes how that history is rendered.
@@ -1108,6 +1113,27 @@ program
 
       const cwd = process.cwd();
       const baselinePath = effective.baseline ? resolve(cwd, String(effective.baseline)) : null;
+      if (baselinePath) {
+        assertWriteDestinationContained(baselinePath, {
+          option: '--baseline',
+          fromCli: cliOverrides.baseline !== undefined,
+          cwd,
+        });
+      }
+      // `--update-baseline` accepts every finding this run produced, so honoring
+      // it from `.flectorc` would let a pull request turn its own failing gate
+      // green — including one whose `--fail-on` was set explicitly on the command
+      // line. It is an action, not a setting: the CLI is the only place it can
+      // come from, and a declaration in the rc file is refused rather than
+      // ignored, so a repository that meant it finds out.
+      if (effective.updateBaseline && cliOverrides.updateBaseline === undefined) {
+        throw new Error(
+          'updateBaseline is declared in .flectorc, and it is refused there: it accepts every'
+          + ' current finding, which would turn a failing gate green from a file a pull request'
+          + ' can edit. Pass --update-baseline on the command line when you mean to record a'
+          + ' baseline.',
+        );
+      }
       const updateBaseline = Boolean(effective.updateBaseline);
       if (updateBaseline && !baselinePath) {
         throw new Error('--update-baseline requires --baseline <file> naming the file to write.');
