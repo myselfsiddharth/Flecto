@@ -185,10 +185,13 @@ function assertPlainResult(value, where, budget = 200000) {
  * what came out is a real `Error` with a string message — that is the contract
  * every caller in `src/` is written against. Throwing a string, an object, or
  * `undefined` means a `catch` block upstream renders "[error] undefined".
+ * The rejected error is handed back, not just the fact of it, so a caller can
+ * tell apart the ways a case can legitimately fail -- see
+ * {@link threwStackExhaustion}.
  * @template T
  * @param {string} where
  * @param {() => T} fn
- * @returns {{ ok: true, value: T } | { ok: false }}
+ * @returns {{ ok: true, value: T } | { ok: false, error: Error }}
  */
 function cleanly(where, fn) {
   try {
@@ -201,8 +204,25 @@ function cleanly(where, fn) {
     if (typeof err.message !== 'string') {
       throw new FuzzViolation(`${where} threw an Error with a non-string message`);
     }
-    return { ok: false };
+    return { ok: false, error: err };
   }
+}
+
+/**
+ * Whether a case ended by exhausting the JS stack.
+ *
+ * V8 gives this one error and one message; there is no dedicated type to check,
+ * so the message is the only signal available. Exported for the same reason
+ * {@link budgetExceededMessage} is: this and the budget assertion are only
+ * useful together, and a match that silently stopped recognising a real
+ * overflow would put the flaky nightly run back.
+ * @param {{ ok: true } | { ok: false, error: Error }} result
+ * @returns {boolean}
+ */
+export function threwStackExhaustion(result) {
+  return result.ok === false
+    && result.error instanceof RangeError
+    && /Maximum call stack size exceeded/.test(result.error.message);
 }
 
 /**
@@ -306,7 +326,14 @@ export const TARGETS = [
       const after = materialize({ tree: input.after, cyclic: input.cyclic });
       const startedAt = Date.now();
       const result = cleanly('diff-trees', () => diffTrees(before, after, input.options ?? {}));
-      assertWithinBudget('diff-trees', startedAt);
+      // The budget measures how fast the differ works, so it only applies to a
+      // case that ran to a conclusion. A stack overflow is a clean throw the
+      // contract above accepts, and the time on the clock when it lands is the
+      // cost of building and unwinding a deep stack -- a number that moves with
+      // the runner's stack limit and how loaded it is, not with anything in
+      // src/. Timing it is what made this target fail the nightly run on a
+      // finding that was never a differ bug.
+      if (!threwStackExhaustion(result)) assertWithinBudget('diff-trees', startedAt);
       assertNoPrototypePollution('diff-trees');
       if (!result.ok) return;
       if (!Array.isArray(result.value)) {
