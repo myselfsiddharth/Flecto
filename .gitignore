@@ -1,4 +1,7 @@
+# Both spellings: a bare `node_modules/` matches directories only, so a symlink
+# by that name (a worktree pointed at a shared install) slips past `git add -A`.
 node_modules/
+node_modules
 demo/
 .flecto-snapshots/
 .flecto-queue/

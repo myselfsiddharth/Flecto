@@ -1,19 +1,7 @@
 import chalk from 'chalk';
-import { redactSecretString } from './secrets.js';
+import { looksLikeSecretPath, redactSecretString } from './secrets.js';
 import { ENCRYPTED_DISPLAY, displayEncrypted, isEncryptedSentinel } from './encrypted.js';
 import { secretMatchPath } from './differ.js';
-
-/**
- * Key names that mean "this value is a credential".
- *
- * Matched against the *configuration* path only. A multi-document file prefixes
- * every path with the document's identity — `Deployment/prod/token-service.…` —
- * and that identity is a resource name the user chose, not a key name. Letting
- * it match here masked every value in the document, numbers and booleans
- * included, so the path reaching this regex is always the one
- * {@link secretMatchPath} produced.
- */
-const SECRET_PATH_RE = /(secret|token|password|api[_-]?key|private[_-]?key|credential)/i;
 
 /**
  * Format a scalar value for display. Strings get quoted; others are JSON-stringified.
@@ -28,7 +16,7 @@ function fmt(v, opts = {}) {
   if (isEncryptedSentinel(v)) return chalk.dim(ENCRYPTED_DISPLAY);
   let value = displayEncrypted(v);
   if (opts.maskSecrets) {
-    if (opts.path && SECRET_PATH_RE.test(opts.path)) {
+    if (opts.path && looksLikeSecretPath(opts.path)) {
       return chalk.dim('"***"');
     }
     // The changed path itself can look benign while the value carries secrets,
@@ -202,7 +190,7 @@ export function renderPolicyFindings(findings) {
  * @returns {unknown}
  */
 export function maskSensitiveValue(value, path = '') {
-  if (SECRET_PATH_RE.test(path)) return '***';
+  if (looksLikeSecretPath(path)) return '***';
   if (Array.isArray(value)) {
     return value.map((v, i) => maskSensitiveValue(v, `${path}[${i}]`));
   }
