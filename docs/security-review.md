@@ -182,8 +182,12 @@ workflow files, and SSH config.
 The link check resolves the chain by hand rather than asking whether the
 destination exists. `existsSync` follows links, so a link whose target is *not
 there yet* reports as absent and would skip the check — and that is the sharper
-half of the attack, not the weaker one: a link to `~/.ssh/authorized_keys` or an
-unused git hook has Flecto **create** the file rather than overwrite one.
+half of the attack, not the weaker one: overwriting needs the file to already be
+there, while a link to one the runner lacks has Flecto **create** it.
+`~/.ssh/authorized_keys` is the example that stings, because sshd skips lines it
+cannot parse, so a report wrapped around one attacker-authored line still works
+as a key file. Not every absent file is reachable — the write lands at mode
+`644`, so a git hook, which git will not run unless it is executable, is not.
 
 A destination named on the **command line** is operator intent and is untouched,
 the same distinction the read rule already draws: `flecto report --output

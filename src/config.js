@@ -331,9 +331,11 @@ const MAX_LINK_HOPS = 32;
  * missing — and `realpathSync` fails on one, leaving {@link canonical} to fall
  * back to the path as written, which is still inside the project. So a link to a
  * file the runner does not have yet reads as contained twice over. That is not
- * the weaker half of this attack but the stronger one: a pull request adding
- * `report.html` as a link to `~/.ssh/authorized_keys` or an unused git hook
- * *creates* the file rather than overwriting one, and Flecto writes the content.
+ * the weaker half of this attack but the stronger one: overwriting needs the
+ * file to already be there, while a link to a file the runner does *not* have
+ * yet has Flecto create it. `~/.ssh/authorized_keys` is the one that stings,
+ * because sshd skips lines it cannot parse, so HTML wrapped around one
+ * attacker-authored line is still a usable key file.
  *
  * So the link is resolved by hand, hop by hop, and judged wherever it ends up.
  * @param {string} path
