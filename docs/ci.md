@@ -31,10 +31,20 @@ flecto ci config/prod.yaml --snapshot-ref origin/main
 flecto ci config/prod.yaml --snapshot-ref .flecto-snapshots/4b8cbbd70d1832a2.json
 ```
 
-Omit `--snapshot-ref` entirely and Flecto compares against the local snapshot
-saved for that file by `flecto watch --snapshot`. That's convenient locally, but
-in CI you almost always want an explicit git ref, since a fresh runner has no
-local snapshots.
+Omit `--snapshot-ref` entirely and Flecto compares against the snapshot store —
+by default the local one `flecto watch --snapshot` writes. That's convenient
+locally, but a fresh runner has no local snapshots, so in CI you want either an
+explicit git ref or a committed shared store:
+
+```bash
+# saved and committed from a laptop, read by every runner
+flecto watch "config/**/*.yaml" --snapshot --snapshot-store shared
+flecto ci "config/**/*.yaml" --snapshot-store shared
+```
+
+The shared store is keyed by repo-relative path and masks secret-like values by
+default; see [Snapshot stores](cli-reference.md#snapshot-stores) before committing
+one.
 
 An unresolved ref is an error, not an empty baseline — otherwise a bad ref would
 silently report "no changes" and pass every build.

@@ -379,7 +379,7 @@ test('report fails clearly when there are no snapshots to render', () => {
   try {
     const empty = runReport(dir, []);
     assert.equal(empty.status, 1);
-    assert.match(empty.stderr, /No local snapshots found\. Run "flecto watch <file> --snapshot" first\./);
+    assert.match(empty.stderr, /No snapshots found in \.flecto-snapshots\/\. Run "flecto watch <file> --snapshot" first/);
     assert.ok(!existsSync(join(dir, 'flecto-report.html')), 'no report should be written');
 
     // Snapshots exist, but none for the requested file.
@@ -392,7 +392,7 @@ test('report fails clearly when there are no snapshots to render', () => {
     assert.equal(filtered.status, 1);
     assert.match(
       filtered.stderr,
-      /No local snapshots matched the given files\. Omit files to report on all saved snapshot history\./,
+      /No snapshots in \.flecto-snapshots\/ matched the given files\. Omit files to report on all saved snapshot history\./,
     );
     assert.ok(!existsSync(join(other, 'flecto-report.html')), 'no report should be written');
   } finally {

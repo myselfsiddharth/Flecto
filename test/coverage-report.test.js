@@ -35,6 +35,7 @@ const FULL = [
   record('src/encrypted.js', { lines: [100, 80], branches: [10, 8], functions: [10, 8] }),
   record('src/pr-comment.js', { lines: [100, 70], branches: [10, 7], functions: [10, 7] }),
   record('src/pr-providers.js', { lines: [100, 60], branches: [10, 6], functions: [10, 6] }),
+  record('src/snapshot-store.js', { lines: [100, 40], branches: [10, 4], functions: [10, 4] }),
   record('src/renderer.js', { lines: [100, 10], branches: [10, 1], functions: [10, 1] }),
 ].join('\n');
 
@@ -62,7 +63,7 @@ describe('coverage report', () => {
       run.stdout.indexOf('Security-relevant modules'),
       run.stdout.indexOf('Everything else'),
     );
-    for (const file of ['config.js', 'policy.js', 'secrets.js', 'encrypted.js', 'pr-comment.js', 'pr-providers.js']) {
+    for (const file of ['config.js', 'policy.js', 'secrets.js', 'encrypted.js', 'pr-comment.js', 'pr-providers.js', 'snapshot-store.js']) {
       assert.match(focus, new RegExp(file.replace('.', '\\.')), `${file} is on the focused list`);
     }
     // src/renderer.js has the worst coverage in the fixture, and is deliberately
@@ -78,7 +79,7 @@ describe('coverage report', () => {
       run.stdout.indexOf('subtotal'),
     );
     const order = [...focus.matchAll(/src\/([a-z-]+)\.js/g)].map((match) => match[1]);
-    assert.deepEqual(order, ['config', 'pr-providers', 'pr-comment', 'encrypted', 'policy', 'secrets']);
+    assert.deepEqual(order, ['config', 'snapshot-store', 'pr-providers', 'pr-comment', 'encrypted', 'policy', 'secrets']);
   });
 
   test('reports missed branches, which is the number the report exists for', () => {

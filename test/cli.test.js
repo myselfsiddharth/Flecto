@@ -455,7 +455,7 @@ test('history summarizes local snapshot drift', () => {
     assert.equal(first.status, 0);
     assert.equal(second.status, 0);
     assert.equal(history.status, 0);
-    assert.match(history.stdout, /Local snapshot history \(2 snapshots\)/);
+    assert.match(history.stdout, /Snapshot history from \.flecto-snapshots\/ \(2 snapshots, local store\)/);
     assert.match(history.stdout, /config\.json — 1 change/);
     assert.match(history.stdout, /config\.json — baseline \(no earlier snapshot to compare against\)/);
   } finally {
@@ -493,11 +493,11 @@ test('history distinguishes unmatched file filters from missing snapshots', () =
     assert.equal(filtered.status, 1);
     assert.match(
       filtered.stderr,
-      /No local snapshots matched the given files\. Omit files to view all saved snapshot history\./,
+      /No snapshots in \.flecto-snapshots\/ matched the given files\. Omit files to view all saved snapshot history\./,
     );
-    assert.doesNotMatch(filtered.stderr, /No local snapshots found/);
+    assert.doesNotMatch(filtered.stderr, /No snapshots found in/);
     assert.equal(empty.status, 1);
-    assert.match(empty.stderr, /No local snapshots found\. Run "flecto watch <file> --snapshot" first\./);
+    assert.match(empty.stderr, /No snapshots found in \.flecto-snapshots\/\. Run "flecto watch <file> --snapshot" first/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
     rmSync(emptyDir, { recursive: true, force: true });
@@ -567,7 +567,7 @@ test('history preserves a legacy baseline during first snapshot migration', () =
 
     assert.equal(snapshot.status, 0);
     assert.equal(history.status, 0);
-    assert.match(history.stdout, /Local snapshot history \(2 snapshots\)/);
+    assert.match(history.stdout, /Snapshot history from \.flecto-snapshots\/ \(2 snapshots, local store\)/);
     assert.match(history.stdout, /config\.json — 1 change/);
     assert.match(history.stdout, /config\.json — baseline \(no earlier snapshot to compare against\)/);
   } finally {
@@ -1626,7 +1626,7 @@ test('ci names both ways out when a file has no saved snapshot (#141)', () => {
     );
 
     assert.equal(ci.status, 1);
-    assert.match(ci.stderr, /no local snapshot has been saved for this file/);
+    assert.match(ci.stderr, /no snapshot has been saved for this file \(\.flecto-snapshots\/ holds none/);
     assert.match(ci.stderr, /--snapshot-ref/);
     assert.doesNotMatch(ci.stderr, /ENOENT/);
   } finally {

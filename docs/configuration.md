@@ -96,7 +96,13 @@ flecto doctor
 Any flag from the [CLI reference](cli-reference.md) can appear in `defaults` or a
 profile, in camelCase — `--mask-secrets` becomes `maskSecrets`,
 `--fail-on` becomes `failOn`, `--delivery-mode` becomes `deliveryMode`,
-`--webhook-format` becomes `webhookFormat`.
+`--webhook-format` becomes `webhookFormat`, `--snapshot-store` becomes
+`snapshotStore`.
+
+`snapshotStore` is worth setting rather than passing: it decides where every
+command reads baselines from, and a laptop and a merge gate that disagree about
+that would compare against different history. See
+[Snapshot stores](cli-reference.md#snapshot-stores).
 
 ---
 
