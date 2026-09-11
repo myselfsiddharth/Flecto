@@ -327,6 +327,91 @@ describe('diffTrees', () => {
     assertEvent(events, { type: 'changed', path: 'services[0].id', before: 'api', after: 'web' });
   });
 
+  // A cyclic tree cannot reach the differ through the parser, which substitutes
+  // its circular sentinel first. These cover the differ standing on its own:
+  // without the ancestor tracking in diffValues it recurses a back-edge until
+  // the stack overflows, and the descent costs real time on the way down
+  // because the path string is rebuilt at every level. Found by the nightly
+  // `diff-trees` fuzz target.
+  describe('self-referential trees', () => {
+
+    test('a cycle on both sides is compared without recursing into the back-edge', () => {
+      const before = { port: 3000 };
+      const after = { port: 4000 };
+      before.self = before;
+      after.self = after;
+
+      const events = diffTrees(before, after);
+      assert.equal(events.length, 1);
+      assertEvent(events, { type: 'changed', path: 'port', before: 3000, after: 4000 });
+    });
+
+    test('a back-edge reports nothing the shorter path does not already report', () => {
+      const cyclic = { a: { b: 1 } };
+      cyclic.self = cyclic;
+      const other = { a: { b: 2 } };
+      other.self = other;
+
+      const acyclic = diffTrees({ a: { b: 1 } }, { a: { b: 2 } });
+      const withCycle = diffTrees(cyclic, other).map((e) => ({ type: e.type, path: e.path }));
+
+      assert.deepEqual(withCycle, acyclic.map((e) => ({ type: e.type, path: e.path })));
+    });
+
+    test('a value reached twice by separate branches is still compared on each', () => {
+      // Shared structure is a DAG, not a cycle: dropping the second visit here
+      // would silently lose a real change.
+      const shared = { port: 3000 };
+      const before = { left: shared, right: shared };
+      const after = { left: { port: 4000 }, right: { port: 4000 } };
+
+      const events = diffTrees(before, after);
+      assert.equal(events.length, 2);
+      assertEvent(events, { type: 'changed', path: 'left.port', before: 3000, after: 4000 });
+      assertEvent(events, { type: 'changed', path: 'right.port', before: 3000, after: 4000 });
+    });
+
+    test('a deep cyclic tree terminates instead of exhausting the stack', () => {
+      // Depth is what turns the missing guard from a fast throw into a slow one,
+      // so the regression this guards against only shows up well below the
+      // stack limit if the tree is deep enough to make the descent expensive.
+      const chain = (depth) => {
+        let node = { leaf: 1 };
+        for (let i = 0; i < depth; i++) node = { [`k${i}`]: node };
+        return node;
+      };
+      const before = chain(800);
+      const after = chain(800);
+      before.self = before;
+      after.self = after;
+
+      const startedAt = Date.now();
+      const events = diffTrees(before, after, { arrayIgnoreOrder: true });
+      assert.deepEqual(events, []);
+      assert.ok(
+        Date.now() - startedAt < 250,
+        'diffing a deep cyclic tree should be immediate; following the back-edge '
+        + 'makes it spend hundreds of ms before the stack overflows',
+      );
+    });
+
+    test('a cyclic element in an order-insensitive array falls back to identity', () => {
+      // `arraySignature` canonicalizes without ancestor tracking on purpose: it
+      // runs per array element, and guarding it there cost ~15% on a 5000-element
+      // diff to handle an input the parser already rules out. Its `catch` is the
+      // guard -- a cyclic element stops being canonicalized and compares by
+      // identity, which is why reordering the same element reports nothing.
+      const element = { name: 'api' };
+      element.self = element;
+      const before = { items: [element, { name: 'web' }] };
+      const after = { items: [{ name: 'web' }, element] };
+
+      const events = diffTrees(before, after, { arrayIgnoreOrder: true, arrayIdentity: false });
+      assert.deepEqual(events, []);
+    });
+
+  });
+
   test('explicit arrayIdKey wins over arrayIdentity false', () => {
     const before = { services: [{ id: 1, key: 'api', port: 3000 }, { id: 2, key: 'web', port: 8080 }] };
     const after = { services: [{ id: 2, key: 'web', port: 8080 }, { id: 1, key: 'api', port: 4000 }] };

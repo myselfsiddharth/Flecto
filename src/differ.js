@@ -180,14 +180,58 @@ function matchParts(patternParts, pathParts) {
 }
 
 /**
+ * The containers on the path currently being compared, one set per side.
+ *
+ * A cyclic tree makes the walk reach a node it is already inside. Descending
+ * again cannot find anything the in-progress comparison will not already report
+ * at a shorter path, so the back-edge is dropped rather than followed. Same
+ * ancestor-tracking pattern as `normalizeParsedValue` in parser.js and
+ * `collectLeaves` in policy.js: added on the way in, removed on the way out, so
+ * a value merely reached twice by separate branches (a DAG, not a cycle) is
+ * still compared in full on each branch.
+ *
+ * Either side repeating is enough to stop. Tracking the *pair* instead would be
+ * more precise -- it would keep descending where one side cycles and the other
+ * does not -- but two cyclic trees have |before| x |after| distinct pairs, so
+ * precision there buys a quadratic worst case. This is a guard against a walk
+ * that will not end; bounding it by the size of the input is the property worth
+ * having.
+ *
+ * Nothing downstream of the parser holds a cycle -- `normalizeParsedValue`
+ * replaces one with its circular sentinel before a tree ever gets here -- so
+ * this is a second line rather than the first. Without it the walk recurses
+ * until the stack overflows, which costs real time on the way down (the path
+ * string is rebuilt at every level) before throwing.
+ *
+ * This covers the structural walk only. `arraySignature` canonicalizes without
+ * it -- that runs per array element, where the same tracking cost ~15% on a
+ * 5000-element diff, and its `catch` already contains a cyclic element by
+ * falling back to identity comparison.
+ *
+ * It is not free: the set writes cost ~20% of `diffTrees`, which the benchmark
+ * puts at ~17% of a run, so ~3% end to end. Gating it behind a depth threshold
+ * removes that, and was tried -- but then a cycle is followed as far as the
+ * threshold, and every level of it emits a duplicate event under a
+ * `self.self.self...` path. Paying 3% to keep the output right is the better
+ * trade for a tool whose output is read on a pull request.
+ * @typedef {{ before: Set<object>, after: Set<object> }} Ancestors
+ */
+
+/** @returns {Ancestors} */
+function newAncestors() {
+  return { before: new Set(), after: new Set() };
+}
+
+/**
  * Recursively diff two values at a given key path.
  * @param {unknown} before
  * @param {unknown} after
  * @param {string} path
  * @param {ChangeEvent[]} events  accumulator
  * @param {{ arrayIdKey?: string | null, arrayIdentity?: boolean, arrayIgnoreOrder?: boolean }} [options]
+ * @param {Ancestors} ancestors  containers on the current path
  */
-function diffValues(before, after, path, events, options = {}) {
+function diffValues(before, after, path, events, options = {}, ancestors = newAncestors()) {
   const beforeIsObj = isPlainObject(before);
   const afterIsObj = isPlainObject(after);
   const beforeIsArr = Array.isArray(before);
@@ -195,13 +239,23 @@ function diffValues(before, after, path, events, options = {}) {
 
   // Both plain objects → recurse into keys
   if (beforeIsObj && afterIsObj) {
-    diffObjects(before, after, path, events, options);
+    if (ancestors.before.has(before) || ancestors.after.has(after)) return;
+    ancestors.before.add(before);
+    ancestors.after.add(after);
+    diffObjects(before, after, path, events, options, ancestors);
+    ancestors.before.delete(before);
+    ancestors.after.delete(after);
     return;
   }
 
   // Both arrays → diff by index or identity key
   if (beforeIsArr && afterIsArr) {
-    diffArrays(before, after, path, events, options);
+    if (ancestors.before.has(before) || ancestors.after.has(after)) return;
+    ancestors.before.add(before);
+    ancestors.after.add(after);
+    diffArrays(before, after, path, events, options, ancestors);
+    ancestors.before.delete(before);
+    ancestors.after.delete(after);
     return;
   }
 
@@ -247,8 +301,9 @@ function diffValues(before, after, path, events, options = {}) {
  * @param {string} basePath
  * @param {ChangeEvent[]} events
  * @param {{ arrayIdKey?: string | null, arrayIdentity?: boolean, arrayIgnoreOrder?: boolean }} [options]
+ * @param {Ancestors} [ancestors]
  */
-function diffObjects(before, after, basePath, events, options = {}) {
+function diffObjects(before, after, basePath, events, options = {}, ancestors = newAncestors()) {
   const beforeKeys = new Set(Object.keys(before));
   const afterKeys = new Set(Object.keys(after));
 
@@ -272,7 +327,7 @@ function diffObjects(before, after, basePath, events, options = {}) {
   for (const key of beforeKeys) {
     if (afterKeys.has(key)) {
       const childPath = basePath ? `${basePath}.${key}` : key;
-      diffValues(before[key], after[key], childPath, events, options);
+      diffValues(before[key], after[key], childPath, events, options, ancestors);
     }
   }
 }
@@ -366,8 +421,9 @@ function arraySignature(value) {
  * @param {string} basePath
  * @param {ChangeEvent[]} events
  * @param {{ arrayIdKey?: string | null, arrayIdentity?: boolean, arrayIgnoreOrder?: boolean }} [options]
+ * @param {Ancestors} [ancestors]
  */
-function diffArrays(before, after, basePath, events, options = {}) {
+function diffArrays(before, after, basePath, events, options = {}, ancestors = newAncestors()) {
   const idKey = resolveArrayIdKey(before, after, options);
 
   if (idKey) {
@@ -380,7 +436,7 @@ function diffArrays(before, after, basePath, events, options = {}) {
         if (!beforeMap.has(key)) {
           events.push({ type: 'added', path: childPath, after: afterItem.value });
         } else {
-          diffValues(beforeMap.get(key).value, afterItem.value, childPath, events, options);
+          diffValues(beforeMap.get(key).value, afterItem.value, childPath, events, options, ancestors);
         }
       }
       for (const [key, beforeItem] of beforeMap) {
@@ -424,7 +480,7 @@ function diffArrays(before, after, basePath, events, options = {}) {
     } else if (i >= after.length) {
       events.push({ type: 'removed', path: childPath, before: before[i] });
     } else {
-      diffValues(before[i], after[i], childPath, events, options);
+      diffValues(before[i], after[i], childPath, events, options, ancestors);
     }
   }
 }
@@ -447,14 +503,22 @@ export function diffTrees(before, after, options = {}) {
     arrayIgnoreOrder: Boolean(options.arrayIgnoreOrder),
   };
 
-  // Root handling: avoid assuming object roots.
+  // Root handling: avoid assuming object roots. The roots are recorded here
+  // because these two calls bypass `diffValues`, which is where every other
+  // container is recorded -- without it a cycle back to the root would be
+  // caught one level deeper than it should be.
+  const ancestors = newAncestors();
   if (isPlainObject(before) && isPlainObject(after)) {
-    diffObjects(before, after, '', events, diffOpts);
+    ancestors.before.add(before);
+    ancestors.after.add(after);
+    diffObjects(before, after, '', events, diffOpts, ancestors);
   } else if (Array.isArray(before) && Array.isArray(after)) {
-    diffArrays(before, after, '', events, diffOpts);
+    ancestors.before.add(before);
+    ancestors.after.add(after);
+    diffArrays(before, after, '', events, diffOpts, ancestors);
   } else {
     // Compare as a single root value. Use "<root>" so we can still ignore it if desired.
-    diffValues(before, after, '<root>', events, diffOpts);
+    diffValues(before, after, '<root>', events, diffOpts, ancestors);
   }
 
   // Encrypted files carry signals a key-by-key walk cannot express: the file
