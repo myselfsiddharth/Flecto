@@ -37,6 +37,39 @@ The format is based on [Keep a Changelog], and this project adheres to
   own problem. The `local` store is untouched: same filenames, same JSON, same
   unbounded history, still the default.
 
+### Security
+
+- **The merge gate could be turned green from `.flectorc`** ([#121]).
+  `--update-baseline` accepts every finding of the current run, and it resolved
+  through the ordinary options merge — so a pull request that added four lines of
+  `.flectorc` turned a failing `flecto ci --fail-on error` into a passing one,
+  overriding a `--fail-on` given on the command line. `updateBaseline` is now
+  refused from `.flectorc` (and from a profile) rather than honored: it is an
+  action, not a setting. `--update-baseline` on the command line is unchanged.
+
+- **Write destinations could be redirected out of the repository** ([#121]).
+  `--output` (`flecto report`) and `--baseline` (`flecto ci`) can both be declared
+  in `.flectorc`, so a pull request could point them at any file the job could
+  reach — through `..`, or through a symlink — and both files carry content that
+  pull request partly wrote. A destination declared in `.flectorc` must now
+  resolve inside the project (`FLECTO_ALLOW_RC_WRITES=1` opts out), and a
+  destination that leaves the project through a symlink is refused whoever named
+  it (`FLECTO_ALLOW_SYMLINK_TARGETS=1` opts out) — including a link whose target
+  does not exist yet, which `existsSync` reports as absent and which would have
+  Flecto *create* a file outside the repository rather than overwrite one. A
+  destination named on the command line is operator intent and is unchanged.
+
+- **The GitLab token followed redirects** ([#121]). `fetch` strips
+  `Authorization` when a redirect crosses origins and strips only that header;
+  GitLab authenticates with `PRIVATE-TOKEN`, which was forwarded to the redirect
+  target in full — verified against a local server. Provider API requests are now
+  issued with `redirect: 'manual'` and refuse a 3xx, naming the origin it pointed
+  at. Bitbucket workspace and repository segments are URL-encoded alongside,
+  matching GitLab's project id.
+
+  The API host comes from runner environment rather than pull request content, so
+  this needed a hostile or misconfigured API host to reach.
+
 ## [3.0.2] - 2026-09-06
 
 ### Security

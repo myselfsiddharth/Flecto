@@ -47,6 +47,17 @@ is available (unless we agree otherwise).
   installed or `.flectorc`-selected third-party pack is only as safe as its
   author. Review packs before enabling them, the same as any code you run in CI.
 
+- **`.flectorc` is trusted for settings, not for actions or destinations.** On an
+  untrusted pull request the rc file is attacker-controlled, so the options that
+  do more than shape output are constrained: plugins need
+  `FLECTO_ALLOW_RC_PLUGINS=1`, a write destination (`--output`, `--baseline`)
+  declared there must stay inside the project unless `FLECTO_ALLOW_RC_WRITES=1`,
+  and `--update-baseline` is refused from the rc file entirely. Ordinary settings
+  — `failOn`, `policies`, `ignore` — are still honored from the rc file by
+  design: a workflow that runs bare `flecto ci` has delegated its gate to the
+  repository. A workflow gating untrusted pull requests should name `--fail-on`
+  (and its packs) on the command line, where the rc file cannot reach them.
+
 ## Review record
 
 A record of what the security review has actually examined lives in

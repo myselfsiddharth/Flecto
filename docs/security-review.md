@@ -85,9 +85,8 @@ config in from a sibling directory. It refuses loudly rather than skipping the
 file, for the same reason rc-declared plugins do: a target that stops being
 scanned without saying so weakens a gate the operator believes is in place.
 
-Still not covered, and worth its own look: `--output` (`flecto report`) and
-`--baseline` are *write* paths, and a symlinked destination redirects the write
-rather than a read.
+The *write* paths this paragraph left open — `--output` and `--baseline` — are
+covered now; see the write-destination finding below.
 
 ### Prototype pollution in the INI parser — fixed
 
@@ -124,6 +123,101 @@ Found by the fuzz harness ([#150]) on its first full-length run, at
 `test/security.test.js`, including the end-to-end gate bypass, plus the
 minimized input in `test/fixtures/fuzz/parse-ini-proto-section.json`.
 
+### The merge gate could be turned green from `.flectorc` — fixed
+
+`--update-baseline` rewrites the baseline file from **every finding of the
+current run**, which accepts all of them: nothing is new relative to what was
+just written, so the policy gate passes. The CLI help says "explicit, never
+automatic", and it was neither — `updateBaseline` resolved through the ordinary
+options merge, so `.flectorc` could set it, and on an untrusted pull request
+`.flectorc` is a file the attacker wrote.
+
+Confirmed end to end: a repository where `flecto ci --fail-on error` exits `1` on
+a real finding exits `0` once a pull request adds four lines of `.flectorc`. A
+profile reaches it too. Note what this overrides — the `--fail-on` in that
+command is on the **command line**, chosen by the workflow author, and rc-declared
+`updateBaseline` defeats it anyway. That is the property that separates this from
+an rc file merely configuring `failOn`, which is the operator delegating the gate
+to the repository and is working as designed.
+
+**Fixed** by refusing `updateBaseline` from `.flectorc` entirely — no opt-out
+environment variable, because unlike a plugin path or a write destination there
+is no legitimate reason to declare an action in a settings file. It refuses
+loudly rather than ignoring the key, so a repository that meant it finds out.
+`--update-baseline` on the command line is unchanged. Regression tests in
+`test/security.test.js`, including the profile route and the still-working CLI
+path.
+
+### Write destinations could be redirected out of the repository — fixed
+
+The previous record left this open: "`--output` (`flecto report`) and `--baseline`
+are *write* paths, and a symlinked destination redirects the write rather than a
+read." Attacked, and it is worse than the symlink half alone — **both options can
+be declared in `.flectorc`**, so the destination need not involve a link at all.
+
+Three shapes confirmed against a real repository, each writing outside the
+checkout with exit code `0`:
+
+| Given in `.flectorc` | Result |
+|---|---|
+| `"output": "../home/.bashrc"` | the HTML report overwrote a file outside the project |
+| `"output": "link.html"` (a symlink out) | the write followed the link |
+| `"baseline": "../home/x.json"` + `updateBaseline` | a JSON file written outside the project |
+
+Neither file is inert content. The report embeds config values and file names,
+and a baseline embeds rule ids, file paths, and messages — all of which the pull
+request authored. On a runner, the reachable destinations include shell profiles,
+workflow files, and SSH config.
+
+**Fixed** with a containment rule that follows the provenance, in
+`assertWriteDestinationContained`:
+
+- **Declared in `.flectorc`** — must resolve inside the project.
+  `FLECTO_ALLOW_RC_WRITES=1` opts out, for a repository that genuinely configures
+  a destination elsewhere.
+- **Any source** — must not leave the project through a symlink, checked on the
+  destination itself and on the directory it lands in.
+  `FLECTO_ALLOW_SYMLINK_TARGETS=1` opts out of this half, as it does for reads.
+
+The link check resolves the chain by hand rather than asking whether the
+destination exists. `existsSync` follows links, so a link whose target is *not
+there yet* reports as absent and would skip the check — and that is the sharper
+half of the attack, not the weaker one: overwriting needs the file to already be
+there, while a link to one the runner lacks has Flecto **create** it.
+`~/.ssh/authorized_keys` is the example that stings, because sshd skips lines it
+cannot parse, so a report wrapped around one attacker-authored line still works
+as a key file. Not every absent file is reachable — the write lands at mode
+`644`, so a git hook, which git will not run unless it is executable, is not.
+
+A destination named on the **command line** is operator intent and is untouched,
+the same distinction the read rule already draws: `flecto report --output
+/tmp/drift.html` still works.
+
+### The GitLab token followed redirects — fixed
+
+`fetch` removes `Authorization` when a redirect crosses origins, and it removes
+**only that header**. GitLab authenticates with `PRIVATE-TOKEN`, which is not
+covered: verified against a local server, a `302` from the API host forwarded
+`PRIVATE-TOKEN: glpat-…` to the redirect target in full. GitHub and Bitbucket use
+`Authorization` and are stripped by the platform.
+
+The API host comes from runner environment (`CI_API_V4_URL`), not from pull
+request content, so this is not reachable from the primary threat model — it needs
+a hostile or compromised API host, or a self-hosted instance redirecting
+somewhere unexpected. It is still a credential leaving for a host nobody chose,
+and the fix costs nothing: requests are issued with `redirect: 'manual'` and a
+3xx is refused with a message naming the origin it pointed at. These endpoints do
+not legitimately redirect, and one that does is worth seeing rather than
+following.
+
+### Bitbucket path segments were interpolated unencoded — hardened
+
+`BITBUCKET_WORKSPACE` and `BITBUCKET_REPO_SLUG` went into the request path raw,
+while GitLab's project id was already encoded. Not exploitable — both come from
+runner environment, and a path segment cannot move the request to another host —
+but a value carrying `/`, `?`, or `#` restructures the URL rather than naming a
+repository. Both are `encodeURIComponent`d now, matching GitLab.
+
 ## Checked — no change needed
 
 - **Command execution (`--command`, `src/alerter.js`).** Env var *names* are
@@ -149,9 +243,32 @@ minimized input in `test/fixtures/fuzz/parse-ini-proto-section.json`.
 - **`policies add` package safety.** Resolves the target with `require.resolve`
   (path only, never evaluated) and reads the pack JSON off disk; it never
   `import()`s the package, so it runs no package code. (`npm install`-time
-  `postinstall` is outside Flecto's control and is an npm concern.)
+  `postinstall` is outside Flecto's control and is an npm concern.) The pack id
+  becomes a filename under `policies/`, and it is constrained to a single plain
+  segment before it gets there: `../../evil`, `flecto-pack-../../evil`, and their
+  percent-encoded forms are all refused by `normalizePackPackageName`, so the
+  write cannot leave the directory.
 - **Deeply nested YAML.** js-yaml's default schema caps nesting depth (~100), so
   a deep-nesting document is rejected at parse rather than overflowing the stack.
+- **GitLab and Bitbucket token handling** ([#147], the surface [#138] added). Tokens
+  are read from environment only, sent as a single auth header to the API URL from
+  runner environment, and stripped from every error string by the same `redact`
+  the GitHub path uses — including the failure and timeout paths. Neither token
+  is honored from `.flectorc` or from any file the repository can contain.
+  Detection is by CI variables, and posting still requires `--pr-comment-post`
+  plus a complete merge request context. Two things did change: see the redirect
+  finding and the segment-encoding note above.
+- **An API URL over plain `http`.** `CI_API_V4_URL` / `GITHUB_API_URL` /
+  `BITBUCKET_API_URL` are runner environment, so a plaintext API URL is the
+  operator describing their own network, not an attacker redirecting anything.
+  Not refused, deliberately — a self-hosted instance on an internal `http` host is
+  a real deployment, and refusing it would break a legitimate setup to prevent a
+  configuration the operator already controls.
+- **Enormous files.** Measured rather than reasoned about: 9.3 MB of YAML parses,
+  diffs, and gates in 1.6 s; 44 MB in 9.0 s. Cost is linear, with no quadratic
+  or exponential shape to trip, and the practical ceiling is the git host's own
+  file-size limit. A file large enough to exhaust the heap aborts the process
+  non-zero, which fails the build closed rather than passing it.
 
 ## Not yet closed
 
@@ -230,4 +347,6 @@ choose. It narrows where to look; it does not replace looking.
 [#121]: https://github.com/myselfsiddharth/Flecto/issues/121
 [#125]: https://github.com/myselfsiddharth/Flecto/issues/125
 [#149]: https://github.com/myselfsiddharth/Flecto/issues/149
+[#138]: https://github.com/myselfsiddharth/Flecto/issues/138
+[#147]: https://github.com/myselfsiddharth/Flecto/pull/147
 [#150]: https://github.com/myselfsiddharth/Flecto/issues/150

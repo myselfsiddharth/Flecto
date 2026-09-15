@@ -531,6 +531,9 @@ exactly the lines that changed. A snapshot commit is meant to be reviewable.
 | Variable | Read by | Description |
 |---|---|---|
 | `FLECTO_PROFILE` | all commands | Profile name, when `--profile` is not passed |
+| `FLECTO_ALLOW_SYMLINK_TARGETS` | all commands | `1` allows a target — or a write destination — that leaves the project through a symlink |
+| `FLECTO_ALLOW_RC_WRITES` | `ci`, `report` | `1` allows `.flectorc` to point `--output` / `--baseline` outside the project |
+| `FLECTO_ALLOW_RC_PLUGINS` | all commands | `1` allows plugins declared in `.flectorc` |
 
 Flecto also *sets* variables for `--command` subprocesses — see
 [webhooks and commands](webhooks.md#running-a-command-on-change).

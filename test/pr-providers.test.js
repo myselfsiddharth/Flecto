@@ -26,6 +26,7 @@ function recordingFetch(handler) {
       url,
       method: init.method ?? 'GET',
       headers: init.headers ?? {},
+      redirect: init.redirect,
       body: init.body ? JSON.parse(init.body) : undefined,
     });
     return handler(url, init);
@@ -268,4 +269,52 @@ test('the token never appears in a provider error', async () => {
       return true;
     },
   );
+});
+
+test('a redirect is refused rather than followed with a token attached (#121)', async () => {
+  // `fetch` strips `Authorization` when a redirect crosses origins, and strips
+  // only that header — GitLab's `PRIVATE-TOKEN` would be forwarded to whatever
+  // the API host points at. Verified against a live local server; asserted here
+  // on the refusal itself.
+  const { fetchImpl, calls } = recordingFetch(() => ({
+    ok: false,
+    status: 302,
+    headers: { get: (name) => (name.toLowerCase() === 'location' ? 'https://elsewhere.test/notes' : null) },
+    json: async () => ({}),
+    text: async () => '',
+  }));
+  const { context } = resolvePrCommentContext(GITLAB_ENV);
+
+  await assert.rejects(
+    () => upsertPrComment(BODY, context, { fetchImpl }),
+    /GitLab API GET was redirected \(HTTP 302 to https:\/\/elsewhere\.test\)/u,
+  );
+  assert.equal(calls.length, 1, 'the redirect target is never requested');
+  assert.equal(calls[0].headers['PRIVATE-TOKEN'], 'glpat-secret');
+});
+
+test('every request is issued with redirect following disabled', async () => {
+  const { fetchImpl, calls } = recordingFetch((url, init) => (init.method === 'POST'
+    ? response(201, { id: 1 })
+    : response(200, [])));
+  const { context } = resolvePrCommentContext(GITLAB_ENV);
+  await upsertPrComment(BODY, context, { fetchImpl });
+  assert.ok(calls.length >= 2, 'the list and the create both went out');
+  for (const call of calls) assert.equal(call.redirect, 'manual');
+});
+
+test('bitbucket path segments are encoded, so they cannot restructure the URL', async () => {
+  const { fetchImpl, calls } = recordingFetch(() => response(200, { values: [] }));
+  await upsertPrComment(BODY, {
+    provider: 'bitbucket',
+    workspace: 'team/../..',
+    repoSlug: 'repo?x=1',
+    prNumber: 7,
+    token: 'bb-secret',
+    apiUrl: 'https://api.bitbucket.org/2.0',
+  }, { fetchImpl }).catch(() => {});
+
+  const [first] = calls;
+  assert.match(first.url, /repositories\/team%2F\.\.%2F\.\./u);
+  assert.match(first.url, /repo%3Fx%3D1\/pullrequests\/7\/comments/u);
 });

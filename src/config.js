@@ -1,4 +1,13 @@
-import { existsSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'fs';
+import {
+  existsSync,
+  lstatSync,
+  readFileSync,
+  readdirSync,
+  readlinkSync,
+  realpathSync,
+  statSync,
+  writeFileSync,
+} from 'fs';
 import { basename, dirname, join, relative, resolve, sep } from 'path';
 import fg from 'fast-glob';
 import yaml from 'js-yaml';
@@ -214,6 +223,157 @@ export function assertTargetContained(file, cwd = process.cwd()) {
     + 'reading one would put a file from outside the repository into Flecto\'s output.\n'
     + 'Set FLECTO_ALLOW_SYMLINK_TARGETS=1 if this link is intentional.',
   );
+}
+
+/**
+ * Has the operator explicitly opted in to write destinations that `.flectorc`
+ * points outside the project?
+ * @returns {boolean}
+ */
+function rcWritesAllowed() {
+  const raw = process.env.FLECTO_ALLOW_RC_WRITES;
+  return raw === '1' || String(raw).toLowerCase() === 'true';
+}
+
+/**
+ * Refuse a *write* destination that leaves the project.
+ *
+ * The read rule ({@link assertTargetContained}) is about escape, and treats a
+ * path named from outside the project as operator intent. A write cannot be read
+ * that way, because the path is not always the operator's: `output` and
+ * `baseline` can be declared in `.flectorc`, and on an untrusted pull request
+ * `.flectorc` is attacker-controlled. Both destinations carry content the
+ * attacker partly controls — the report embeds config values and file names, a
+ * baseline embeds rule ids, paths, and messages — so an unconstrained
+ * destination is an arbitrary file overwrite with partly chosen content, which
+ * on a CI runner is a shell profile, a workflow file, or an SSH config.
+ *
+ * Two rules, matching the provenance:
+ *
+ * - **Declared in `.flectorc`** — must resolve inside the project.
+ *   `FLECTO_ALLOW_RC_WRITES=1` opts out, for a repository that genuinely
+ *   configures a destination elsewhere.
+ * - **Any source** — must not leave the project through a symlink, on the path
+ *   itself or on the directory it is written into. That is the shape a pull
+ *   request can author without touching the workflow, and it is refused for the
+ *   same reason a symlinked *target* is; `FLECTO_ALLOW_SYMLINK_TARGETS=1` opts
+ *   out of this half, as it does for reads.
+ *
+ * Refusing loudly rather than falling back to a default path is deliberate: a
+ * report that silently went somewhere else is worse than one that was not
+ * written.
+ * @param {string} file destination path, already resolved against the cwd
+ * @param {{ option: string, fromCli?: boolean, cwd?: string }} context
+ * @throws {Error} when the destination escapes the project
+ */
+export function assertWriteDestinationContained(file, context) {
+  const { option, fromCli = false } = context;
+  const cwd = context.cwd ?? process.cwd();
+  const lexicalRoot = resolve(cwd);
+  const root = canonical(lexicalRoot);
+  const given = resolve(cwd, file);
+  const shown = relative(lexicalRoot, given).split(sep).join('/') || given;
+
+  // A destination need not exist yet, and neither need the directories above it,
+  // so normalize from the nearest ancestor that does: canonical() cannot resolve
+  // a path that is not there, and its fallback leaves the spelling as written —
+  // which on Windows is an 8.3 short name that compares as a different directory
+  // from the long form `root` carries, making an in-project path look external.
+  const { base, rest } = nearestExistingDir(dirname(given));
+  const nominal = join(canonical(base), ...rest, basename(given));
+  // Either spelling counts as inside: the lexical form covers a path derived
+  // from the cwd, the canonical form a path named some other way.
+  const insideProject = isInside(given, lexicalRoot) || isInside(nominal, root);
+
+  if (!fromCli && !rcWritesAllowed() && !insideProject) {
+    throw new Error(
+      `Refusing to write "${option}" to ${given}: .flectorc points it outside the project.\n`
+      + '.flectorc is attacker-controlled on an untrusted pull request, and this file carries '
+      + 'config values and file names into whatever it overwrites.\n'
+      + `Pass ${option} on the command line for a destination outside the project, or set `
+      + 'FLECTO_ALLOW_RC_WRITES=1 if this repository genuinely configures one.',
+    );
+  }
+
+  if (symlinkTargetsAllowed()) return;
+
+  // Two ways a write leaves through a link: the destination is itself a link, or
+  // the nearest directory that exists on the way to it is. The second covers a
+  // path several levels deep whose parents have not been created yet.
+  for (const candidate of [given, base]) {
+    const real = linkDestination(candidate);
+    // Nothing there at all: no link to follow, so nothing to refuse.
+    if (real === null) continue;
+    // Named from outside the project: nothing escaped, it was never inside.
+    if (!isInside(candidate, lexicalRoot)) continue;
+    if (isInside(real, root)) continue;
+    throw new Error(
+      `Refusing to write "${option}" to "${shown}": it is a link out of the project, `
+      + `resolving to ${real}.\n`
+      + 'File names and links are attacker-controlled on an untrusted pull request, and '
+      + 'writing through one would overwrite a file outside the repository.\n'
+      + 'Set FLECTO_ALLOW_SYMLINK_TARGETS=1 if this link is intentional.',
+    );
+  }
+}
+
+/**
+ * How many links to walk before giving up. The OS gives up around 40; this only
+ * needs to outlast any chain a repository would legitimately contain.
+ */
+const MAX_LINK_HOPS = 32;
+
+/**
+ * Where a path actually lands, following links even when the chain ends
+ * somewhere that does not exist yet.
+ *
+ * `existsSync` follows links, so it reports *nothing* for a link whose target is
+ * missing — and `realpathSync` fails on one, leaving {@link canonical} to fall
+ * back to the path as written, which is still inside the project. So a link to a
+ * file the runner does not have yet reads as contained twice over. That is not
+ * the weaker half of this attack but the stronger one: overwriting needs the
+ * file to already be there, while a link to a file the runner does *not* have
+ * yet has Flecto create it. `~/.ssh/authorized_keys` is the one that stings,
+ * because sshd skips lines it cannot parse, so HTML wrapped around one
+ * attacker-authored line is still a usable key file.
+ *
+ * So the link is resolved by hand, hop by hop, and judged wherever it ends up.
+ * @param {string} path
+ * @param {number} [depth]
+ * @returns {string | null} null when there is nothing at `path` at all
+ */
+function linkDestination(path, depth = 0) {
+  const stats = lstatSync(path, { throwIfNoEntry: false });
+  if (!stats) return null;
+  if (!stats.isSymbolicLink()) return canonical(path);
+
+  const target = resolve(dirname(path), readlinkSync(path));
+  // A cycle, or a chain long enough that the write would fail with ELOOP
+  // anyway: judge the hop we have rather than walking forever.
+  if (depth >= MAX_LINK_HOPS) return target;
+  // The next hop may not exist; normalize what is there and keep the rest as
+  // written, the same way an ordinary destination is normalized above.
+  const { base, rest } = nearestExistingDir(dirname(target));
+  return linkDestination(target, depth + 1) ?? join(canonical(base), ...rest, basename(target));
+}
+
+/**
+ * The nearest ancestor of a path that exists on disk, plus the segments below it
+ * that do not.
+ * @param {string} path
+ * @returns {{ base: string, rest: string[] }}
+ */
+function nearestExistingDir(path) {
+  let current = resolve(path);
+  /** @type {string[]} */
+  const rest = [];
+  while (!existsSync(current)) {
+    const parent = dirname(current);
+    if (parent === current) break;
+    rest.unshift(basename(current));
+    current = parent;
+  }
+  return { base: current, rest };
 }
 
 /**
