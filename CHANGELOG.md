@@ -7,6 +7,8 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ## [Unreleased]
 
+## [3.1.0] - 2026-09-15
+
 ### Added
 
 - **A shared, git-tracked snapshot store** ([#141]). Snapshot history lived in
@@ -1035,7 +1037,8 @@ fixed — those runs were never actually gated — but the failure is new.
 - Misconfigured policy packs/plugins cause `watch` to exit non-zero instead of
   continuing with no policies.
 
-[Unreleased]: https://github.com/myselfsiddharth/Flecto/compare/v3.0.2...HEAD
+[Unreleased]: https://github.com/myselfsiddharth/Flecto/compare/v3.1.0...HEAD
+[3.1.0]: https://github.com/myselfsiddharth/Flecto/compare/v3.0.2...v3.1.0
 [3.0.2]: https://github.com/myselfsiddharth/Flecto/compare/v3.0.1...v3.0.2
 [3.0.1]: https://github.com/myselfsiddharth/Flecto/compare/v3.0.0...v3.0.1
 [3.0.0]: https://github.com/myselfsiddharth/Flecto/compare/v2.1.0...v3.0.0
