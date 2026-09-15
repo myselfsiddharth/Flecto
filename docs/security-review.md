@@ -269,6 +269,38 @@ repository. Both are `encodeURIComponent`d now, matching GitLab.
   or exponential shape to trip, and the practical ceiling is the git host's own
   file-size limit. A file large enough to exhaust the heap aborts the process
   non-zero, which fails the build closed rather than passing it.
+- **The shared snapshot store** ([#141], `src/snapshot-store.js`). The shared
+  store lives at `.flecto/snapshots/` and is *committed*, so on an untrusted pull
+  request its files are attacker-controlled exactly as a config file is — and
+  `flecto ci --snapshot-store shared` reads that baseline **directly**, without
+  passing it through the parser's `normalizeParsedValue`. So it is its own
+  untrusted-input boundary, and the same four questions were put to it:
+  - **Prototype pollution.** A committed baseline whose `state` carries a
+    `__proto__` / `constructor.prototype` key does not reach `Object.prototype`:
+    `JSON.parse` makes `__proto__` an ordinary own property, the differ walks it
+    without lifting it onto a prototype, and `stableStringify` writes every key
+    through `Object.defineProperty` — the same guarantee the parser and differ
+    already give. Verified end to end through `ci`.
+  - **Write containment.** The shared store keys a snapshot by the config file's
+    repo-relative path (`keyFor`), and a path that escapes the project root has
+    no such key, so the write is *refused* rather than redirected — a snapshot
+    write cannot leave `.flecto/snapshots/`. This is the same escape-not-location
+    rule as the target and write-destination findings above.
+  - **`stored.file` is a label, not a read.** A committed baseline can name any
+    `"file"` it likes, including an absolute path outside the checkout, but the
+    baseline compared against is the store's own `state`; `readLatest` (the path
+    `ci` takes) never opens the labeled file, so a crafted `"file"` cannot induce
+    an arbitrary read.
+  - **Malformed or pathological store JSON** fails the run **closed**:
+    `readStoreFile` rethrows a clean error on invalid JSON, and a deeply-nested
+    document exhausts the stack and exits non-zero rather than hanging or passing
+    the gate — the same shape as deeply nested config above.
+  - **`resolveProjectRoot`** shells to git through `execFileSync('git', [...])`
+    with an argument array and no shell, over the operator's own `cwd`, so no
+    config content reaches a command line. Regression tests in
+    `test/security.test.js` (“the shared snapshot store trusts nothing a pull
+    request commits”), alongside the store's functional suite in
+    `test/snapshot-store.test.js`.
 
 ## Not yet closed
 
@@ -348,5 +380,6 @@ choose. It narrows where to look; it does not replace looking.
 [#125]: https://github.com/myselfsiddharth/Flecto/issues/125
 [#149]: https://github.com/myselfsiddharth/Flecto/issues/149
 [#138]: https://github.com/myselfsiddharth/Flecto/issues/138
+[#141]: https://github.com/myselfsiddharth/Flecto/issues/141
 [#147]: https://github.com/myselfsiddharth/Flecto/pull/147
 [#150]: https://github.com/myselfsiddharth/Flecto/issues/150
