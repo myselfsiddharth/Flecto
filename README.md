@@ -509,6 +509,7 @@ Explicit CLI flags win over profiles, which win over `defaults`.
 | `flecto policies list` | List available policy packs |
 | `flecto policies test <dir>` | Assert pack and plugin findings from fixtures |
 | `flecto init` | Create a `.flectorc` from detected stack signals |
+| `flecto mcp` | Serve read-only diff/check/explain tools to an agent over MCP |
 | `flecto doctor` | Check setup, config, and environment |
 
 → **[Every flag, every command](docs/cli-reference.md)**
@@ -527,6 +528,7 @@ Explicit CLI flags win over profiles, which win over `defaults`.
 | **[Kubernetes](docs/kubernetes.md)** | Diffing rendered Helm/Kustomize manifests before they reach a cluster |
 | **[Terraform plans](docs/terraform.md)** | Reviewing `terraform show -json` output and the `terraform` pack |
 | **[Webhooks and commands](docs/webhooks.md)** | Envelope shape, delivery modes, command environment |
+| **[MCP server](docs/mcp.md)** | Read-only diff/check/explain tools for agents, and the security posture |
 | **[Policy packs](docs/policy-packs.md)** | Writing declarative rules |
 | **[Plugins](docs/plugins.md)** · **[Cookbook](docs/plugin-cookbook.md)** | Rules that need real code |
 | **[Troubleshooting](docs/troubleshooting.md)** | When something doesn't behave |
