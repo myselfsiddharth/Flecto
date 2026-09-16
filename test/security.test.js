@@ -725,3 +725,145 @@ describe('the merge gate cannot be turned green from .flectorc (#121)', () => {
     }
   });
 });
+
+describe('the shared snapshot store trusts nothing a pull request commits (#121, #141)', () => {
+  // The shared store (#141) lives at `.flecto/snapshots/` and is committed, so a
+  // pull request controls its contents exactly as it controls a config file.
+  // `flecto ci --snapshot-store shared` reads that committed baseline directly —
+  // it never passes through the parser's normalizeParsedValue — so the store is
+  // its own untrusted-input boundary.
+
+  /**
+   * A checkout carrying a committed shared-store baseline for `config/app.yaml`,
+   * whose stored `state` and `file` are whatever a pull request wrote.
+   * @param {{ state?: unknown, file?: string, raw?: string }} [store]
+   */
+  function repoWithCommittedStore(store = {}) {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'flecto-sec-store-')));
+    mkdirSync(join(dir, 'config'), { recursive: true });
+    mkdirSync(join(dir, '.flecto', 'snapshots', 'config'), { recursive: true });
+    writeFileSync(join(dir, 'config', 'app.yaml'), 'a: 2\n', 'utf8');
+    const body = store.raw ?? JSON.stringify({
+      version: 1,
+      file: store.file ?? 'config/app.yaml',
+      masking: 'none',
+      snapshots: [{ createdAt: '2026-01-01T00:00:00.000Z', state: store.state ?? { a: 1 } }],
+    });
+    writeFileSync(join(dir, '.flecto', 'snapshots', 'config', 'app.yaml.json'), body, 'utf8');
+    return dir;
+  }
+
+  test('a __proto__ in a committed baseline does not reach Object.prototype', async () => {
+    const { resolveSnapshotStore } = await import('../src/snapshot-store.js');
+    const { diffTrees } = await import('../src/differ.js');
+    // Written as raw JSON text so the `__proto__` is a real serialized key: a JS
+    // object literal `{ __proto__: ... }` sets the prototype and never
+    // serializes, which is not the input a committed file carries.
+    const dir = repoWithCommittedStore({
+      raw: '{"version":1,"file":"config/app.yaml","masking":"none","snapshots":'
+        + '[{"createdAt":"2026-01-01T00:00:00.000Z","state":{"a":1,"__proto__":{"isAdmin":true}}}]}',
+    });
+    try {
+      const store = resolveSnapshotStore({ store: 'shared', cwd: dir });
+      const record = store.readLatest(join(dir, 'config', 'app.yaml'));
+
+      // JSON.parse keeps `__proto__` as an ordinary own property; it must not
+      // become the object's prototype, and diffing it must not lift it onto
+      // Object.prototype — the same guarantee the parser and differ already give.
+      assert.ok(Object.hasOwn(record.state, '__proto__'));
+      assert.equal(Object.getPrototypeOf(record.state), Object.prototype);
+      diffTrees(record.state, { a: 2 });
+      assert.equal(({}).isAdmin, undefined, 'Object.prototype must be untouched');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('ci diffs a hostile committed baseline without polluting the gate', () => {
+    const dir = repoWithCommittedStore({
+      raw: '{"version":1,"file":"config/app.yaml","masking":"none","snapshots":'
+        + '[{"createdAt":"2026-01-01T00:00:00.000Z","state":{"a":1,"__proto__":{"polluted":"yes"}}}]}',
+    });
+    try {
+      const run = spawnSync(
+        process.execPath,
+        [rootIndex, 'ci', 'config/app.yaml', '--snapshot-store', 'shared', '--fail-on', 'changed'],
+        { cwd: dir, encoding: 'utf8', timeout: 20000 },
+      );
+      // It runs the diff and fails on the change (a: 1 -> 2), cleanly — not
+      // killed by the timeout, and the `__proto__` key is diffed as ordinary
+      // data rather than pruned or crashing the walk.
+      assert.equal(run.signal, null, 'must not be killed by the timeout — a hang is a DoS');
+      assert.equal(run.status, 1, `${run.stdout}\n${run.stderr}`);
+      const [{ envelope }] = JSON.parse(run.stdout);
+      assert.ok(envelope.changes.some((c) => c.path === 'a'), run.stdout);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a committed baseline pointing "file" outside the repo reads no such file', async () => {
+    const { resolveSnapshotStore } = await import('../src/snapshot-store.js');
+    // The stored `file` is a label carried on the record; the baseline compared
+    // against is the store's own `state`. A crafted absolute path must not turn
+    // into an arbitrary read of `/etc/passwd` on the runner.
+    const dir = repoWithCommittedStore({ file: '/etc/passwd', state: { a: 41 } });
+    try {
+      const store = resolveSnapshotStore({ store: 'shared', cwd: dir });
+      const record = store.readLatest(join(dir, 'config', 'app.yaml'));
+      assert.deepEqual(record.state, { a: 41 }, 'the baseline is the stored state, never the labeled file');
+      assert.ok(!/root:.*:0:0:/.test(JSON.stringify(record.state)), 'no /etc/passwd contents leaked in');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('the shared store refuses to write a snapshot for a target outside the repo', async () => {
+    const { resolveSnapshotStore } = await import('../src/snapshot-store.js');
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'flecto-sec-store-w-')));
+    const dir = join(root, 'repo');
+    mkdirSync(dir, { recursive: true });
+    try {
+      const store = resolveSnapshotStore({ store: 'shared', cwd: dir });
+      // A path that escapes the project root has no repo-relative key, so the
+      // write is refused rather than landing somewhere outside `.flecto/`.
+      const targets = [join(root, 'escape.yaml'), '/etc/hosts'];
+      if (process.platform === 'win32') {
+        // `relative` cannot reach another drive or a UNC share and returns the
+        // target *absolute*, not `..`-prefixed. That was accepted as a key: a
+        // cross-drive write died on a raw ENOENT, a UNC one was written under a
+        // meaningless `server/share/...` key.
+        const otherDrive = dir[0].toUpperCase() === 'Z' ? 'Y' : 'Z';
+        targets.push(`${otherDrive}:\\escape.yaml`, '\\\\server\\share\\escape.yaml');
+      }
+      for (const target of targets) {
+        assert.throws(
+          () => store.write(target, { state: { a: 1 } }),
+          /outside|repo-relative/,
+          `writing ${target} must be refused`,
+        );
+      }
+      // The legitimate in-repo case still writes, and stays under `.flecto/`.
+      const { path } = store.write(join(dir, 'config', 'app.yaml'), { state: { a: 1 } });
+      assert.ok(path.startsWith(join(dir, '.flecto', 'snapshots')), path);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('a malformed committed store file fails the run closed, without hanging', () => {
+    const dir = repoWithCommittedStore({ raw: '{ this is not: valid json ]' });
+    try {
+      const run = spawnSync(
+        process.execPath,
+        [rootIndex, 'ci', 'config/app.yaml', '--snapshot-store', 'shared'],
+        { cwd: dir, encoding: 'utf8', timeout: 20000 },
+      );
+      assert.equal(run.signal, null, 'must not be killed by the timeout — a hang is a DoS');
+      assert.equal(run.status, 1, `${run.stdout}\n${run.stderr}`);
+      assert.match(run.stderr, /not valid JSON|malformed/i);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
