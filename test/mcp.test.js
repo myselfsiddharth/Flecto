@@ -6,6 +6,7 @@ import {
   writeFileSync,
   rmSync,
   realpathSync,
+  existsSync,
 } from 'fs';
 import { join, resolve } from 'path';
 import { tmpdir } from 'os';
@@ -103,12 +104,14 @@ describe('MCP tools are read-only and mask by default (#140)', () => {
     const args = runner.calls[0];
 
     // The one place tool input becomes argv: assert what it may and may not contain.
-    assert.deepEqual(args.slice(0, 2), ['ci', 'config/prod.yaml']);
-    assert.ok(args.includes('--snapshot-ref') && args[args.indexOf('--snapshot-ref') + 1] === 'HEAD');
-    assert.ok(args.includes('--mask-secrets'), 'masking is on by default');
-    assert.ok(args.includes('--format') && args[args.indexOf('--format') + 1] === 'json');
+    assert.equal(args[0], 'ci');
+    assert.deepEqual(args.slice(args.indexOf('--') + 1), ['config/prod.yaml'], 'files only ever follow "--"');
+    const options = args.slice(1, args.indexOf('--'));
+    assert.ok(options.includes('--snapshot-ref=HEAD'));
+    assert.ok(options.includes('--mask-secrets'), 'masking is on by default');
+    assert.ok(options.includes('--format') && options[options.indexOf('--format') + 1] === 'json');
     for (const forbidden of ['--command', '--plugins', '--baseline', '--update-baseline', '--output', '--pr-comment-post']) {
-      assert.ok(!args.includes(forbidden), `argv must never contain ${forbidden}`);
+      assert.ok(!options.some((o) => o === forbidden || o.startsWith(`${forbidden}=`)), `argv must never contain ${forbidden}`);
     }
 
     const payload = JSON.parse(result.content[0].text);
@@ -126,7 +129,7 @@ describe('MCP tools are read-only and mask by default (#140)', () => {
   test('flecto_diff passes a custom ref through without letting it be a flag', async () => {
     const runner = fakeRunner(sample);
     await call(runner, 'flecto_diff', { file: 'config/prod.yaml', ref: 'origin/main' });
-    assert.equal(runner.calls[0][runner.calls[0].indexOf('--snapshot-ref') + 1], 'origin/main');
+    assert.ok(runner.calls[0].includes('--snapshot-ref=origin/main'), runner.calls[0].join(' '));
 
     const result = await call(fakeRunner(sample), 'flecto_diff', { file: 'x.yaml', ref: '--format' });
     assert.equal(result.isError, true);
@@ -136,7 +139,7 @@ describe('MCP tools are read-only and mask by default (#140)', () => {
   test('flecto_check evaluates named packs and flattens findings with their file', async () => {
     const runner = fakeRunner(sample);
     const result = await call(runner, 'flecto_check', { files: ['config/prod.yaml'], packs: ['default', 'strict-prod'] });
-    assert.equal(runner.calls[0][runner.calls[0].indexOf('--policies') + 1], 'default,strict-prod');
+    assert.ok(runner.calls[0].includes('--policies=default,strict-prod'), runner.calls[0].join(' '));
     const payload = JSON.parse(result.content[0].text);
     assert.equal(payload.findingCount, 1);
     assert.equal(payload.findings[0].file, '/repo/config/prod.yaml');
@@ -193,6 +196,36 @@ describe('MCP argument containment (#140)', () => {
     assert.throws(() => assertSafeTargetArg('a/../../b', '/repo'), /escapes the working directory/);
     assert.throws(() => assertSafeTargetArg('/etc/passwd', '/repo'), /outside the working directory/);
     assert.throws(() => assertSafeTargetArg('', '/repo'), /non-empty/);
+  });
+
+  test('a file argument shaped like a CLI option is refused before spawning', async () => {
+    // Before this, `files: ["--plugins=./p.mjs", ...]` reached the `ci` command
+    // line as an option: one tool call ran a plugin, another wrote a baseline.
+    for (const arg of ['--plugins=./p.mjs', '--update-baseline', '-p', '--pr-comment-post']) {
+      assert.throws(() => assertSafeTargetArg(arg, '/repo'), /starts with "-"/, arg);
+    }
+    const runner = fakeRunner();
+    const res = await server(runner).handle({
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'flecto_check', arguments: { files: ['--plugins=./p.mjs', 'config/prod.yaml'] } },
+    });
+    assert.equal(res.result.isError, true);
+    assert.equal(runner.calls.length, 0, 'nothing must have been spawned');
+  });
+
+  test('agent-supplied values can never be parsed as options', async () => {
+    // Defense in depth behind the refusal above: pack ids ride inside
+    // `--policies=`, and every file follows `--`, so no value is ever a flag.
+    const runner = fakeRunner();
+    await server(runner).handle({
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'flecto_check', arguments: { files: ['a.yaml', 'b/*.yaml'], packs: ['--plugins=./p.mjs'] } },
+    });
+    const args = runner.calls[0];
+    const end = args.indexOf('--');
+    assert.deepEqual(args.slice(end + 1), ['a.yaml', 'b/*.yaml']);
+    assert.ok(args.slice(1, end).includes('--policies=--plugins=./p.mjs'), args.join(' '));
+    assert.ok(!args.includes('--plugins=./p.mjs'), 'a pack id must not become its own argument');
   });
 
   test('in-repo paths and globs are allowed', () => {
@@ -291,7 +324,28 @@ describe('flecto mcp over real stdio (#140)', () => {
       driveServer(dir, [
         { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'flecto_diff', arguments: { file: 'config/prod.yaml' } } },
       ], { FLECTO_ALLOW_RC_PLUGINS: '1' });
-      assert.throws(() => execFileSync('test', ['-f', marker]), 'the plugin must not have run');
+      assert.equal(existsSync(marker), false, 'the plugin must not have run');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a tool argument spelled as a CLI option neither runs a plugin nor writes a file', () => {
+    const dir = gitRepo('flecto-mcp-inj-', 'a: 1\n', 'a: 2\n');
+    const marker = join(dir, 'PLUGIN_RAN');
+    writeFileSync(join(dir, 'p.mjs'),
+      `import { writeFileSync } from 'fs';\nwriteFileSync(${JSON.stringify(marker)}, 'x');\nexport function evaluate() { return []; }\n`,
+      'utf8');
+    try {
+      const { responses } = driveServer(dir, [
+        { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'flecto_check', arguments: { files: ['--plugins=./p.mjs', 'config/prod.yaml'] } } },
+        { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'flecto_check', arguments: { files: ['--baseline=OWNED.json', '--update-baseline', 'config/prod.yaml'] } } },
+        { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'flecto_check', arguments: { files: ['config/prod.yaml'], packs: ['--plugins=./p.mjs'] } } },
+      ]);
+      assert.equal(responses.length, 3);
+      for (const res of responses) assert.equal(res.result.isError, true, JSON.stringify(res));
+      assert.equal(existsSync(marker), false, 'the plugin must not have run');
+      assert.equal(existsSync(join(dir, 'OWNED.json')), false, 'no baseline may have been written');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

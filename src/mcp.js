@@ -20,14 +20,18 @@ import { isAbsolute, resolve, sep } from 'path';
  *   `--update-baseline`, `--output`, or `--plugins`, so there is no argument by
  *   which an agent-supplied value becomes a write or a shell command. That is
  *   GHSA-wq8m-fc3q-8m5x's lesson generalized: a tool an agent can invoke must
- *   not be able to execute a shell command.
+ *   not be able to execute a shell command. Nor can a value smuggle one of those
+ *   options in: files follow a `--`, values ride as `--name=value`, and a file
+ *   argument starting with `-` is refused before anything spawns.
  * - **Plugins stay off**, regardless of `FLECTO_ALLOW_RC_PLUGINS` in the
  *   environment — the runner strips it from the child, because model-supplied
  *   arguments are untrusted input by definition and an rc-declared plugin is
  *   code.
  * - **Path containment** is enforced twice: `assertSafeTargetArg` refuses a
  *   traversal in a tool argument before anything spawns, and the CLI then
- *   applies its own symlink-escape check on every resolved target.
+ *   applies its own symlink-escape check on every resolved target
+ *   (`FLECTO_ALLOW_SYMLINK_TARGETS` is stripped from the child, so it cannot be
+ *   switched off).
  * - **Masking is inverted from the CLI**: on by default here, because the
  *   consumer is a model context that is transmitted to a provider and very often
  *   logged on the way. The opt-out is explicit (`mask: false`) and documented as
@@ -124,6 +128,12 @@ export const TOOLS = [
  * Refuse a target argument that escapes the working directory before it is ever
  * spawned. Globs are allowed (the CLI resolves and contains each match); a `..`
  * segment or an absolute path outside `cwd` is not.
+ *
+ * Nor is a leading `-`. A file argument lands on the `ci` command line, and one
+ * spelled `--plugins=./p.mjs` or `--update-baseline` would be parsed as that
+ * option — code execution and a write from a single tool call. `ciArgs` already
+ * ends options with `--` before any file; this refuses the shape outright too, so
+ * the guarantee does not rest on one line of argv ordering.
  * @param {unknown} arg
  * @param {string} cwd
  * @returns {string} the argument, when it is safe
@@ -133,6 +143,9 @@ export function assertSafeTargetArg(arg, cwd) {
     throw new Error('a file argument must be a non-empty string');
   }
   if (arg.includes('\0')) throw new Error('a file argument must not contain a NUL byte');
+  if (arg.startsWith('-')) {
+    throw new Error(`"${arg}" starts with "-" and would be read as a CLI option; it is refused`);
+  }
   const segments = arg.split(/[\\/]/);
   if (segments.includes('..')) {
     throw new Error(`"${arg}" escapes the working directory ("..") and is refused`);
@@ -178,13 +191,19 @@ export function bound(items, cap = MAX_ITEMS) {
  * Build the argv for a read-only `ci` run. This is the *only* place tool inputs
  * become CLI arguments, so the read-only guarantee is auditable in one function:
  * nothing here can emit a write, a webhook, a plugin path, or `--command`.
+ *
+ * That holds only if no tool input is *parsed* as an option. So every option is
+ * emitted first, agent-supplied values ride in `--name=value` form (never as a
+ * separate argument the parser could take for a flag), and `--` ends option
+ * parsing before the files, which are therefore always operands.
  * @param {{ files: string[], ref?: string, packs?: string[], mask?: boolean }} spec
  * @returns {string[]}
  */
 function ciArgs({ files, ref, packs, mask }) {
-  const args = ['ci', ...files, '--snapshot-ref', ref ?? 'HEAD', '--format', 'json', '--allow-empty'];
+  const args = ['ci', `--snapshot-ref=${ref ?? 'HEAD'}`, '--format', 'json', '--allow-empty'];
   if (mask !== false) args.push('--mask-secrets');
-  if (packs && packs.length > 0) args.push('--policies', packs.join(','));
+  if (packs && packs.length > 0) args.push(`--policies=${packs.join(',')}`);
+  args.push('--', ...files);
   return args;
 }
 
@@ -363,9 +382,10 @@ export function createServer({ version, cwd, runFlecto }) {
 }
 
 /**
- * The default runner: spawn the read-only `flecto` CLI. `FLECTO_ALLOW_RC_PLUGINS`
- * and `FLECTO_ALLOW_RC_WRITES` are stripped from the child so neither can be
- * turned on for a tool call, whatever the environment holds.
+ * The default runner: spawn the read-only `flecto` CLI. `FLECTO_ALLOW_RC_PLUGINS`,
+ * `FLECTO_ALLOW_RC_WRITES`, and `FLECTO_ALLOW_SYMLINK_TARGETS` are stripped from
+ * the child so none can be turned on for a tool call, whatever the environment
+ * holds.
  * @param {{ nodeExec: string, cliPath: string, cwd: string }} opts
  * @returns {FlectoRunner}
  */
@@ -374,6 +394,9 @@ export function makeCliRunner({ nodeExec, cliPath, cwd }) {
     const env = { ...process.env };
     delete env.FLECTO_ALLOW_RC_PLUGINS;
     delete env.FLECTO_ALLOW_RC_WRITES;
+    // The symlink-escape check is one of the two containment layers a tool
+    // call relies on, so the operator's opt-out does not carry into it either.
+    delete env.FLECTO_ALLOW_SYMLINK_TARGETS;
     const run = spawnSync(nodeExec, [cliPath, ...args], {
       cwd,
       env,

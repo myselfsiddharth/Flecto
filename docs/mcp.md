@@ -68,7 +68,10 @@ coding:
   `--command`, `--plugins`, `--baseline`, `--update-baseline`, `--output`, or
   `--pr-comment-post`, so no agent-supplied value can become a write, a webhook,
   or a shell command. A tool an agent can invoke must not be able to execute a
-  shell command — that is [GHSA-wq8m-fc3q-8m5x]'s lesson generalized.
+  shell command — that is [GHSA-wq8m-fc3q-8m5x]'s lesson generalized. Nor can an
+  argument *become* one of those options: a file argument starting with `-` is
+  refused, files are passed after `--`, and values such as pack ids ride inside
+  `--name=value`, so no tool input is ever parsed as a flag.
 - **Secrets masked by default — inverted from the CLI.** On the command line
   `--mask-secrets` is opt-in, because the consumer is a human terminal. In MCP
   the consumer is a model context that is transmitted to a provider and very
@@ -83,6 +86,8 @@ coding:
 - **Path containment.** A traversal (`..`) or an absolute path outside the
   working directory is refused before anything is spawned, and the CLI then
   applies its own symlink-escape check on every resolved target.
+  `FLECTO_ALLOW_SYMLINK_TARGETS` is stripped from the subprocess along with the
+  plugin and write opt-outs, so that check cannot be switched off for a tool call.
 - **Bounded results.** A diff of thousands of changes is truncated to a stated
   count rather than flooding the context window — returning a small answer is the
   entire point.
