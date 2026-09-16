@@ -827,7 +827,16 @@ describe('the shared snapshot store trusts nothing a pull request commits (#121,
       const store = resolveSnapshotStore({ store: 'shared', cwd: dir });
       // A path that escapes the project root has no repo-relative key, so the
       // write is refused rather than landing somewhere outside `.flecto/`.
-      for (const target of [join(root, 'escape.yaml'), '/etc/hosts']) {
+      const targets = [join(root, 'escape.yaml'), '/etc/hosts'];
+      if (process.platform === 'win32') {
+        // `relative` cannot reach another drive or a UNC share and returns the
+        // target *absolute*, not `..`-prefixed. That was accepted as a key: a
+        // cross-drive write died on a raw ENOENT, a UNC one was written under a
+        // meaningless `server/share/...` key.
+        const otherDrive = dir[0].toUpperCase() === 'Z' ? 'Y' : 'Z';
+        targets.push(`${otherDrive}:\\escape.yaml`, '\\\\server\\share\\escape.yaml');
+      }
+      for (const target of targets) {
         assert.throws(
           () => store.write(target, { state: { a: 1 } }),
           /outside|repo-relative/,

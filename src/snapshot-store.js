@@ -9,7 +9,7 @@ import {
 } from 'fs';
 import { createHash } from 'crypto';
 import { execFileSync } from 'child_process';
-import { dirname, join, relative, resolve, sep } from 'path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'path';
 
 import { containsSecret, looksLikeSecretPath } from './secrets.js';
 import { documentKeysOf, withDocumentKeys } from './documents.js';
@@ -374,12 +374,16 @@ function createSharedStore({ root, projectRoot, retention, maskMode }) {
    * slashed. A file outside the project has no such key, and inventing one (a
    * hash, an absolute path) would produce a store entry that is meaningless on
    * any other checkout — so it is refused rather than written somewhere useless.
+   *
+   * "Outside" includes a file `relative` cannot reach at all: on Windows a target
+   * on another drive or a UNC share comes back *absolute* (`D:\etc\hosts`), not
+   * `..`-prefixed, and would otherwise be accepted as a key.
    * @param {string} absFile
    * @returns {string}
    */
   const keyFor = (absFile) => {
     const rel = relative(projectRoot, resolve(absFile));
-    if (!rel || rel.startsWith('..') || rel.startsWith(`..${sep}`)) {
+    if (!rel || rel.startsWith('..') || isAbsolute(rel)) {
       throw new Error(
         `The shared snapshot store keys snapshots by repo-relative path, and "${absFile}" is`
         + ` outside ${projectRoot}. Run Flecto from the repository that holds the file, or use`

@@ -7,6 +7,17 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- **The shared snapshot store now refuses a Windows target on another drive or
+  a UNC share** ([#141], [#121]). The store keys a snapshot by its repo-relative
+  path and refuses a file outside the repository, but recognised "outside" only
+  as a `..`-prefixed path. On Windows, `path.relative` cannot reach another drive
+  or a share and returns the target absolute instead, which was accepted as a
+  key: a cross-drive write failed on a raw `ENOENT`, and a UNC one was written
+  under a meaningless `server/share/…` key. Neither left `.flecto/snapshots/`.
+  Both are now refused with the same message as any other outside target.
+
 ## [3.1.0] - 2026-09-15
 
 ### Added

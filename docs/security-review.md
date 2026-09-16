@@ -285,7 +285,14 @@ repository. Both are `encodeURIComponent`d now, matching GitLab.
     repo-relative path (`keyFor`), and a path that escapes the project root has
     no such key, so the write is *refused* rather than redirected — a snapshot
     write cannot leave `.flecto/snapshots/`. This is the same escape-not-location
-    rule as the target and write-destination findings above.
+    rule as the target and write-destination findings above. One hardening came
+    out of it, found by the Windows CI leg: `keyFor` recognised "outside" only as
+    a `..`-prefixed relative path, but on Windows `relative` cannot reach another
+    drive or a UNC share and returns the target *absolute*. Such a key was
+    accepted — never an escape, since `join` keeps it under the store root, but a
+    cross-drive write failed on a raw `ENOENT` and a UNC one was written under a
+    meaningless `server/share/…` key. An absolute relative path is now refused
+    like any other outside target.
   - **`stored.file` is a label, not a read.** A committed baseline can name any
     `"file"` it likes, including an absolute path outside the checkout, but the
     baseline compared against is the store's own `state`; `readLatest` (the path
