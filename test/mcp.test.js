@@ -7,6 +7,7 @@ import {
   rmSync,
   realpathSync,
   existsSync,
+  symlinkSync,
 } from 'fs';
 import { join, resolve } from 'path';
 import { tmpdir } from 'os';
@@ -226,6 +227,47 @@ describe('MCP argument containment (#140)', () => {
     assert.deepEqual(args.slice(end + 1), ['a.yaml', 'b/*.yaml']);
     assert.ok(args.slice(1, end).includes('--policies=--plugins=./p.mjs'), args.join(' '));
     assert.ok(!args.includes('--plugins=./p.mjs'), 'a pack id must not become its own argument');
+  });
+
+  test('a ref naming a file outside the working directory is refused before spawning', async () => {
+    // `ci` reads a ref that names an existing file as a snapshot, so a ref is a
+    // path too — and was uncontained: an outside JSON file was diffed and its
+    // values returned, a non-JSON one leaked its first bytes via the parse error.
+    const outer = realpathSync(mkdtempSync(join(tmpdir(), 'flecto-mcp-ref-')));
+    const cwd = join(outer, 'repo');
+    mkdirSync(cwd);
+    writeFileSync(join(outer, 'creds.json'), '{"token":"outside-value"}', 'utf8');
+    writeFileSync(join(cwd, 'snap.json'), '{"state":{}}', 'utf8');
+    try {
+      const refused = [join(outer, 'creds.json'), '../creds.json'];
+      if (process.platform !== 'win32') {
+        symlinkSync(join(outer, 'creds.json'), join(cwd, 'link.json'));
+        refused.push('link.json');
+      }
+      for (const ref of refused) {
+        const runner = fakeRunner();
+        const res = await createServer({ version: '0.0.0', cwd, runFlecto: runner }).handle({
+          jsonrpc: '2.0', id: 1, method: 'tools/call',
+          params: { name: 'flecto_diff', arguments: { file: 'config/prod.yaml', ref, mask: false } },
+        });
+        assert.equal(res.result.isError, true, ref);
+        assert.match(res.result.content[0].text, /outside the working directory/, ref);
+        assert.equal(runner.calls.length, 0, `nothing must have been spawned for ${ref}`);
+      }
+
+      // An in-repo snapshot file and a plain git ref are still fine.
+      for (const ref of ['snap.json', 'origin/main']) {
+        const runner = fakeRunner();
+        const res = await createServer({ version: '0.0.0', cwd, runFlecto: runner }).handle({
+          jsonrpc: '2.0', id: 1, method: 'tools/call',
+          params: { name: 'flecto_explain', arguments: { file: 'config/prod.yaml', path: 'a', ref } },
+        });
+        assert.notEqual(res.result.isError, true, `${ref}: ${res.result.content[0].text}`);
+        assert.equal(runner.calls.length, 1, ref);
+      }
+    } finally {
+      rmSync(outer, { recursive: true, force: true });
+    }
   });
 
   test('in-repo paths and globs are allowed', () => {

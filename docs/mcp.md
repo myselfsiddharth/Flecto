@@ -85,7 +85,10 @@ coding:
   than run them.
 - **Path containment.** A traversal (`..`) or an absolute path outside the
   working directory is refused before anything is spawned, and the CLI then
-  applies its own symlink-escape check on every resolved target.
+  applies its own symlink-escape check on every resolved target. A `ref` is held
+  to the same rule, because `ci` reads a ref naming an existing file as a
+  snapshot: one that resolves — through a symlink or otherwise — outside the
+  working directory is refused, so a tool call cannot read an arbitrary file.
   `FLECTO_ALLOW_SYMLINK_TARGETS` is stripped from the subprocess along with the
   plugin and write opt-outs, so that check cannot be switched off for a tool call.
 - **Bounded results.** A diff of thousands of changes is truncated to a stated

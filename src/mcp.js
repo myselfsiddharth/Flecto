@@ -1,4 +1,5 @@
 import { spawnSync } from 'child_process';
+import { existsSync, realpathSync } from 'fs';
 import { isAbsolute, resolve, sep } from 'path';
 
 /**
@@ -160,16 +161,41 @@ export function assertSafeTargetArg(arg, cwd) {
   return arg;
 }
 
+/** The real path, following links; the lexical one when it cannot be resolved. */
+function canonicalPath(path) {
+  try {
+    return realpathSync(path);
+  } catch {
+    return resolve(path);
+  }
+}
+
 /**
  * A ref must be a plain value, not another flag and not a control character —
  * it is passed to the CLI as the value of `--snapshot-ref`.
+ *
+ * It is also a *path*: `ci` reads a ref that names an existing file as a
+ * snapshot, resolved against the working directory. Uncontained, `ref:
+ * "/elsewhere/creds.json"` diffed that file and returned its values to the
+ * agent, and a non-JSON file leaked its opening bytes through the parse error.
+ * So a ref naming anything on disk gets the containment a file argument gets,
+ * checked on the real path so an in-repo symlink cannot point it outward.
  * @param {unknown} ref
+ * @param {string} cwd
  * @returns {string}
  */
-function assertSafeRef(ref) {
+function assertSafeRef(ref, cwd) {
   if (typeof ref !== 'string' || ref === '') throw new Error('ref must be a non-empty string');
   if (ref.startsWith('-')) throw new Error(`ref "${ref}" must not start with "-"`);
   if (/[\0\n\r]/.test(ref)) throw new Error('ref must not contain a newline or NUL byte');
+  const asPath = resolve(cwd, ref);
+  if (existsSync(asPath)) {
+    const real = canonicalPath(asPath);
+    const root = canonicalPath(cwd);
+    if (real !== root && !real.startsWith(root + sep)) {
+      throw new Error(`ref "${ref}" names a file outside the working directory and is refused`);
+    }
+  }
   return ref;
 }
 
@@ -247,7 +273,7 @@ function pathMatches(changePath, target) {
 const HANDLERS = {
   async flecto_diff(input, { runFlecto, cwd }) {
     const file = assertSafeTargetArg(input?.file, cwd);
-    const ref = input?.ref === undefined ? 'HEAD' : assertSafeRef(input.ref);
+    const ref = input?.ref === undefined ? 'HEAD' : assertSafeRef(input.ref, cwd);
     const run = await runFlecto(ciArgs({ files: [file], ref, mask: input?.mask }));
     const results = parseCiResults(run);
     const result = results.find((r) => r.file?.endsWith(file)) ?? results[0];
@@ -291,7 +317,7 @@ const HANDLERS = {
       throw new Error('path must be a non-empty string');
     }
     const target = input.path;
-    const ref = input?.ref === undefined ? 'HEAD' : assertSafeRef(input.ref);
+    const ref = input?.ref === undefined ? 'HEAD' : assertSafeRef(input.ref, cwd);
     const run = await runFlecto(ciArgs({ files: [file], ref, mask: input?.mask }));
     const results = parseCiResults(run);
     const result = results.find((r) => r.file?.endsWith(file)) ?? results[0];
