@@ -60,6 +60,7 @@ import {
   addPolicyPackFromPackage,
 } from './src/policy.js';
 import { testPolicyFixture } from './src/policy-test.js';
+import { makeCliRunner, runStdioServer } from './src/mcp.js';
 import {
   loadRcConfig,
   resolveEffectiveOptions,
@@ -1605,6 +1606,21 @@ program
       renderInfo(signal.summary);
     }
     renderInfo(`Policy packs: ${detection.packs.join(', ')}`);
+  });
+
+program
+  .command('mcp')
+  .description('Run Flecto as a read-only Model Context Protocol server over stdio (#140)')
+  .action(async () => {
+    // The server writes JSON-RPC to stdout and nothing else, so diagnostics go
+    // to stderr. Tools invoke the read-only `ci` path as a subprocess of this
+    // same CLI; the seam is the JSON envelope, so this lifts cleanly into a
+    // standalone flecto-mcp package later without touching the protocol code.
+    const cliPath = fileURLToPath(import.meta.url);
+    const runFlecto = makeCliRunner({ nodeExec: process.execPath, cliPath, cwd: process.cwd() });
+    // Readiness goes to stderr — stdout must carry JSON-RPC and nothing else.
+    renderNote('flecto mcp: read-only server ready (stdio). Secrets masked by default.');
+    await runStdioServer({ version: PKG.version, cwd: process.cwd(), runFlecto });
   });
 
 program

@@ -7,6 +7,26 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- **`flecto mcp` — a read-only Model Context Protocol server over stdio**
+  ([#140]). An agent asked to debug a config incident no longer has to read a
+  two-thousand-line manifest into its context to learn that `pool_size` doubled;
+  Flecto already computes that small answer and now hands it over as a structured
+  tool result. Three read-only tools — `flecto_diff`, `flecto_check`, and
+  `flecto_explain` — each run the same `ci` path a pull request triggers and
+  return the JSON envelope.
+
+  The security posture is inherited from `ci` by construction: the tools can only
+  reach what `ci` reaches (no `--command`, no writes, no webhooks, no plugins —
+  the last enforced regardless of `FLECTO_ALLOW_RC_PLUGINS`), no tool argument is
+  ever parsed as a CLI option, tool-argument paths — including a `ref` that names
+  a snapshot file — are contained before anything spawns, and results are
+  bounded. **Secrets are masked by default here, inverted from the CLI**,
+  because the consumer is a model context that is transmitted and often logged;
+  `mask: false` is an explicit, documented opt-out. Adds no runtime dependency —
+  the stdio JSON-RPC framing is spoken directly. See [docs/mcp.md](docs/mcp.md).
+
 ### Fixed
 
 - **The shared snapshot store now refuses a Windows target on another drive or
@@ -1137,6 +1157,7 @@ fixed — those runs were never actually gated — but the failure is new.
 [#150]: https://github.com/myselfsiddharth/Flecto/issues/150
 [#125]: https://github.com/myselfsiddharth/Flecto/issues/125
 [#141]: https://github.com/myselfsiddharth/Flecto/issues/141
+[#140]: https://github.com/myselfsiddharth/Flecto/issues/140
 [Keep a Changelog]: https://keepachangelog.com/en/1.1.0/
 [#138]: https://github.com/myselfsiddharth/Flecto/issues/138
 [Semantic Versioning]: https://semver.org/spec/v2.0.0.html

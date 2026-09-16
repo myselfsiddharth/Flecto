@@ -429,6 +429,30 @@ keys.
 
 ---
 
+## `flecto mcp`
+
+Run Flecto as a read-only [Model Context Protocol](https://modelcontextprotocol.io)
+server over stdio, so an agent gets a small structured diff instead of reading a
+whole config file into its context.
+
+```bash
+flecto mcp
+```
+
+It exposes three read-only tools — `flecto_diff`, `flecto_check`, and
+`flecto_explain` — each running the same `ci` path a pull request triggers and
+returning the JSON envelope. Secrets are **masked by default** here (inverted
+from the CLI, because the consumer is a model context), plugins stay off, and
+tool arguments are path-contained. stdout carries JSON-RPC only; diagnostics go
+to stderr.
+
+**Exit codes:** runs until stdin closes; setup or fatal errors exit `1`.
+
+See [Flecto as an MCP server](mcp.md) for client setup (Claude Code, Cursor) and
+the full security posture.
+
+---
+
 ## `flecto doctor`
 
 Check the local setup: which config file resolved, how many files its patterns
