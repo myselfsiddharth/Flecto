@@ -70,6 +70,7 @@ import {
   resolvePolicyOptions,
   assertTargetContained,
   assertWriteDestinationContained,
+  assertAlertActionsFromCli,
 } from './src/config.js';
 
 const PKG = JSON.parse(
@@ -655,6 +656,7 @@ program
       const profile = resolveProfileName(opts.profile);
       const cliOverrides = stripUnsetCliOverrides(opts, command);
       const effective = resolveEffectiveOptions(config, profile, cliOverrides);
+      assertAlertActionsFromCli(effective, cliOverrides);
       const { policies, plugins, severityRemap } = resolvePolicyOptions(effective, { pluginsFromCli: cliOverrides.plugins !== undefined });
       const targets = (await resolveTargetFiles(files, config)).map((f) => resolve(f));
       if (targets.length === 0) {

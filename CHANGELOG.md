@@ -38,6 +38,21 @@ The format is based on [Keep a Changelog], and this project adheres to
   under a meaningless `server/share/…` key. Neither left `.flecto/snapshots/`.
   Both are now refused with the same message as any other outside target.
 
+- **`watch --command`/`--webhook` declared in `.flectorc` are refused, not
+  honored** ([#121]). Both merge through the ordinary options path with no other
+  gate, unlike `--plugins`/`--output`/`--baseline`/`--update-baseline`, which
+  were already refused there. `command` spawns a shell command on every change;
+  `.flectorc` is attacker-controlled on an untrusted pull request, so a
+  `.flectorc` naming one got arbitrary shell execution on the next `flecto
+  watch` — no `--command` flag required. Confirmed end to end: a hostile
+  `.flectorc` alone, with nothing passed on the command line, ran a command that
+  wrote a marker file outside anything the run otherwise touched. `webhook` is
+  the same shape one step down — it sends the change payload to a URL the
+  pull request chose. Both are refused with the message the plugin and write
+  guards already use, `FLECTO_ALLOW_RC_ALERTS=1` opts out for a repository that
+  configures one in `.flectorc` on purpose, and either option named on the
+  command line is untouched, because that is the operator.
+
 ## [3.1.0] - 2026-09-15
 
 ### Added

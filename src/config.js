@@ -377,6 +377,57 @@ function nearestExistingDir(path) {
 }
 
 /**
+ * Has the operator explicitly opted in to alert actions declared in `.flectorc`?
+ * @returns {boolean}
+ */
+function rcAlertsAllowed() {
+  const raw = process.env.FLECTO_ALLOW_RC_ALERTS;
+  return raw === '1' || String(raw).toLowerCase() === 'true';
+}
+
+/**
+ * Refuse `command` or `webhook` declared in `.flectorc` rather than on the
+ * command line.
+ *
+ * `watch --command` spawns a shell command on every change, with diff data
+ * injected as `FLECTO_*` environment variables; `--webhook` POSTs that same
+ * data to a URL. Both are actions, not settings — the same distinction
+ * `--update-baseline` draws — and both merge through `resolveEffectiveOptions`
+ * with no other gate, so a `.flectorc` (or profile) naming either one runs it
+ * on the next `flecto watch`. On an untrusted pull request `.flectorc` is a
+ * file the attacker wrote, which makes an rc-declared `command` unconstrained
+ * shell execution and an rc-declared `webhook` an exfiltration destination the
+ * attacker chose.
+ *
+ * A command or webhook named on the CLI is operator intent and unrestricted:
+ * `flecto watch config.yaml --command './notify.sh'` still works exactly as
+ * before. `FLECTO_ALLOW_RC_ALERTS=1` opts out for a repository that genuinely
+ * configures one in `.flectorc`. Refusing loudly rather than skipping silently
+ * is deliberate, for the same reason a stripped plugin or write destination is
+ * loud: an alert that quietly stopped firing would look like "nothing
+ * happened" instead of "this was refused".
+ * @param {Record<string, unknown>} effective
+ * @param {Record<string, unknown>} cliOverrides
+ * @throws {Error} when `command` or `webhook` came from `.flectorc`/a profile
+ */
+export function assertAlertActionsFromCli(effective, cliOverrides) {
+  if (rcAlertsAllowed()) return;
+  for (const [option, flag] of [['command', '--command'], ['webhook', '--webhook']]) {
+    if (effective[option] === undefined || cliOverrides[option] !== undefined) continue;
+    throw new Error(
+      `Refusing "${option}" declared in .flectorc: ${
+        option === 'command'
+          ? 'it spawns a shell command on every change'
+          : 'it sends change data to a URL'
+      }, and .flectorc is attacker-controlled on an untrusted pull request.\n`
+      + `Declared: ${effective[option]}\n`
+      + `Pass ${flag} on the command line instead, or set FLECTO_ALLOW_RC_ALERTS=1 `
+      + 'if this config is trusted.',
+    );
+  }
+}
+
+/**
  * Split a policy list that may arrive as an array or a comma-separated string.
  * @param {unknown} raw
  * @param {string[]} fallback

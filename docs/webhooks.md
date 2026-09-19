@@ -133,6 +133,29 @@ flecto watch .env \
 
 ---
 
+## Declaring these in `.flectorc`
+
+`command` and `webhook` are refused when declared in `.flectorc` (or a profile)
+rather than passed on the command line:
+
+```
+[error] Refusing "command" declared in .flectorc: it spawns a shell command on
+every change, and .flectorc is attacker-controlled on an untrusted pull request.
+```
+
+`.flectorc` is attacker-controlled on an untrusted pull request, and `command`
+spawns a shell while `webhook` sends the change payload to a URL — both are
+actions, not settings, so a repository's own config file cannot declare either
+one. Naming them on the command line, as in every example on this page, is
+operator intent and is unaffected. For a repository that genuinely configures
+one in `.flectorc`:
+
+```bash
+FLECTO_ALLOW_RC_ALERTS=1 flecto watch .env
+```
+
+---
+
 ## Sending to chat
 
 `--webhook-format` posts a payload the chat service renders natively, so no
