@@ -381,7 +381,13 @@ function startCli(dir, args = []) {
   let stderr = '';
   child.stderr.on('data', (chunk) => { stderr += chunk; });
   const exited = new Promise((done) => child.on('exit', (code) => done(code)));
-  return { child, client, send: (message) => child.stdin.write(frame(message)), exited, stderr: () => stderr };
+  // Windows will not remove a directory a process still holds a handle in, so
+  // teardown waits for the server to be gone, not just signalled.
+  const stop = async () => {
+    if (child.exitCode === null && child.signalCode === null) child.kill();
+    await Promise.race([exited, sleep(5000)]);
+  };
+  return { child, client, send: (message) => child.stdin.write(frame(message)), exited, stop, stderr: () => stderr };
 }
 
 describe('flecto lsp', () => {
@@ -402,7 +408,7 @@ describe('flecto lsp', () => {
       server.send({ method: 'exit' });
       assert.equal(await server.exited, 0);
     } finally {
-      server.child.kill();
+      await server.stop();
       rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -425,7 +431,7 @@ describe('flecto lsp', () => {
       const recovered = await server.client.next(diagnosticsFor(docUri, 2), 15000);
       assert.ok(recovered.params.diagnostics.some((d) => d.code === 'pool-size-jump'));
     } finally {
-      server.child.kill();
+      await server.stop();
       rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -443,7 +449,7 @@ describe('flecto lsp', () => {
       for (let i = 0; i < 50 && !server.stderr().includes('plugin says hi'); i++) await sleep(20);
       assert.match(server.stderr(), /plugin says hi/u);
     } finally {
-      server.child.kill();
+      await server.stop();
       rmSync(dir, { recursive: true, force: true });
     }
   });
