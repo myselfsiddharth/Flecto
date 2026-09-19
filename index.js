@@ -2,7 +2,7 @@
 
 import { program } from 'commander';
 import { readFileSync, writeFileSync, mkdirSync, existsSync, realpathSync } from 'fs';
-import { resolve, relative, dirname, join } from 'path';
+import { resolve, relative, dirname, join, isAbsolute } from 'path';
 import { fileURLToPath } from 'url';
 import { execFileSync } from 'child_process';
 import chalk from 'chalk';
@@ -34,6 +34,7 @@ import { redactSecretString } from './src/secrets.js';
 import { fireAlerts } from './src/alerter.js';
 import { resolveWebhookFormat, WEBHOOK_FORMAT_CHOICES } from './src/notifiers.js';
 import { createEnvelope } from './src/envelope.js';
+import { startLanguageServer } from './src/lsp.js';
 import { buildSarif } from './src/sarif.js';
 import {
   maskState,
@@ -1623,6 +1624,60 @@ program
     // Readiness goes to stderr — stdout must carry JSON-RPC and nothing else.
     renderNote('flecto mcp: read-only server ready (stdio). Secrets masked by default.');
     await runStdioServer({ version: PKG.version, cwd: process.cwd(), runFlecto });
+  });
+
+program
+  .command('lsp')
+  .description('Run a Language Server Protocol server over stdio: findings and changes as editor diagnostics (#142)')
+  .option('--stdio', 'Talk LSP over stdin/stdout (the only transport; accepted because editors pass it)')
+  .option('-p, --profile <name>', 'Use profile from .flectorc (else FLECTO_PROFILE)')
+  .option('--snapshot-ref <ref>', 'Git ref to diff open files against', 'HEAD')
+  .option('--snapshot-store <id>', `Diff against a snapshot store instead of git: ${SNAPSHOT_STORE_IDS.join(' | ')}`)
+  .option('--snapshot-dir <path>', 'Directory holding the snapshot store')
+  .option('--plugins <paths>', 'Comma-separated absolute paths of ESM policy plugins to load (never read from .flectorc)')
+  .option('--changes <level>', 'How semantic changes appear: hint | info | none', 'hint')
+  .option('--debounce <ms>', 'Wait this long after the last edit before analyzing', '250')
+  .option('--timeout <ms>', 'Stop an analysis that runs longer than this', '10000')
+  .action(async (opts) => {
+    try {
+      const changes = String(opts.changes);
+      if (!['hint', 'info', 'none'].includes(changes)) {
+        throw new Error('--changes must be hint, info, or none');
+      }
+      const debounceMs = Number(opts.debounce);
+      const timeoutMs = Number(opts.timeout);
+      if (!Number.isInteger(debounceMs) || debounceMs < 0) throw new Error('--debounce must be a whole number of milliseconds');
+      if (!Number.isInteger(timeoutMs) || timeoutMs < 100) throw new Error('--timeout must be at least 100 milliseconds');
+      const plugins = opts.plugins === undefined ? undefined : parseCsv(opts.plugins);
+      // A relative path would resolve against whichever repository the editor
+      // opens — including one that ships a file at exactly that path.
+      for (const plugin of plugins ?? []) {
+        if (!isAbsolute(plugin)) {
+          throw new Error(`--plugins must be absolute paths in the language server (got "${plugin}"): a relative path would resolve inside whatever repository is open.`);
+        }
+      }
+      renderNote('flecto lsp: ready (stdio). Plugins from .flectorc are never loaded here.');
+      const { done } = startLanguageServer({
+        input: process.stdin,
+        output: process.stdout,
+        version: PKG.version,
+        cwd: process.cwd(),
+        debounceMs,
+        timeoutMs,
+        settings: {
+          profile: resolveProfileName(opts.profile),
+          plugins,
+          snapshotRef: opts.snapshotRef,
+          snapshotStore: opts.snapshotStore,
+          snapshotDir: opts.snapshotDir,
+          changes: /** @type {'hint' | 'info' | 'none'} */ (changes),
+        },
+      });
+      process.exit(await done);
+    } catch (err) {
+      renderError(err.message);
+      process.exit(1);
+    }
   });
 
 program
