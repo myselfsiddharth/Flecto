@@ -38,6 +38,28 @@ The format is based on [Keep a Changelog], and this project adheres to
   under a meaningless `server/share/…` key. Neither left `.flecto/snapshots/`.
   Both are now refused with the same message as any other outside target.
 
+- **`watch --command`/`--webhook`/`--webhook-header` declared in `.flectorc`
+  are refused, not honored** ([#121]). All three merge through the ordinary
+  options path with no other gate, unlike
+  `--plugins`/`--output`/`--baseline`/`--update-baseline`, which were already
+  refused there. `command` spawns a shell command on every change;
+  `.flectorc` is attacker-controlled on an untrusted pull request, so a
+  `.flectorc` naming one got arbitrary shell execution on the next `flecto
+  watch` — no `--command` flag required. Confirmed end to end: a hostile
+  `.flectorc` alone, with nothing passed on the command line, ran a command that
+  wrote a marker file outside anything the run otherwise touched. `webhook` is
+  the same shape one step down — it sends the change payload to a URL the
+  pull request chose. `webhook-header` is reachable even when `webhook` itself
+  is the operator's own flag: an rc-declared header rides along on that
+  already-approved request and can override it. All three are refused with the
+  message the plugin and write guards already use, `FLECTO_ALLOW_RC_ALERTS=1`
+  opts out for a repository that configures one in `.flectorc` on purpose, and
+  any of the three named on the command line is untouched, because that is the
+  operator. `--delivery-mode`/`--on-alert-failure` are untouched either way —
+  they only tune failure handling for an alert the operator already chose, the
+  same "operator delegates a setting" shape `--fail-on` already has, and
+  `flecto init` writes both into the config it generates.
+
 ## [3.1.0] - 2026-09-15
 
 ### Added

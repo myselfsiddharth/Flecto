@@ -210,6 +210,64 @@ and the fix costs nothing: requests are issued with `redirect: 'manual'` and a
 not legitimately redirect, and one that does is worth seeing rather than
 following.
 
+### `watch --command`/`--webhook`/`--webhook-header` could be turned into an action from `.flectorc` — fixed
+
+The previous record's "checked, solid" list said the command string itself is
+"operator intent", on the reasoning that `--command` exists only in `watch`, not
+in the `ci` path a pull request triggers. That reasoning stopped at the CLI flag
+and never asked where `effective.command` actually comes from: `watch` merges
+`.flectorc`/profile options with CLI overrides the same way every other command
+does, through `resolveEffectiveOptions`, and unlike `--plugins` /
+`--output` / `--baseline` / `--update-baseline`, nothing gated `command` or
+`webhook` at that merge. A `.flectorc` naming either one is honored exactly as if
+it had been passed on the command line.
+
+That makes the "operator intent" premise false for the one path that matters: a
+pull request that adds `.flectorc` and nothing else. `--command` spawns a shell
+command (`spawn(command, { shell: true })`) on every change `watch` detects,
+with diff data injected as `FLECTO_*` environment variables — env var *names*
+are fixed and the values are never interpolated into the shell, which is the
+half the previous entry checked, but the **command string** was never attacker
+data before, so that check never had reason to look at where the string itself
+comes from. `webhook` is the same shape one step down: it POSTs the change
+payload to a URL `.flectorc` names.
+
+Confirmed end to end: a repository with no `--command` flag anywhere, only a
+`.flectorc` `{"defaults": {"command": "..."}}}`, ran that command — writing a
+marker file — the moment `flecto watch <file>` observed a change. No pull
+request needs a workflow change or a CLI flag; the existing `flecto watch`
+invocation the repository already runs is enough.
+
+Fixing only the two flags named in the old entry would repeat its own mistake
+— checking the option that was asked about rather than the merge it goes
+through. `--webhook-header` merges exactly the same way and is reachable even
+when `command`/`webhook` themselves are the operator's own CLI flags: an
+rc-declared header rides along on that already-approved request and can
+override it, including `Content-Type` and the `X-Flecto-*` headers a receiver
+might dedupe on.
+
+**Fixed** the same way the merge-gate and write-destination findings above
+were: `command`, `webhook`, and `webhookHeader` declared in `.flectorc` (or a
+profile) are refused unless `FLECTO_ALLOW_RC_ALERTS=1` opts in, in
+`assertAlertActionsFromCli`. Any of the three named on the **command line** is
+operator intent and untouched: `flecto watch config.yaml --command
+'./notify.sh'` still works exactly as before. Regression tests in
+`test/security.test.js`, including the profile route, the opt-out variable,
+and an end-to-end run proving the CLI path still fires a real command on a
+real change.
+
+`onAlertFailure` and `deliveryMode` merge through the identical path and are
+**deliberately not gated**: `flecto init` writes both into the `.flectorc` it
+generates (`docs/configuration.md`), and both only tune how an alert *already
+chosen by the operator* responds to failure — the same "operator delegates a
+setting" shape `failOn` already has, not "a settings file grants itself a
+capability it didn't have." An rc-declared `onAlertFailure: exit` can make
+`watch` quit on a transient delivery failure, which is a real availability
+concern for whatever the process was monitoring, but it is a narrower,
+different-shaped problem than command execution or exfiltration, and closing
+it would mean refusing a key `flecto init` writes by default. Left open,
+named here rather than silently excluded.
+
 ### Bitbucket path segments were interpolated unencoded — hardened
 
 `BITBUCKET_WORKSPACE` and `BITBUCKET_REPO_SLUG` went into the request path raw,
@@ -220,12 +278,6 @@ repository. Both are `encodeURIComponent`d now, matching GitLab.
 
 ## Checked — no change needed
 
-- **Command execution (`--command`, `src/alerter.js`).** Env var *names* are
-  fixed (`FLECTO_*`); attacker config content lands only as the *value* of
-  `FLECTO_CHANGES`, passed via the child's environment, never interpolated into
-  the shell. The command string itself is operator intent, and `--command` exists
-  only in `watch`, not in the `ci` path a PR triggers. No injection from config
-  content.
 - **Token handling (`src/pr-comment.js`).** The token is read from
   `GITHUB_TOKEN`, sent only as a `Bearer` header to `GITHUB_API_URL` (default
   `api.github.com`), and stripped from every error string surfaced to the user.
