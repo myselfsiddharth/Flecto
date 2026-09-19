@@ -501,6 +501,7 @@ Explicit CLI flags win over profiles, which win over `defaults`.
 | `flecto watch --snapshot` | Save the current state as a baseline |
 | `flecto watch --diff` | Compare against the baseline and exit |
 | `flecto ci [files...]` | One-shot check with a gate-able exit code |
+| `flecto explain [files...]` | Advisory, model-generated narration of the masked diff (opt-in, your own key) |
 | `flecto compare <fileA> <fileB>` | Diff two files against each other (`fileA` is the baseline) |
 | `flecto plan <planFiles...>` | Review `terraform show -json` output and gate on it |
 | `flecto history [files...]` | Summarize drift across local snapshots |
@@ -529,6 +530,7 @@ Explicit CLI flags win over profiles, which win over `defaults`.
 | **[Terraform plans](docs/terraform.md)** | Reviewing `terraform show -json` output and the `terraform` pack |
 | **[Webhooks and commands](docs/webhooks.md)** | Envelope shape, delivery modes, command environment |
 | **[MCP server](docs/mcp.md)** | Read-only diff/check/explain tools for agents, and the security posture |
+| **[Explain](docs/explain.md)** | Opt-in model narration of a diff: what is sent, what it can never do, cost |
 | **[Policy packs](docs/policy-packs.md)** | Writing declarative rules |
 | **[Plugins](docs/plugins.md)** · **[Cookbook](docs/plugin-cookbook.md)** | Rules that need real code |
 | **[Troubleshooting](docs/troubleshooting.md)** | When something doesn't behave |

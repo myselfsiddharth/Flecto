@@ -212,6 +212,30 @@ export function maskSensitiveValue(value, path = '') {
 }
 
 /**
+ * Redact secret-shaped text from policy messages. A rule using
+ * `messageTemplate` can interpolate `{before}` / `{after}`, so a finding can
+ * carry a credential even when the change events beside it are masked. Replace
+ * exact interpolated values using the same path-aware masking as change events,
+ * then catch any other recognizable secret fragments in free-form messages.
+ * @param {import('./policy.js').PolicyFinding[]} findings
+ * @param {import('./differ.js').ChangeEvent[]} changes the unmasked events
+ * @returns {import('./policy.js').PolicyFinding[]}
+ */
+export function maskFindings(findings, changes) {
+  return findings.map((finding) => {
+    let message = String(finding.message ?? '');
+    for (const change of changes.filter((event) => event.path === finding.path)) {
+      for (const value of [change.before, change.after]) {
+        const original = String(value);
+        const masked = String(maskSensitiveValue(value, secretMatchPath(change)));
+        if (original && original !== masked) message = message.replaceAll(original, masked);
+      }
+    }
+    return { ...finding, message: redactSecretString(message) };
+  });
+}
+
+/**
  * @param {import('./differ.js').ChangeEvent} event
  * @returns {import('./differ.js').ChangeEvent}
  */
