@@ -510,6 +510,7 @@ Explicit CLI flags win over profiles, which win over `defaults`.
 | `flecto policies test <dir>` | Assert pack and plugin findings from fixtures |
 | `flecto init` | Create a `.flectorc` from detected stack signals |
 | `flecto mcp` | Serve read-only diff/check/explain tools to an agent over MCP |
+| `flecto lsp` | Show findings and changes as diagnostics while a config file is edited |
 | `flecto doctor` | Check setup, config, and environment |
 
 → **[Every flag, every command](docs/cli-reference.md)**
@@ -522,6 +523,7 @@ Explicit CLI flags win over profiles, which win over `defaults`.
 |---|---|
 | **[CLI reference](docs/cli-reference.md)** | Every command, flag, and exit code |
 | **[Configuration](docs/configuration.md)** | `.flectorc`, profiles, ignore patterns, array identity, masking |
+| **[Editor diagnostics](docs/editor.md)** | `flecto lsp` setup for Neovim, Helix, Emacs, and where diagnostics land |
 | **[Encrypted files](docs/encrypted-files.md)** | SOPS and age: what is detected, what is reported, why nothing is decrypted |
 | **[CI](docs/ci.md)** | Baselines, fail triggers, output formats, the bundled GitHub Actions |
 | **[Performance](docs/performance.md)** | Where time goes at scale, and how much smaller a diff is than the config |
