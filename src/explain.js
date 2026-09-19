@@ -449,7 +449,7 @@ function writeCache(dir, path, entry) {
 export function sanitizeNarration(text) {
   const clean = String(text)
     .replaceAll(/\r\n?/gu, '\n')
-    .replaceAll(/[ ---​-‏‪-‮⁦-⁩]/gu, '')
+    .replaceAll(/[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u200B-\u200F\u202A-\u202E\u2066-\u2069]/gu, '')
     .trim();
   return clean.length > MAX_NARRATION_CHARS ? `${clean.slice(0, MAX_NARRATION_CHARS)}…` : clean;
 }

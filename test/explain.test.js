@@ -338,7 +338,7 @@ test('a corrupt cache entry is a miss, never a failure', async () => {
 // Rendering untrusted prose
 
 test('narration is stripped of terminal escapes and bidi controls, keeping lines and tabs', () => {
-  const dirty = `- one${ESC}[2J${ESC}]0;title\n\t- two‮\r\n- three `;
+  const dirty = `- one${ESC}[2J${ESC}]0;title\u0007\n\t- two\u202E\r\n- three\u0000`;
   assert.equal(sanitizeNarration(dirty), '- one[2J]0;title\n\t- two\n- three');
 });
 
