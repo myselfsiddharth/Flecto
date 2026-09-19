@@ -386,20 +386,39 @@ function rcAlertsAllowed() {
 }
 
 /**
- * Refuse `command` or `webhook` declared in `.flectorc` rather than on the
- * command line.
+ * Options a pull request can turn into an action or corrupt an existing one,
+ * once it controls `.flectorc`, together with the reason and the CLI flag that
+ * names each one.
+ *
+ * `onAlertFailure` and `deliveryMode` are deliberately not here: `flecto init`
+ * writes them into the generated `.flectorc` itself, they only ever tune how
+ * an alert *already chosen by the operator* responds to failure, and they draw
+ * the same line `failOn` does elsewhere — a setting a repository is meant to
+ * delegate, not an action a settings file grants itself.
+ */
+const ALERT_ACTION_OPTIONS = [
+  ['command', '--command', 'it spawns a shell command on every change'],
+  ['webhook', '--webhook', 'it sends change data to a URL'],
+  ['webhookHeader', '--webhook-header', 'it rides along on every request an operator-approved --webhook makes, and can override headers such as Content-Type'],
+];
+
+/**
+ * Refuse an alert action declared in `.flectorc` rather than on the command
+ * line.
  *
  * `watch --command` spawns a shell command on every change, with diff data
  * injected as `FLECTO_*` environment variables; `--webhook` POSTs that same
- * data to a URL. Both are actions, not settings — the same distinction
- * `--update-baseline` draws — and both merge through `resolveEffectiveOptions`
- * with no other gate, so a `.flectorc` (or profile) naming either one runs it
- * on the next `flecto watch`. On an untrusted pull request `.flectorc` is a
- * file the attacker wrote, which makes an rc-declared `command` unconstrained
- * shell execution and an rc-declared `webhook` an exfiltration destination the
- * attacker chose.
+ * data to a URL; `--webhook-header` rides along on that request. All three are
+ * actions, not settings — the same distinction `--update-baseline` draws — and
+ * all three merge through `resolveEffectiveOptions` with no other gate, so a
+ * `.flectorc` (or profile) naming one runs it on the next `flecto watch`. On an
+ * untrusted pull request `.flectorc` is a file the attacker wrote, which makes
+ * an rc-declared `command` unconstrained shell execution, an rc-declared
+ * `webhook` an exfiltration destination the attacker chose, and an rc-declared
+ * `webhookHeader` a way to override what an *operator-approved* webhook call
+ * sends — reachable even when `command`/`webhook` themselves came from the CLI.
  *
- * A command or webhook named on the CLI is operator intent and unrestricted:
+ * Any of the three named on the CLI is operator intent and unrestricted:
  * `flecto watch config.yaml --command './notify.sh'` still works exactly as
  * before. `FLECTO_ALLOW_RC_ALERTS=1` opts out for a repository that genuinely
  * configures one in `.flectorc`. Refusing loudly rather than skipping silently
@@ -408,19 +427,17 @@ function rcAlertsAllowed() {
  * happened" instead of "this was refused".
  * @param {Record<string, unknown>} effective
  * @param {Record<string, unknown>} cliOverrides
- * @throws {Error} when `command` or `webhook` came from `.flectorc`/a profile
+ * @throws {Error} when an alert action came from `.flectorc`/a profile
  */
 export function assertAlertActionsFromCli(effective, cliOverrides) {
   if (rcAlertsAllowed()) return;
-  for (const [option, flag] of [['command', '--command'], ['webhook', '--webhook']]) {
+  for (const [option, flag, reason] of ALERT_ACTION_OPTIONS) {
     if (effective[option] === undefined || cliOverrides[option] !== undefined) continue;
+    const declared = Array.isArray(effective[option]) ? effective[option].join(', ') : effective[option];
     throw new Error(
-      `Refusing "${option}" declared in .flectorc: ${
-        option === 'command'
-          ? 'it spawns a shell command on every change'
-          : 'it sends change data to a URL'
-      }, and .flectorc is attacker-controlled on an untrusted pull request.\n`
-      + `Declared: ${effective[option]}\n`
+      `Refusing "${option}" declared in .flectorc: ${reason}, `
+      + 'and .flectorc is attacker-controlled on an untrusted pull request.\n'
+      + `Declared: ${declared}\n`
       + `Pass ${flag} on the command line instead, or set FLECTO_ALLOW_RC_ALERTS=1 `
       + 'if this config is trusted.',
     );

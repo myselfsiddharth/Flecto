@@ -807,6 +807,61 @@ describe('watch cannot be turned into a shell command or a webhook from .flector
     }
   });
 
+  test('a webhookHeader declared in .flectorc is refused even when --webhook is on the command line', () => {
+    // command/webhook themselves being operator-approved doesn't extend that
+    // approval to the headers riding along on the request -- an rc-declared
+    // header can still override Content-Type or the dedup headers on a webhook
+    // call the operator otherwise trusts.
+    const dir = hostileWatchRepo({ webhookHeader: ['Content-Type: text/plain'] });
+    try {
+      const run = spawnSync(
+        process.execPath,
+        [rootIndex, 'watch', 'config.json', '--snapshot', '--webhook', 'https://ops.example.com/hook'],
+        { cwd: dir, encoding: 'utf8', timeout: 5000 },
+      );
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /Refusing "webhookHeader" declared in \.flectorc/);
+      assert.match(run.stderr, /FLECTO_ALLOW_RC_ALERTS/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('--webhook-header on the command line is untouched', () => {
+    const dir = hostileWatchRepo(null);
+    try {
+      const run = spawnSync(
+        process.execPath,
+        [
+          rootIndex, 'watch', 'config.json', '--snapshot',
+          '--webhook', 'https://ops.example.com/hook', '--webhook-header', 'Content-Type: text/plain',
+        ],
+        { cwd: dir, encoding: 'utf8', timeout: 5000 },
+      );
+      assert.equal(run.status, 0, run.stderr);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('onAlertFailure and deliveryMode are settings, not actions, and stay usable from .flectorc', () => {
+    // flecto init writes these into the generated .flectorc itself (see
+    // docs/configuration.md) -- they only tune how an already-chosen alert
+    // responds to failure, the same "operator delegates a setting" shape
+    // failOn already has, so they are deliberately not in ALERT_ACTION_OPTIONS.
+    const dir = hostileWatchRepo({ onAlertFailure: 'exit', deliveryMode: 'at-least-once' });
+    try {
+      const run = spawnSync(
+        process.execPath,
+        [rootIndex, 'watch', 'config.json', '--snapshot'],
+        { cwd: dir, encoding: 'utf8', timeout: 5000 },
+      );
+      assert.equal(run.status, 0, run.stderr);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('a profile is not a way around it either', () => {
     const dir = hostileWatchRepo({ command: 'touch PWNED' }, { profile: 'ci' });
     try {
@@ -839,16 +894,26 @@ describe('watch cannot be turned into a shell command or a webhook from .flector
 
   test('--command on the command line still fires on a real change, because it is the operator', async () => {
     const dir = hostileWatchRepo(null);
+    // Written portably as a node one-liner, matching the pattern the alerter's
+    // own functional suite uses (cli.test.js) — `touch` is not on PATH on the
+    // windows-24 CI leg, only inside a shell configured with coreutils.
     const marker = join(dir, 'RAN');
     let child;
     try {
       await new Promise((ready, reject) => {
         child = spawn(
           process.execPath,
-          [rootIndex, 'watch', 'config.json', '--polling', '--interval', '25', '--command', `touch ${marker}`],
-          { cwd: dir },
+          [
+            rootIndex, 'watch', 'config.json', '--polling', '--interval', '25',
+            '--command', `"${process.execPath}" -e "require('fs').writeFileSync(process.env.FLECTO_TEST_MARKER,'')"`,
+          ],
+          { cwd: dir, env: { ...process.env, FLECTO_TEST_MARKER: marker } },
         );
-        const timeout = setTimeout(() => reject(new Error('command never ran within 10s')), 10_000);
+        let poll;
+        const timeout = setTimeout(() => {
+          clearInterval(poll);
+          reject(new Error('command never ran within 10s'));
+        }, 10_000);
         let watching = false;
         child.stdout.on('data', (chunk) => {
           if (!watching && chunk.toString().includes('flecto watching')) {
@@ -856,7 +921,7 @@ describe('watch cannot be turned into a shell command or a webhook from .flector
             setTimeout(() => writeFileSync(join(dir, 'config.json'), JSON.stringify({ a: 2 }), 'utf8'), 100);
           }
         });
-        const poll = setInterval(() => {
+        poll = setInterval(() => {
           if (!existsSync(marker)) return;
           clearInterval(poll);
           clearTimeout(timeout);
