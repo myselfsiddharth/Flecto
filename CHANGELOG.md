@@ -52,6 +52,26 @@ The format is based on [Keep a Changelog], and this project adheres to
   `mask: false` is an explicit, documented opt-out. Adds no runtime dependency —
   the stdio JSON-RPC framing is spoken directly. See [docs/mcp.md](docs/mcp.md).
 
+- **`flecto lsp`: findings and semantic changes as editor diagnostics while a
+  config file is being edited** ([#142]). It's a Language Server Protocol server
+  over stdio, compared against `HEAD` by default (`--snapshot-ref`,
+  `--snapshot-store`), and it **agrees with the merge gate**: it uses the same
+  `.flectorc`, packs, `severityRemap`, scope (`files`/`include`/`exclude`), inline
+  suppressions, and `--baseline` file as `ci`. A suppression missing its reason
+  is the error CI fails on. The hard part the issue named, positions, is a new
+  module (`src/positions.js`) that maps a diff path back into the source text for
+  YAML (including anchors, merge keys, and multi-document manifests), JSON/JSONC,
+  dotenv, INI, and TOML. A position is used only where an independent scan of
+  the text agrees with the parsed tree. Anything else anchors at the nearest
+  verified ancestor, never at a guess. Across every fixture and example in the
+  repository, no exact position lands on the wrong key. Analyses run in a worker
+  thread, debounced, cancelled by a newer edit, and stopped at `--timeout`, so a
+  catastrophic pack regex costs one warning instead of a wedged server.
+  **Plugins declared in `.flectorc` are never loaded**, even with
+  `FLECTO_ALLOW_RC_PLUGINS=1`, since opening a repository in an editor is the
+  untrusted-PR threat model. `--plugins` must be absolute paths. See
+  [docs/editor.md](docs/editor.md).
+
 ### Fixed
 
 - **The shared snapshot store now refuses a Windows target on another drive or
@@ -1210,3 +1230,4 @@ fixed — those runs were never actually gated — but the failure is new.
 [#138]: https://github.com/myselfsiddharth/Flecto/issues/138
 [Semantic Versioning]: https://semver.org/spec/v2.0.0.html
 [GHSA-wq8m-fc3q-8m5x]: https://github.com/myselfsiddharth/Flecto/security/advisories/GHSA-wq8m-fc3q-8m5x
+[#142]: https://github.com/myselfsiddharth/Flecto/issues/142

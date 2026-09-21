@@ -380,8 +380,28 @@ function documentKeys(docs) {
  */
 export function parseYamlStream(raw) {
   const docs = yaml.loadAll(raw).filter((doc) => doc != null);
+  const keys = yamlDocumentKeys(docs);
+  if (keys === null) return withDocumentKeys(docs[0], []);
 
-  if (docs.length === 0) return withDocumentKeys({}, []);
+  /** @type {Record<string, unknown>} */
+  const out = {};
+  for (let i = 0; i < docs.length; i++) {
+    out[keys[i]] = docs[i];
+  }
+  return withDocumentKeys(out, keys);
+}
+
+/**
+ * How {@link parseYamlStream} lays out a stream: `null` when a lone document is
+ * returned bare, otherwise the key each document is stored under. The position
+ * index (positions.js) addresses documents through this same function, so a
+ * diagnostic can never disagree with the differ about which document a path is
+ * in.
+ * @param {unknown[]} docs the stream's non-empty documents
+ * @returns {string[] | null}
+ */
+export function yamlDocumentKeys(docs) {
+  if (docs.length === 0) return [];
 
   // A lone document is normally returned bare, preserving ordinary YAML paths.
   // The exception is a Kubernetes manifest with a resolvable identity: keying it
@@ -389,21 +409,11 @@ export function parseYamlStream(raw) {
   // of re-pathing the whole file and reporting the untouched resource as
   // removed-and-re-added. Ordinary single-document config is unaffected.
   if (docs.length === 1) {
-    const [doc] = docs;
-    const identity = isKubernetesDocument(doc) ? documentIdentity(doc) : null;
-    if (identity == null || identity === '__proto__') {
-      return withDocumentKeys(doc, []);
-    }
-    return withDocumentKeys({ [identity]: doc }, [identity]);
+    const identity = isKubernetesDocument(docs[0]) ? documentIdentity(docs[0]) : null;
+    return identity == null || identity === '__proto__' ? null : [identity];
   }
 
-  const keys = documentKeys(docs);
-  /** @type {Record<string, unknown>} */
-  const out = {};
-  for (let i = 0; i < docs.length; i++) {
-    out[keys[i]] = docs[i];
-  }
-  return withDocumentKeys(out, keys);
+  return documentKeys(docs);
 }
 
 /**

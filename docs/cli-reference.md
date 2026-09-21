@@ -492,6 +492,40 @@ the full security posture.
 
 ---
 
+## `flecto lsp`
+
+Run a Language Server Protocol server over stdio. Open config files get
+Flecto's policy findings and semantic changes as diagnostics, anchored on the
+lines they're about.
+
+```bash
+flecto lsp --stdio
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--stdio` | — | Accepted and ignored; stdio is the only transport |
+| `-p, --profile <name>` | — | Use a profile from `.flectorc` (else `FLECTO_PROFILE`) |
+| `--snapshot-ref <ref>` | `HEAD` | Git ref open files are compared with |
+| `--snapshot-store <id>` | — | Compare with a snapshot store (`local`/`shared`) instead of git |
+| `--snapshot-dir <path>` | store default | Directory holding the snapshot store |
+| `--plugins <paths>` | — | Comma-separated **absolute** plugin paths; plugins in `.flectorc` are never loaded |
+| `--changes <level>` | `hint` | How semantic changes appear: `hint`, `info`, or `none` |
+| `--debounce <ms>` | `250` | Quiet period after an edit before analyzing |
+| `--timeout <ms>` | `10000` | Stop an analysis that runs longer than this |
+
+Findings use the same `.flectorc`, packs, inline suppressions, and `--baseline`
+file as `ci`, so the editor agrees with the gate. Analyses run in a worker
+thread: a newer edit cancels a running one, and one past `--timeout` becomes a
+single warning. stdout carries JSON-RPC only; diagnostics go to stderr.
+
+**Exit codes:** `0` after an LSP `shutdown` then `exit`, `1` for an `exit`
+without `shutdown` or an invalid flag.
+
+Editor setup and how diagnostics are positioned: [editor.md](editor.md).
+
+---
+
 ## `flecto doctor`
 
 Check the local setup: which config file resolved, how many files its patterns
