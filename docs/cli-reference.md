@@ -97,6 +97,8 @@ flecto ci "config/**/*.yaml" --snapshot-ref HEAD~1 --fail-on "policy,error"
 | `--mask-secrets` | off | Mask secret-like values in CI output |
 | `--show-suppressed` | off | List inline-suppressed findings instead of only counting them |
 | `--allow-empty` | off | Succeed when no files were diffed |
+| `--explain` | off | Add model-generated narration of the masked diff; advisory, never affects the exit code. See [explain.md](explain.md) |
+| `--explain-dry-run` | off | Print the narration request `--explain` would send (to stderr), and send nothing |
 
 Inline suppressions (`# flecto-ignore-next-line <rule> — <reason>`) accept a
 single deliberate finding in place; a reason is mandatory. See
@@ -128,6 +130,43 @@ passed *and* `GITHUB_TOKEN`, `GITHUB_REPOSITORY`, and a PR number (from
 prints. A delivery failure never changes the exit code.
 
 Full CI guide, including the GitHub Action: [ci.md](ci.md).
+
+---
+
+## `flecto explain [files...]`
+
+Ask a model you configure to narrate the likely blast radius of the semantic
+diff. Opt-in, bring your own key, and advisory only.
+
+```bash
+FLECTO_EXPLAIN_PROVIDER=anthropic FLECTO_EXPLAIN_API_KEY=sk-ant-... \
+  flecto explain config/prod.yaml --snapshot-ref origin/main
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `-p, --profile <name>` | — | Use a profile from `.flectorc` for diff and policy options |
+| `--snapshot-ref <ref>` | snapshot store | Baseline: a snapshot file path, or a git ref |
+| `--snapshot-store <id>` / `--snapshot-dir <path>` | `local` | Which snapshot store to read when there is no `--snapshot-ref` |
+| `--provider <id>` | `FLECTO_EXPLAIN_PROVIDER` | `anthropic` or `openai` (any OpenAI-compatible server) |
+| `--model <name>` | `FLECTO_EXPLAIN_MODEL` | Model id; `anthropic` defaults to `claude-opus-5` |
+| `--max-tokens <n>` | `16000` | Output token cap |
+| `--format <type>` | `human` | `human` or `json` |
+| `--dry-run` | off | Print the exact request (key replaced by its source) and send nothing |
+| `--no-cache` | — | Neither read nor write the narration cache |
+| `--ignore`, `--policies`, `--plugins`, `--array-id-key`, `--no-array-id`, `--array-ignore-order` | — | As for `ci` |
+
+Only the masked semantic diff is sent (changed paths, before and after values,
+and findings), masked whether or not `--mask-secrets` is passed. The output is
+labeled as model-generated. `explain*` options declared in `.flectorc` are
+refused, and the provider, endpoint, and key come only from the command line and
+the environment.
+
+**Exit codes:** `0` whether or not narration succeeded. A provider failure is a
+warning, never a failed run. `1` for an invalid invocation: no provider
+configured, an unknown provider, or an unresolvable baseline.
+
+Full guide, including what is sent, caching, and cost: [explain.md](explain.md).
 
 ---
 
@@ -593,6 +632,9 @@ exactly the lines that changed. A snapshot commit is meant to be reviewable.
 | `FLECTO_ALLOW_RC_WRITES` | `ci`, `report` | `1` allows `.flectorc` to point `--output` / `--baseline` outside the project |
 | `FLECTO_ALLOW_RC_PLUGINS` | all commands | `1` allows plugins declared in `.flectorc` |
 | `FLECTO_ALLOW_RC_ALERTS` | `watch` | `1` allows `.flectorc` to declare `command` / `webhook` / `webhookHeader` |
+| `FLECTO_EXPLAIN_PROVIDER`, `_MODEL`, `_API_KEY`, `_API_URL` | `explain`, `ci --explain` | Narration provider settings; see [explain.md](explain.md#environment-variables) |
+| `FLECTO_EXPLAIN_MAX_TOKENS`, `_MAX_INPUT_TOKENS`, `_TIMEOUT_MS`, `_CACHE_DIR` | `explain`, `ci --explain` | Narration cost, time, and cache bounds |
+| `FLECTO_EXPLAIN` | `explain`, `ci --explain` | `0` disables narration on this runner |
 
 Flecto also *sets* variables for `--command` subprocesses — see
 [webhooks and commands](webhooks.md#running-a-command-on-change).

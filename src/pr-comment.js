@@ -63,6 +63,35 @@ function truncate(text, max) {
 }
 
 /**
+ * The `flecto explain` narration (#143), rendered so it cannot pass for Flecto's
+ * own output and cannot do anything but be read.
+ *
+ * The model saw pull-request-authored text, so its output is untrusted. It goes
+ * inside a fenced block, fence wider than any backtick run in it, which is the
+ * one markdown construct where links, images, `@`-mentions, and HTML all render
+ * as literal text.
+ * @param {{ text: string, provider: string, model: string, cached?: boolean, truncated?: boolean }} narration
+ * @returns {string[]}
+ */
+function narrationSection(narration) {
+  const text = String(narration.text);
+  const runs = text.match(/`+/g) ?? [];
+  const fence = '`'.repeat(Math.max(3, ...runs.map((run) => run.length + 1)));
+  return [
+    '### Model-generated narration (advisory)',
+    '',
+    `<sub>Written by ${inlineCode(`${narration.provider} ${narration.model}`)}`
+    + `${narration.cached ? ' (cached)' : ''} from the masked semantic diff. Not computed by Flecto,`
+    + ' not a policy finding, and never part of this check\'s result.</sub>',
+    '',
+    `${fence}text`,
+    text,
+    fence,
+    ...(narration.truncated ? ['', '_Cut off at the output token limit._'] : []),
+  ];
+}
+
+/**
  * Format a change value for display, or return null when the side is absent.
  * @param {unknown} value
  * @returns {string | null}
@@ -119,7 +148,8 @@ function findingsOf(result) {
  * Pure: it reads nothing but its arguments, so the exact body posted to GitHub
  * is the body printed to stdout.
  * @param {CiResult[]} results
- * @param {{ cwd?: string, failed?: boolean, marker?: string, maxInlineChanges?: number, maxBodyChars?: number }} [options]
+ * @param {{ cwd?: string, failed?: boolean, marker?: string, maxInlineChanges?: number, maxBodyChars?: number,
+ *   narration?: { text: string, provider: string, model: string, cached?: boolean, truncated?: boolean } | null }} [options]
  * @returns {string} Markdown, always beginning with the sticky marker
  */
 export function renderPrComment(results, options = {}) {
@@ -194,6 +224,8 @@ export function renderPrComment(results, options = {}) {
       }
     }
   }
+
+  if (options.narration) lines.push('', ...narrationSection(options.narration));
 
   if (totalChanges > 0) {
     const collapse = totalChanges > maxInlineChanges;

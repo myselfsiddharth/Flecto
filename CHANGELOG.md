@@ -9,6 +9,31 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ### Added
 
+- **`flecto explain` and `ci --explain`: opt-in, advisory narration of a diff by
+  a model you configure** ([#143]). `pool_size: 5 → 20` is mechanical; "this
+  quadruples connections per replica, so check `max_connections`" is judgment,
+  and it is what a reviewer wants at 2 AM. Bring your own key: `anthropic`
+  (Messages API, default model `claude-opus-5`) or `openai`, which covers any
+  OpenAI-compatible server, including a local one. Each is a single `fetch`, so
+  no vendor SDK and no new dependency.
+
+  The constraints are the feature. **Only the masked semantic diff is sent**,
+  masked unconditionally while the payload is built, never file contents, with
+  encrypted values as sentinels. `--dry-run` / `--explain-dry-run` print the exact
+  request and send nothing. **It never touches an exit code**: `ci` decides the
+  gate first, and every failure (no provider, over budget, timeout, HTTP error,
+  refusal) is a warning. `ci`'s stdout is byte-identical except under
+  `--format pr-comment`, where the narration goes in its own labeled section,
+  fenced so links, images, mentions, and HTML render as text. **The operator
+  configures it and the repository cannot**: `explain*` options in `.flectorc`
+  are refused, provider, endpoint, and key come only from the CLI and
+  `FLECTO_EXPLAIN_*` variables, redirects are refused rather than forwarding
+  `x-api-key`, and `FLECTO_EXPLAIN=0` is a runner-wide kill switch. **Cost is
+  stated before the call**, with estimated input tokens and the output cap.
+  Diffs over an input budget are skipped, not truncated. Identical requests are
+  served from a cache outside the repository, keyed with an HMAC of the API key
+  so a pull request cannot plant an entry. See [docs/explain.md](docs/explain.md).
+
 - **`flecto mcp` — a read-only Model Context Protocol server over stdio**
   ([#140]). An agent asked to debug a config incident no longer has to read a
   two-thousand-line manifest into its context to learn that `pool_size` doubled;
@@ -1198,6 +1223,7 @@ fixed — those runs were never actually gated — but the failure is new.
 [#159]: https://github.com/myselfsiddharth/Flecto/issues/159
 [#150]: https://github.com/myselfsiddharth/Flecto/issues/150
 [#125]: https://github.com/myselfsiddharth/Flecto/issues/125
+[#143]: https://github.com/myselfsiddharth/Flecto/issues/143
 [#141]: https://github.com/myselfsiddharth/Flecto/issues/141
 [#140]: https://github.com/myselfsiddharth/Flecto/issues/140
 [Keep a Changelog]: https://keepachangelog.com/en/1.1.0/
