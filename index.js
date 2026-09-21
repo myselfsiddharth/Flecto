@@ -8,7 +8,7 @@ import { execFileSync } from 'child_process';
 import chalk from 'chalk';
 
 import { parseFile, isSupported, parseContent } from './src/parser.js';
-import { diffTrees, secretMatchPath } from './src/differ.js';
+import { diffTrees } from './src/differ.js';
 import { documentKeysOf, withDocumentKeys } from './src/documents.js';
 import { startWatcher } from './src/watcher.js';
 import {
@@ -20,7 +20,7 @@ import {
   renderWarn,
   renderPolicyFindings,
   maskChangeEvent,
-  maskSensitiveValue,
+  maskFindings,
 } from './src/renderer.js';
 import { deliverPrComment, renderPrComment } from './src/pr-comment.js';
 import { PR_PROVIDER_IDS } from './src/pr-providers.js';
@@ -30,7 +30,6 @@ import {
   readTerraformPlanFile,
 } from './src/terraform.js';
 import { renderReportHtml } from './src/report.js';
-import { redactSecretString } from './src/secrets.js';
 import { fireAlerts } from './src/alerter.js';
 import { resolveWebhookFormat, WEBHOOK_FORMAT_CHOICES } from './src/notifiers.js';
 import { createEnvelope } from './src/envelope.js';
@@ -61,6 +60,17 @@ import {
 } from './src/policy.js';
 import { testPolicyFixture } from './src/policy-test.js';
 import { makeCliRunner, runStdioServer } from './src/mcp.js';
+import {
+  assertExplainNotFromRc,
+  buildExplainPayload,
+  buildExplainRequest,
+  describeRequest,
+  estimateInputTokens,
+  EXPLAIN_PROVIDERS,
+  formatNarration,
+  narrate,
+  resolveExplainConfig,
+} from './src/explain.js';
 import {
   loadRcConfig,
   resolveEffectiveOptions,
@@ -229,11 +239,6 @@ function maybeMaskChanges(events, maskSecrets) {
 }
 
 /**
- * Redact secret-shaped text from policy messages. A rule using
- * `messageTemplate` can interpolate `{before}` / `{after}`, so a finding can
- * carry a credential even when the change events beside it are masked. Replace
- * exact interpolated values using the same path-aware masking as change events,
- * then catch any other recognizable secret fragments in free-form messages.
  * @param {import('./src/policy.js').PolicyFinding[]} findings
  * @param {import('./src/differ.js').ChangeEvent[]} changes
  * @param {boolean} maskSecrets
@@ -241,17 +246,7 @@ function maybeMaskChanges(events, maskSecrets) {
  */
 function maybeMaskFindings(findings, changes, maskSecrets) {
   if (!maskSecrets) return findings;
-  return findings.map((finding) => {
-    let message = String(finding.message ?? '');
-    for (const change of changes.filter((event) => event.path === finding.path)) {
-      for (const value of [change.before, change.after]) {
-        const original = String(value);
-        const masked = String(maskSensitiveValue(value, secretMatchPath(change)));
-        if (original && original !== masked) message = message.replaceAll(original, masked);
-      }
-    }
-    return { ...finding, message: redactSecretString(message) };
-  });
+  return maskFindings(findings, changes);
 }
 
 /**
@@ -609,6 +604,50 @@ async function deliverPrCommentSafely(body, enabled, provider) {
     renderWarn(`Could not post the PR comment: ${result.reason}`);
   } catch (err) {
     renderWarn(`Could not post the PR comment: ${err.message}`);
+  }
+}
+
+/**
+ * `ci --explain` (#143): narration for the run, or null.
+ *
+ * Called only after the gate is decided, and it cannot change it: every failure
+ * here — no provider configured, over budget, network, refusal — is a warning
+ * and a null, never a thrown error. Status goes to stderr, so the machine
+ * output on stdout is byte-for-byte what it is without the flag.
+ * @param {import('./src/explain.js').ExplainInputFile[]} files unmasked; the payload builder masks
+ * @param {{ dryRun: boolean, cwd: string }} options
+ * @returns {Promise<{ text: string, provider: string, model: string, cached: boolean, truncated: boolean } | null>}
+ */
+async function narrateForCi(files, { dryRun, cwd }) {
+  try {
+    const payload = buildExplainPayload(files, { cwd });
+    if (payload.files.length === 0) {
+      renderNote('flecto explain: nothing to narrate — no changes and no findings.');
+      return null;
+    }
+    const resolved = resolveExplainConfig({}, process.env, { dryRun });
+    if (!resolved.ok) {
+      renderWarn(`No narration: ${resolved.reason}.`);
+      return null;
+    }
+    if (dryRun) {
+      const request = describeRequest(buildExplainRequest(payload, resolved.config), resolved.config);
+      renderNote(
+        `flecto explain --explain-dry-run: nothing was sent. ~${estimateInputTokens(request.body)} input`
+        + ` tokens (estimated), output capped at ${resolved.config.maxTokens}. The request:`,
+      );
+      process.stderr.write(`${JSON.stringify(request, null, 2)}\n`);
+      return null;
+    }
+    const result = await narrate(payload, resolved.config, { onNote: renderNote });
+    if (!result.ok) {
+      renderWarn(`No narration: ${result.reason}.`);
+      return null;
+    }
+    return result;
+  } catch (err) {
+    renderWarn(`No narration: ${err.message}.`);
+    return null;
   }
 }
 
@@ -1076,12 +1115,17 @@ program
   .option('--show-suppressed', 'List inline-suppressed findings instead of only counting them', false)
   .option('--changed-only', 'With --format json|ndjson, replace envelopes for unchanged files with one scanned manifest', false)
   .option('--allow-empty', 'Allow CI to succeed when no files were diffed', false)
+  .option('--explain', 'Add model-generated narration of the masked diff (advisory; provider set by FLECTO_EXPLAIN_* env)', false)
+  .option('--explain-dry-run', 'Print the narration request that --explain would send, and send nothing', false)
   .action(async (files, opts, command) => {
     try {
       const { config } = loadRcConfig(process.cwd());
       const profile = resolveProfileName(opts.profile);
       const cliOverrides = stripUnsetCliOverrides(opts, command);
       const effective = resolveEffectiveOptions(config, profile, cliOverrides);
+      assertExplainNotFromRc(effective, cliOverrides);
+      const explainDryRun = Boolean(cliOverrides.explainDryRun);
+      const explainRequested = Boolean(cliOverrides.explain) || explainDryRun;
       const { policies: packIds, plugins, severityRemap } = resolvePolicyOptions(effective, { pluginsFromCli: cliOverrides.plugins !== undefined });
       const targets = (await resolveTargetFiles(files, config)).map((f) => resolve(f));
       if (targets.length === 0) {
@@ -1142,7 +1186,7 @@ program
         throw new Error('--update-baseline requires --baseline <file> naming the file to write.');
       }
 
-      /** @type {Array<{ filepath: string, relFile: string, outboundChanges: any[], outboundFindings: any[], changesFail: boolean }>} */
+      /** @type {Array<{ filepath: string, relFile: string, events: any[], outboundChanges: any[], outboundFindings: any[], changesFail: boolean }>} */
       const perFile = [];
       /** @type {Array<{ file: string, finding: any, reason: string }>} */
       const allSuppressed = [];
@@ -1194,6 +1238,7 @@ program
         perFile.push({
           filepath,
           relFile: baselineRelativePath(filepath, cwd),
+          events,
           outboundChanges: maybeMaskChanges(events, maskSecrets),
           outboundFindings: maybeMaskFindings(policyFindings, events, maskSecrets),
           changesFail: shouldFailFromChanges(events, failOn),
@@ -1295,15 +1340,178 @@ program
         }
       }
 
+      // Asked for only once `shouldFail` is settled, and handed nothing that
+      // could change it. Narration covers the findings the gate sees — active
+      // ones, after baseline and suppressions.
+      const narration = explainRequested
+        ? await narrateForCi(
+          perFile.map((f) => ({ file: f.filepath, changes: f.events, findings: activeByFile.get(f.relFile) ?? [] })),
+          { dryRun: explainDryRun, cwd },
+        )
+        : null;
+
       if (format === 'pr-comment') {
-        const body = renderPrComment(results, { cwd, failed: shouldFail });
+        const body = renderPrComment(results, { cwd, failed: shouldFail, narration });
         await writeStdout(body);
         await deliverPrCommentSafely(body, prCommentPost, effective.prProvider);
       } else {
         const collapsible = changedOnly && (format === 'json' || format === 'ndjson');
         await printCiOutput(collapsible ? collapseUnchangedResults(results) : results, format);
+        if (narration) process.stderr.write(`\n${formatNarration(narration)}\n`);
       }
       process.exit(shouldFail ? 1 : 0);
+    } catch (err) {
+      renderError(err.message);
+      process.exit(1);
+    }
+  });
+
+program
+  .command('explain [files...]')
+  .description('Narrate the masked semantic diff with a model you configure — advisory, opt-in, bring your own key (#143)')
+  .option('-p, --profile <name>', 'Use profile from .flectorc (else FLECTO_PROFILE)')
+  .option('--snapshot-ref <ref>', 'Snapshot reference: snapshot path or git ref')
+  .option('--snapshot-store <id>', `Snapshot store to read: ${SNAPSHOT_STORE_IDS.join(' | ')}`)
+  .option('--snapshot-dir <path>', 'Directory holding the snapshot store (default: .flecto-snapshots local, .flecto/snapshots shared)')
+  .option('--provider <id>', `Model provider: ${EXPLAIN_PROVIDERS.join(' | ')} (else FLECTO_EXPLAIN_PROVIDER)`)
+  .option('--model <name>', 'Model id (else FLECTO_EXPLAIN_MODEL; anthropic defaults to claude-opus-5)')
+  .option('--max-tokens <n>', 'Output token cap (else FLECTO_EXPLAIN_MAX_TOKENS; default 16000)')
+  .option('--format <type>', 'Output format: human | json', 'human')
+  .option('--dry-run', 'Print the exact request that would be sent, and send nothing', false)
+  .option('--no-cache', 'Neither read nor write the narration cache')
+  .option('--ignore <keys>', 'Comma-separated key paths to ignore')
+  .option('--policies <ids>', 'Comma-separated policy pack ids')
+  .option('--plugins <paths>', 'Comma-separated local ESM plugin paths')
+  .option('--array-id-key <key>', 'Diff arrays by this object identity key')
+  .option('--no-array-id', 'Diff arrays by index instead of object identity')
+  .option('--array-ignore-order', 'Treat array order as insignificant', false)
+  .action(async (files, opts, command) => {
+    try {
+      const { config } = loadRcConfig(process.cwd());
+      const profile = resolveProfileName(opts.profile);
+      const cliOverrides = stripUnsetCliOverrides(opts, command);
+      const effective = resolveEffectiveOptions(config, profile, cliOverrides);
+      assertExplainNotFromRc(effective, cliOverrides);
+      // Everything that shapes the request is read from the command line, never
+      // from the merged options: `.flectorc` can name a `format` or `model` for
+      // other commands, and none of it may steer where the diff goes.
+      const format = String(cliOverrides.format ?? 'human');
+      if (!['human', 'json'].includes(format)) {
+        throw new Error('--format must be human or json');
+      }
+      const dryRun = Boolean(cliOverrides.dryRun);
+      const snapshotRef = cliOverrides.snapshotRef;
+      const { policies: packIds, plugins, severityRemap } = resolvePolicyOptions(effective, { pluginsFromCli: cliOverrides.plugins !== undefined });
+      const targets = (await resolveTargetFiles(files, config)).map((f) => resolve(f));
+      if (targets.length === 0) {
+        throw new Error('No files matched. Provide files or configure .flectorc files/include.');
+      }
+      const dOpts = diffOptionsFromEffective(effective, parseCsv(effective.ignore));
+      const snapshotStore = snapshotStoreFromEffective(effective);
+      const cwd = process.cwd();
+
+      /** @type {import('./src/explain.js').ExplainInputFile[]} */
+      const diffed = [];
+      for (const filepath of targets) {
+        if (!existsSync(filepath)) {
+          renderWarn(`Skipping missing file: ${filepath}`);
+          continue;
+        }
+        if (!isSupported(filepath)) {
+          renderWarn(`Skipping unsupported file: ${filepath}`);
+          continue;
+        }
+        const after = snapshotRef
+          ? parseFile(filepath)
+          : alignStateWithStore(parseFile(filepath), snapshotStore);
+        let before;
+        try {
+          before = readSnapshotStateFromRef(filepath, snapshotRef, snapshotStore);
+        } catch (err) {
+          throw new Error(
+            `Failed to resolve snapshot baseline for "${filepath}"`
+            + `${snapshotRef ? ` (ref: ${snapshotRef})` : ''}: ${err.message}`,
+          );
+        }
+        const events = diffTrees(before, after, dOpts);
+        const rawFindings = await evaluatePolicies(events, {
+          cwd,
+          file: filepath,
+          profile: profile ?? null,
+          source: 'diff',
+          policies: packIds,
+          plugins,
+          severityRemap,
+        });
+        const { active } = resolveSuppressed(filepath, rawFindings);
+        diffed.push({ file: filepath, changes: events, findings: active });
+      }
+      if (diffed.length === 0) {
+        throw new Error('No files were diffed — all targets were missing or unsupported.');
+      }
+
+      // The operator sees what is narrated, masked the way it is sent.
+      if (format === 'human') {
+        for (const { file, changes, findings } of diffed) {
+          renderDiff(file, changes, { maskSecrets: true, baseline: snapshotRef ?? 'snapshot' });
+          renderPolicyFindings(maskFindings(findings, changes));
+        }
+      }
+
+      const payload = buildExplainPayload(diffed, { cwd });
+      if (payload.files.length === 0) {
+        if (format === 'json') {
+          await writeStdout(JSON.stringify({ advisory: true, narration: null, reason: 'no changes and no findings', payload }, null, 2));
+        } else {
+          renderInfo('Nothing to narrate: no semantic changes and no policy findings.');
+        }
+        process.exit(0);
+      }
+
+      const resolved = resolveExplainConfig(
+        {
+          provider: cliOverrides.provider,
+          model: cliOverrides.model,
+          maxTokens: cliOverrides.maxTokens,
+          cache: cliOverrides.cache,
+        },
+        process.env,
+        { dryRun },
+      );
+      if (!resolved.ok) throw new Error(`Cannot narrate: ${resolved.reason}.`);
+
+      if (dryRun) {
+        const request = describeRequest(buildExplainRequest(payload, resolved.config), resolved.config);
+        renderNote(
+          `flecto explain --dry-run: nothing was sent. ~${estimateInputTokens(request.body)} input tokens`
+          + ` (estimated), output capped at ${resolved.config.maxTokens}.`,
+        );
+        await writeStdout(JSON.stringify(request, null, 2));
+        process.exit(0);
+      }
+
+      const result = await narrate(payload, resolved.config, { onNote: renderNote });
+      if (format === 'json') {
+        await writeStdout(JSON.stringify({
+          advisory: true,
+          narration: result.ok
+            ? {
+              model_generated: true,
+              provider: result.provider,
+              model: result.model,
+              cached: result.cached,
+              truncated: result.truncated,
+              text: result.text,
+            }
+            : null,
+          reason: result.ok ? undefined : result.reason,
+          payload,
+        }, null, 2));
+      } else if (result.ok) {
+        await writeStdout(`\n${formatNarration(result)}`);
+      }
+      if (!result.ok) renderWarn(`No narration: ${result.reason}.`);
+      process.exit(0);
     } catch (err) {
       renderError(err.message);
       process.exit(1);

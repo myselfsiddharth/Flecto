@@ -35,6 +35,7 @@ const SECURITY_RELEVANT = [
   ['src/pr-comment.js', 'sticky-comment rendering and GitHub comment output'],
   ['src/pr-providers.js', 'provider tokens (GitHub, GitLab, Bitbucket) and redaction of them from errors'],
   ['src/snapshot-store.js', 'the shared store writes config values to a committed path, and masks them on the way'],
+  ['src/explain.js', 'sends a masked diff and an API key to a model provider; masking and redirects must hold'],
 ];
 
 const LCOV_PATH = process.argv[2] ?? 'coverage.lcov';
