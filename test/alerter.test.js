@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'http';
-import { mkdtempSync, rmSync, readFileSync, readdirSync, existsSync } from 'fs';
+import { mkdtempSync, mkdirSync, rmSync, readFileSync, readdirSync, existsSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { fireAlerts, postWebhook, runCommand, redactWebhookUrl } from '../src/alerter.js';
+import { fireAlerts, postWebhook, runCommand, redactWebhookUrl, queueDirForTest } from '../src/alerter.js';
 import { createEnvelope } from '../src/envelope.js';
 import { maskChangeEvent } from '../src/renderer.js';
 
@@ -331,6 +331,135 @@ test('an oversized change set is spilled 0600 and removed once the command exits
     }
     const leftovers = existsSync('.flecto-tmp') ? readdirSync('.flecto-tmp') : [];
     assert.deepEqual(leftovers, [], 'and nothing is left on disk afterwards');
+  } finally {
+    process.chdir(cwd);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a failed delivery does not leak the URL through the error message either', async () => {
+  // Found in review: redactWebhookUrl handled the URL Flecto interpolates, but
+  // fetch puts the whole URL into err.message -- and does so exactly in the two
+  // cases redaction tries hardest on.
+  const cases = [
+    'https://user:SUPERSECRETTOKEN@127.0.0.1:1/x',   // userinfo: fetch refuses to construct
+    'hooks.slack.com/services/T0/B0/SUPERSECRETTOKEN', // unparseable: the <webhook> fallback
+  ];
+  for (const url of cases) {
+    const warnings = [];
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (chunk) => { warnings.push(String(chunk)); return true; };
+    try {
+      await postWebhook(url, createEnvelope({ file: 'a.yaml', changes: [], source: 'watch' }), { retries: 0, timeoutMs: 300 });
+    } finally {
+      process.stderr.write = originalWrite;
+    }
+    assert.ok(!warnings.join('').includes('SUPERSECRETTOKEN'), `leaked for ${url}: ${warnings.join('')}`);
+  }
+});
+
+test('rotating a token strands the backlog rather than replaying it, and says so', async () => {
+  // Header values are part of the destination, so a rotated credential is a
+  // new destination. That is the safe direction -- but it must not be silent.
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-queue-rotate-'));
+  const cwd = process.cwd();
+  process.chdir(dir);
+  const down = await startRecordingServer();
+  const url = down.url;
+  await down.close();
+  try {
+    const base = { webhook: url, deliveryMode: 'at-least-once', webhookRetries: 0, webhookTimeoutMs: 300 };
+    await fireAlerts(
+      { ...base, webhookHeaders: { Authorization: 'Bearer v1' } },
+      createEnvelope({ file: 'queued-under-v1.yaml', changes: [], source: 'watch' }),
+    );
+    const warnings = [];
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (chunk) => { warnings.push(String(chunk)); return true; };
+    try {
+      await fireAlerts(
+        { ...base, webhookHeaders: { Authorization: 'Bearer v2' } },
+        createEnvelope({ file: 'b.yaml', changes: [], source: 'watch' }),
+      );
+    } finally {
+      process.stderr.write = originalWrite;
+    }
+    assert.match(warnings.join(''), /queued for a destination that is not the one configured now/);
+  } finally {
+    process.chdir(cwd);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the stranded-queue warning is printed once, not once per event', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-queue-once-'));
+  const cwd = process.cwd();
+  process.chdir(dir);
+  try {
+    mkdirSync('.flecto-queue', { recursive: true });
+    writeFileSync(join('.flecto-queue', '1700000000000-legacy.json'), JSON.stringify(
+      createEnvelope({ file: 'legacy.yaml', changes: [], source: 'watch' }),
+    ), 'utf8');
+    const server = await startRecordingServer();
+    const warnings = [];
+    const originalWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = (chunk) => { warnings.push(String(chunk)); return true; };
+    try {
+      for (let i = 0; i < 4; i++) {
+        await fireAlerts(
+          { webhook: server.url, deliveryMode: 'at-least-once', webhookRetries: 0 },
+          createEnvelope({ file: `n${i}.yaml`, changes: [], source: 'watch' }),
+        );
+      }
+    } finally {
+      process.stderr.write = originalWrite;
+      await server.close();
+    }
+    const count = warnings.join('').split('undelivered events this run will not send').length - 1;
+    assert.equal(count, 1, `warned ${count} times`);
+    assert.ok(existsSync(join('.flecto-queue', '1700000000000-legacy.json')), 'and the legacy event is kept, not dropped');
+  } finally {
+    process.chdir(cwd);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a drained destination directory is removed rather than accumulating', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-queue-tidy-'));
+  const cwd = process.cwd();
+  process.chdir(dir);
+  const server = await startRecordingServer();
+  try {
+    // A delivery that succeeds should never create a queue directory at all.
+    await fireAlerts(
+      { webhook: server.url, deliveryMode: 'at-least-once', webhookRetries: 0 },
+      createEnvelope({ file: 'ok.yaml', changes: [], source: 'watch' }),
+    );
+    const dirs = existsSync('.flecto-queue') ? readdirSync('.flecto-queue') : [];
+    assert.deepEqual(dirs, [], 'no empty destination directory is left behind');
+  } finally {
+    await server.close();
+    process.chdir(cwd);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('destination spellings that mean the same endpoint share one queue', () => {
+  // Host case and a redundant default port are noise; header name case is
+  // insignificant per the HTTP spec. None of them may split a backlog.
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-queue-norm-'));
+  const cwd = process.cwd();
+  process.chdir(dir);
+  try {
+    const seen = new Set();
+    for (const opts of [
+      { webhook: 'https://Hooks.Example.com/x', webhookHeaders: { Authorization: 'Bearer t' } },
+      { webhook: 'https://hooks.example.com:443/x', webhookHeaders: { authorization: 'Bearer t' } },
+    ]) {
+      // queueDirFor is internal; exercise it through the observable path.
+      seen.add(queueDirForTest(opts));
+    }
+    assert.equal(seen.size, 1, 'these address one endpoint and must share one directory');
   } finally {
     process.chdir(cwd);
     rmSync(dir, { recursive: true, force: true });

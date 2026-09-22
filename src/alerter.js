@@ -39,6 +39,30 @@ export function redactWebhookUrl(raw) {
 }
 
 /**
+ * An error's message with every URL in it redacted.
+ *
+ * Redacting the URL Flecto interpolates is not enough on its own, because
+ * `fetch` puts the URL into the error it throws. Two cases reach this
+ * deterministically, and both are precisely where redaction matters most:
+ * a URL carrying userinfo (`https://user:TOKEN@host/x`) fails with *"Request
+ * cannot be constructed from a URL that includes credentials: <the whole
+ * thing>"*, and an unparseable URL fails with *"Failed to parse URL from
+ * <the whole thing>"* -- the very case `redactWebhookUrl` answers `<webhook>`
+ * to, because nothing can be said about which part is the secret.
+ *
+ * So the configured URL is substituted out by value, and any other URL-shaped
+ * run is redacted on sight in case the engine spelled it differently.
+ * @param {unknown} err
+ * @param {string} [url] the URL this delivery was configured with
+ * @returns {string}
+ */
+function redactedFailureDetail(err, url) {
+  let message = String(/** @type {{ message?: unknown }} */ (err)?.message ?? err);
+  if (url) message = message.split(url).join(redactWebhookUrl(url));
+  return message.replace(/[a-z][a-z0-9+.-]*:\/\/\S+/gi, (found) => redactWebhookUrl(found));
+}
+
+/**
  * A stable fingerprint of everything that decides *where* a delivery goes and
  * what it looks like on arrival.
  *
@@ -49,15 +73,34 @@ export function redactWebhookUrl(raw) {
  * different vendor, a URL from a different profile -- carrying configuration
  * data the operator had directed elsewhere.
  *
- * Hashing rather than storing means a queue file on disk never contains the
- * URL or an auth header in the clear. Headers are sorted so key order cannot
- * split one destination into two.
+ * Hashing rather than storing keeps the URL and any auth header out of the
+ * queue file. It is a fingerprint, not a secret: anyone who can read
+ * `.flecto-queue/` could confirm a *guessed* URL against it, but they can read
+ * the directory only if they can already read the config that names it.
+ *
+ * Header *values* are included, so rotating a token strands the old backlog
+ * rather than replaying it under new credentials. That is the safe direction,
+ * and `warnAboutStrandedQueue` is what stops it being silent.
  * @param {{ webhook?: string, webhookHeaders?: Record<string, string>, webhookFormat?: string }} options
  * @returns {string}
  */
 function destinationId(options) {
-  const headers = Object.entries(options.webhookHeaders ?? {}).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-  const material = JSON.stringify([options.webhook ?? '', headers, options.webhookFormat ?? 'flecto']);
+  // Normalize first, so one destination does not split into several
+  // directories over spellings that address the same endpoint. `new URL().href`
+  // settles host case and a redundant default port; HTTP header names are
+  // case-insensitive by spec, so they are lowercased before sorting. A trailing
+  // slash is left alone -- it is a different path, and a receiver may treat it
+  // as one.
+  let url = options.webhook ?? '';
+  try {
+    url = new URL(url).href;
+  } catch {
+    // Not parseable: hash it as written rather than guessing at it.
+  }
+  const headers = Object.entries(options.webhookHeaders ?? {})
+    .map(([key, value]) => [key.toLowerCase(), value])
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  const material = JSON.stringify([url, headers, options.webhookFormat ?? 'flecto']);
   return createHash('sha256').update(material).digest('hex').slice(0, 32);
 }
 
@@ -197,6 +240,12 @@ function queueDirFor(options) {
 }
 
 /**
+ * `queueDirFor`, exposed so tests can assert which destinations share a queue.
+ * @type {typeof queueDirFor}
+ */
+export const queueDirForTest = queueDirFor;
+
+/**
  * @param {{ webhook?: string, webhookHeaders?: Record<string, string>, webhookFormat?: string }} options
  * @param {import('./envelope.js').FlectoEnvelope} envelope
  */
@@ -220,8 +269,15 @@ function enqueuePersistent(options, envelope) {
 async function flushPersistentQueue(options, deliver) {
   const dir = queueDirFor(options);
   try {
-    mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const files = readdirSync(dir).filter((f) => f.endsWith('.json')).sort();
+    // Deliberately no mkdir: a flush that created its own directory left an
+    // empty one behind on every successful run, one per destination ever
+    // configured, never cleaned. Nothing queued means nothing to do.
+    let files;
+    try {
+      files = readdirSync(dir).filter((f) => f.endsWith('.json')).sort();
+    } catch {
+      return true;
+    }
     for (const file of files) {
       const fullPath = join(dir, file);
       let envelope;
@@ -238,6 +294,13 @@ async function flushPersistentQueue(options, deliver) {
         return false;
       }
     }
+    // Drained: take the directory with it, so the queue root does not
+    // accumulate one entry per destination that ever had a backlog.
+    try {
+      if (readdirSync(dir).length === 0) rmSync(dir, { recursive: false, force: true });
+    } catch {
+      // A concurrent writer may have just queued into it. Leaving it is fine.
+    }
     return true;
   } catch (err) {
     renderWarn(`Could not flush persistent queue: ${err.message}`);
@@ -246,28 +309,74 @@ async function flushPersistentQueue(options, deliver) {
 }
 
 /**
- * Warn about events queued by a version that did not record a destination.
- *
- * Those files sit at the top level of `.flecto-queue/` rather than in a
- * destination directory, and nothing records where they were headed. Sending
- * them to the currently configured endpoint is exactly the bug this change
- * fixes, and deleting them would discard an event the operator was promised
- * at-least-once delivery of. So they are left alone and named once, which is
- * the only honest option.
+ * Queue roots already warned about, so a watch on a churning file says this
+ * once rather than on every event. Keyed by path rather than a single flag:
+ * one process can legitimately serve more than one workspace, and each
+ * deserves to be told about its own backlog.
+ * @type {Set<string>}
  */
-function warnAboutUnboundQueue() {
-  let stale = [];
+const strandedQueuesWarned = new Set();
+
+/**
+ * Warn about queued events that this run will not deliver.
+ *
+ * Two kinds, and neither may be delivered silently to the endpoint currently
+ * configured -- doing that is the bug this change fixes:
+ *
+ * - Events queued by Flecto 3.x sit at the top level of `.flecto-queue/` with
+ *   no destination recorded at all.
+ * - Events queued for a destination that is not the one now configured sit in
+ *   a sibling directory. Rotating an auth token on the same URL is enough to
+ *   produce this, and it is the likelier cause in practice.
+ *
+ * Deleting either would discard an event the operator was promised
+ * at-least-once delivery of, so they are left alone and named. Naming them is
+ * the whole point: the earlier version of this warning only looked at
+ * top-level files, so a stranded 4.x backlog was invisible -- strictly worse
+ * than the 3.x case it did report.
+ * @param {string} currentDir the destination directory this run is flushing
+ */
+function warnAboutStrandedQueue(currentDir) {
+  const root = resolve(ALERT_QUEUE_DIR);
+  if (strandedQueuesWarned.has(root)) return;
+  let entries;
   try {
-    stale = readdirSync(ALERT_QUEUE_DIR).filter((f) => f.endsWith('.json'));
+    entries = readdirSync(ALERT_QUEUE_DIR, { withFileTypes: true });
   } catch {
     return;
   }
-  if (stale.length === 0) return;
+  const legacy = entries.filter((e) => e.isFile() && e.name.endsWith('.json')).length;
+  let stranded = 0;
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const dir = join(ALERT_QUEUE_DIR, entry.name);
+    if (resolve(dir) === resolve(currentDir)) continue;
+    try {
+      stranded += readdirSync(dir).filter((f) => f.endsWith('.json')).length;
+    } catch {
+      // Unreadable: not something to report as a queued event.
+    }
+  }
+  if (legacy === 0 && stranded === 0) return;
+  strandedQueuesWarned.add(root);
+
+  const parts = [];
+  if (legacy > 0) {
+    parts.push(
+      `${legacy} event(s) queued by Flecto 3.x, which recorded no destination at all`,
+    );
+  }
+  if (stranded > 0) {
+    parts.push(
+      `${stranded} event(s) queued for a destination that is not the one configured now`
+      + ' (rotating a webhook token or editing the URL does this)',
+    );
+  }
   renderWarn(
-    `${stale.length} queued event(s) in ${ALERT_QUEUE_DIR}/ predate destination binding and were `
-    + 'not delivered: nothing records which webhook they were addressed to, and sending them to '
-    + 'the currently configured one is the delivery-to-the-wrong-endpoint bug this version fixes. '
-    + 'Inspect and remove them, or re-send them deliberately.',
+    `${ALERT_QUEUE_DIR}/ holds undelivered events this run will not send: ${parts.join('; ')}. `
+    + 'They are kept, not dropped. Delivering them to the endpoint configured now is the '
+    + 'wrong-endpoint delivery this version exists to prevent, so re-send them deliberately '
+    + 'or remove them once you have looked.',
   );
 }
 
@@ -320,7 +429,7 @@ export async function postWebhook(url, envelope, options = {}) {
     } catch (err) {
       const msg = err?.name === 'AbortError' ? `Webhook timed out after ${timeoutMs}ms` : 'Webhook failed';
       if (attempt >= retries) {
-        renderWarn(`${msg}: ${redactWebhookUrl(url)} (${err.message})`);
+        renderWarn(`${msg}: ${redactWebhookUrl(url)} (${redactedFailureDetail(err, url)})`);
         return false;
       }
       const backoff = Math.min(2_000, 200 * Math.pow(2, attempt));
@@ -389,7 +498,7 @@ export async function fireAlerts(options, envelope) {
 
     if (options.webhook) {
       if (options.deliveryMode === 'at-least-once') {
-        warnAboutUnboundQueue();
+        warnAboutStrandedQueue(queueDirFor(options));
         await flushPersistentQueue(options, (queued) => deliverWebhook(options, queued));
       }
 

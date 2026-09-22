@@ -98,10 +98,25 @@ flush delivered whatever was queued to whichever endpoint the current run named,
 so an event could arrive at a different team's channel or a different vendor
 entirely.
 
+The destination includes the headers, so **rotating a webhook token also
+strands the backlog** — the queued events were addressed to the old credential,
+and replaying them under a new one is a decision for you, not for Flecto. This
+is the likeliest way to meet a stranded queue in practice.
+
 Events queued by Flecto 3.x sit at the top level of `.flecto-queue/` with no
-destination recorded. They are **not** delivered — where they were headed is
-not knowable — and Flecto names them once so you can inspect and re-send or
-remove them deliberately.
+destination recorded at all. Those are not deliverable either — where they were
+headed is not knowable.
+
+Neither kind is deleted. Flecto names both once per workspace:
+
+```
+[warn] .flecto-queue/ holds undelivered events this run will not send: 3 event(s)
+queued for a destination that is not the one configured now (rotating a webhook
+token or editing the URL does this). They are kept, not dropped.
+```
+
+Each queued file is a Flecto envelope, so re-sending one deliberately is a
+`curl` with the body of the file once you have looked at where it was going.
 
 ---
 
