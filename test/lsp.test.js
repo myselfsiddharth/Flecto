@@ -413,12 +413,44 @@ describe('flecto lsp', () => {
     }
   });
 
-  test('a pack regex that backtracks forever costs one warning, and the server keeps working', async () => {
+  test('a pack regex that used to backtrack forever is now answered, not timed out', async () => {
+    // This pattern pinned the worker until the timeout fired, which is what the
+    // timeout existed to survive. Pack-supplied regexes compile with RE2 now,
+    // so it is answered in microseconds and real diagnostics come back instead.
     const dir = repo({
       '.flectorc': JSON.stringify({ defaults: { policies: ['default', 'slow'] } }),
       'policies/slow.json': JSON.stringify({ id: 'slow', rules: [{ id: 'slow', severity: 'warn', afterMatches: '^(a+)+$', message: 'slow' }] }),
     });
-    const server = startCli(dir, ['--timeout', '400']);
+    const server = startCli(dir, ['--timeout', '2000']);
+    try {
+      const docUri = pathToFileURL(join(dir, 'prod.yaml')).href;
+      server.send({ id: 1, method: 'initialize', params: { rootUri: pathToFileURL(dir).href } });
+      await server.client.next((m) => m.id === 1);
+      server.send({ method: 'textDocument/didOpen', params: { textDocument: { uri: docUri, languageId: 'yaml', version: 1, text: `db:\n  pool_size: 5\nx: ${'a'.repeat(40)}!\n` } } });
+      const answered = await server.client.next(diagnosticsFor(docUri, 1), 15000);
+      assert.ok(
+        !answered.params.diagnostics.some((d) => d.code === 'timeout'),
+        `expected no timeout, got ${JSON.stringify(answered.params.diagnostics)}`,
+      );
+    } finally {
+      await server.stop();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a worker that hangs costs one warning, and the server keeps working', async () => {
+    // The timeout still has to work -- a plugin can loop, and a huge document
+    // can be slow -- so it is exercised through a plugin now that a pack regex
+    // can no longer hang.
+    const dir = repo({
+      'hang.mjs': 'import { existsSync, writeFileSync } from \'fs\';\n'
+      + 'const latch = new URL(\'./hung.marker\', import.meta.url);\n'
+      + 'export function evaluate() {\n'
+      + '  if (!existsSync(latch)) { writeFileSync(latch, \'1\'); const end = Date.now() + 60000; while (Date.now() < end) {} }\n'
+      + '  return [];\n'
+      + '}\n',
+    });
+    const server = startCli(dir, ['--timeout', '400', '--plugins', join(dir, 'hang.mjs')]);
     try {
       const docUri = pathToFileURL(join(dir, 'prod.yaml')).href;
       server.send({ id: 1, method: 'initialize', params: { rootUri: pathToFileURL(dir).href } });
@@ -456,16 +488,21 @@ describe('flecto lsp', () => {
 
   test('the job after a timed-out one runs on a fresh worker and is not blamed for the old one exiting', async () => {
     const dir = repo({
-      '.flectorc': JSON.stringify({ defaults: { policies: ['slow'] } }),
-      'policies/slow.json': JSON.stringify({ id: 'slow', rules: [{ id: 'slow', severity: 'warn', afterMatches: '^(a+)+$', message: 'slow' }] }),
+      'hang.mjs': 'import { existsSync, writeFileSync } from \'fs\';\n'
+      + 'const latch = new URL(\'./hung.marker\', import.meta.url);\n'
+      + 'export function evaluate() {\n'
+      + '  if (!existsSync(latch)) { writeFileSync(latch, \'1\'); const end = Date.now() + 60000; while (Date.now() < end) {} }\n'
+      + '  return [];\n'
+      + '}\n',
     });
     const executor = createWorkerExecutor({ timeoutMs: 300, log: () => {} });
     try {
       const path = join(dir, 'prod.yaml');
-      const hung = await executor.run({ root: dir, path, text: `x: ${'a'.repeat(40)}!\n`, settings: {} });
+      const settings = { plugins: [join(dir, 'hang.mjs')] };
+      const hung = await executor.run({ root: dir, path, text: 'x: anything\n', settings });
       assert.equal(hung.timedOut, true);
       // Started at once, before the terminated worker has finished exiting.
-      const next = await executor.run({ root: dir, path, text: 'x: fine\n', settings: {} });
+      const next = await executor.run({ root: dir, path, text: 'x: fine\n', settings });
       assert.ok(Array.isArray(next.diagnostics), JSON.stringify(next));
     } finally {
       executor.dispose();

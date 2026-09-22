@@ -1,8 +1,9 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'fs';
-import { dirname, isAbsolute, join, relative, resolve } from 'path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'path';
 import { createRequire } from 'module';
 import { fileURLToPath, pathToFileURL } from 'url';
 import yaml from 'js-yaml';
+import { checkPattern, compilePattern, explainPatternFailure } from './regex-engine.js';
 import { containsSecret } from './secrets.js';
 
 /**
@@ -83,6 +84,20 @@ import { containsSecret } from './secrets.js';
 
 const SEVERITY_RANK = { info: 1, warn: 2, error: 3 };
 const PACKS_DIR = join(dirname(fileURLToPath(import.meta.url)), 'packs');
+
+/**
+ * Is this pack one Flecto ships, rather than one the repository supplies?
+ *
+ * The distinction decides which regex engine its patterns compile on, so it is
+ * drawn on the resolved path rather than the pack id: a local
+ * `policies/default.json` overrides the built-in `default` and is still a file
+ * a pull request can write.
+ * @param {string} path
+ * @returns {boolean}
+ */
+function isBuiltinPackPath(path) {
+  return resolve(path).startsWith(PACKS_DIR + sep);
+}
 const CHANGE_TYPES = new Set(['added', 'removed', 'changed']);
 const RULE_FIELDS = new Set([
   'id', 'severity', 'when', 'match', 'beforeEquals', 'afterEquals',
@@ -135,9 +150,10 @@ function isTruthyToggle(value) {
  * Validate a parsed policy pack and reject typos before evaluation.
  * @param {unknown} pack
  * @param {string} path
+ * @param {boolean} [trusted] true only for packs Flecto ships in src/packs/
  * @returns {asserts pack is PolicyPack}
  */
-function validatePack(pack, path) {
+function validatePack(pack, path, trusted = false) {
   if (!isObject(pack)) invalidPack(path, 'pack must be an object');
 
   const packFields = new Set(['id', 'expandSubtrees', 'rules']);
@@ -154,7 +170,7 @@ function validatePack(pack, path) {
 
   for (const [index, rule] of pack.rules.entries()) {
     try {
-      validateRule(rule, `rules[${index}]`);
+      validateRule(rule, `rules[${index}]`, false, trusted);
     } catch (error) {
       const label = isObject(rule) && typeof rule.id === 'string' && rule.id
         ? `rule "${rule.id}"`
@@ -162,7 +178,9 @@ function validatePack(pack, path) {
       const message = error.message.replace(/^Invalid policy rule at [^:]+: /, '')
         .replace(/^unknown field "([^"]+)"$/, '$1 is not allowed (unknown field "$1")')
         .replace(/^unknown match field "([^"]+)"$/, 'match.$1 is not allowed (unknown match field "$1")')
-        .replace(/^match\.path is not a valid regular expression$/, 'match.path must be a valid regular expression');
+        // The trailing parenthetical carries the engine's reason, so this is
+        // no longer anchored at the end.
+        .replace(/^match\.path is not a valid regular expression/, 'match.path must be a valid regular expression');
       invalidPack(path, `${label}.${message}`);
     }
   }
@@ -216,7 +234,7 @@ function readPackFile(path, fallbackId) {
   } catch (error) {
     invalidPack(path, `could not parse file (${error.message})`);
   }
-  validatePack(parsed, path);
+  validatePack(parsed, path, isBuiltinPackPath(path));
   return { ...parsed, id: parsed.id ?? fallbackId };
 }
 
@@ -226,7 +244,7 @@ function readPackFile(path, fallbackId) {
  * @param {string} location
  * @param {boolean} [isClause]
  */
-function validateRule(candidate, location, isClause = false) {
+function validateRule(candidate, location, isClause = false, trusted = false) {
   if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
     throw new Error(`Invalid policy rule at ${location}: expected an object`);
   }
@@ -252,15 +270,15 @@ function validateRule(candidate, location, isClause = false) {
       : -1;
     throw new Error(`Invalid policy rule at ${location}: when${invalidIndex >= 0 ? `[${invalidIndex}]` : ''} must be one of: added, removed, changed`);
   }
-  validateMatch(rule.match, location);
+  validateMatch(rule.match, location, trusted);
   validateArrayPredicate(rule.beforeIn, 'beforeIn', location);
   validateArrayPredicate(rule.afterIn, 'afterIn', location);
   validateTruthyPredicate(rule.beforeTruthy, 'beforeTruthy', location);
   validateTruthyPredicate(rule.afterTruthy, 'afterTruthy', location);
   validateTruthyPredicate(rule.beforeLooksSecret, 'beforeLooksSecret', location);
   validateTruthyPredicate(rule.afterLooksSecret, 'afterLooksSecret', location);
-  validateRegexPredicate(rule.afterMatches, 'afterMatches', location);
-  validateRegexPredicate(rule.afterAnyMatches, 'afterAnyMatches', location);
+  validateRegexPredicate(rule.afterMatches, 'afterMatches', location, trusted);
+  validateRegexPredicate(rule.afterAnyMatches, 'afterAnyMatches', location, trusted);
   validateNumericPredicate(rule.numericJump, 'numericJump', 'minMultiple', location, true);
   validateNumericPredicate(rule.numericDelta, 'numericDelta', 'min', location, false);
   for (const name of ['message', 'messageTemplate']) {
@@ -270,13 +288,13 @@ function validateRule(candidate, location, isClause = false) {
   }
 
   if (!isClause) {
-    validateComposition(rule.allOf, 'allOf', location);
-    validateComposition(rule.anyOf, 'anyOf', location);
+    validateComposition(rule.allOf, 'allOf', location, trusted);
+    validateComposition(rule.anyOf, 'anyOf', location, trusted);
   }
 }
 
 /** @param {unknown} match @param {string} location */
-function validateMatch(match, location) {
+function validateMatch(match, location, trusted = false) {
   if (match === undefined) return;
   if (!match || typeof match !== 'object' || Array.isArray(match)) {
     throw new Error(`Invalid policy rule at ${location}: match must be an object`);
@@ -293,17 +311,15 @@ function validateMatch(match, location) {
     }
   }
   if (typedMatch.path !== undefined) {
-    try {
-      new RegExp(typedMatch.path, typedMatch.pathFlags ?? '');
-    } catch {
-      if (typedMatch.pathFlags !== undefined) {
-        try {
-          new RegExp('(?:)', typedMatch.pathFlags);
-        } catch {
-          throw new Error(`Invalid policy rule at ${location}: match.pathFlags must be valid regular expression flags`);
-        }
+    const compiled = checkPattern(typedMatch.path, typedMatch.pathFlags ?? '', { trusted });
+    if (!compiled.ok) {
+      if (typedMatch.pathFlags !== undefined && !checkPattern('(?:)', typedMatch.pathFlags, { trusted }).ok) {
+        throw new Error(`Invalid policy rule at ${location}: match.pathFlags must be valid regular expression flags`);
       }
-      throw new Error(`Invalid policy rule at ${location}: match.path is not a valid regular expression`);
+      throw new Error(
+        `Invalid policy rule at ${location}: match.path is not a valid regular expression`
+        + ` (${explainPatternFailure(compiled.reason)})`,
+      );
     }
   }
 }
@@ -322,16 +338,18 @@ function validateTruthyPredicate(value, name, location) {
   }
 }
 
-/** @param {unknown} value @param {string} name @param {string} location */
-function validateRegexPredicate(value, name, location) {
+/** @param {unknown} value @param {string} name @param {string} location @param {boolean} [trusted] */
+function validateRegexPredicate(value, name, location, trusted = false) {
   if (value === undefined) return;
   if (typeof value !== 'string') {
     throw new Error(`Invalid policy rule at ${location}: ${name} must be a string`);
   }
-  try {
-    new RegExp(value);
-  } catch {
-    throw new Error(`Invalid policy rule at ${location}: ${name} is not a valid regular expression`);
+  const compiled = checkPattern(value, '', { trusted });
+  if (!compiled.ok) {
+    throw new Error(
+      `Invalid policy rule at ${location}: ${name} is not a valid regular expression`
+      + ` (${explainPatternFailure(compiled.reason)})`,
+    );
   }
 }
 
@@ -345,13 +363,13 @@ function validateNumericPredicate(value, name, property, location, positive) {
   }
 }
 
-/** @param {unknown} clauses @param {string} name @param {string} location */
-function validateComposition(clauses, name, location) {
+/** @param {unknown} clauses @param {string} name @param {string} location @param {boolean} [trusted] */
+function validateComposition(clauses, name, location, trusted = false) {
   if (clauses === undefined) return;
   if (!Array.isArray(clauses) || clauses.length === 0) {
     throw new Error(`Invalid policy rule at ${location}: ${name} must be a non-empty array of match clauses`);
   }
-  clauses.forEach((clause, index) => validateRule(clause, `${location}.${name}[${index}]`, true));
+  clauses.forEach((clause, index) => validateRule(clause, `${location}.${name}[${index}]`, true, trusted));
 }
 
 /**
@@ -428,7 +446,7 @@ export function loadPack(packId, cwd = process.cwd()) {
   if (cached) return cached;
 
   const pack = readPackFile(path, id);
-  compilePackRegexes(pack);
+  compilePackRegexes(pack, isBuiltinPackPath(path));
   packCache.set(cacheKey, pack);
   return pack;
 }
@@ -746,31 +764,34 @@ export function addPolicyPackFromPackage(name, options = {}) {
  * construction here cannot throw a new error the caller hasn't already seen.
  * @param {PolicyPack} pack
  */
-function compilePackRegexes(pack) {
+function compilePackRegexes(pack, trusted = false) {
   for (const rule of pack.rules ?? []) {
-    compileClauseRegexes(rule);
-    for (const clause of rule.allOf ?? []) compileClauseRegexes(clause);
-    for (const clause of rule.anyOf ?? []) compileClauseRegexes(clause);
+    compileClauseRegexes(rule, trusted);
+    for (const clause of rule.allOf ?? []) compileClauseRegexes(clause, trusted);
+    for (const clause of rule.anyOf ?? []) compileClauseRegexes(clause, trusted);
   }
 }
 
-/** @param {PolicyRule | PolicyMatchClause} clause */
-function compileClauseRegexes(clause) {
+/**
+ * @param {PolicyRule | PolicyMatchClause} clause
+ * @param {boolean} [trusted]
+ */
+function compileClauseRegexes(clause, trusted = false) {
   if (clause.match?.path !== undefined) {
     Object.defineProperty(clause.match, '_pathRegex', {
-      value: new RegExp(clause.match.path, clause.match.pathFlags ?? ''),
+      value: compilePattern(clause.match.path, clause.match.pathFlags ?? '', { trusted }),
       enumerable: false,
     });
   }
   if (clause.afterMatches !== undefined) {
     Object.defineProperty(clause, '_afterMatchesRegex', {
-      value: new RegExp(clause.afterMatches),
+      value: compilePattern(clause.afterMatches, '', { trusted }),
       enumerable: false,
     });
   }
   if (clause.afterAnyMatches !== undefined) {
     Object.defineProperty(clause, '_afterAnyMatchesRegex', {
-      value: new RegExp(clause.afterAnyMatches),
+      value: compilePattern(clause.afterAnyMatches, '', { trusted }),
       enumerable: false,
     });
   }
@@ -784,7 +805,7 @@ function pathRegexFor(match) {
   // Packs loaded via loadPack() always carry a pre-compiled regex here; the
   // fallback exists only so a pack built some other way (bypassing loadPack)
   // still behaves exactly as it did before regex compilation was hoisted.
-  return match._pathRegex ?? new RegExp(match.path, match.pathFlags ?? '');
+  return match._pathRegex ?? compilePattern(match.path, match.pathFlags ?? '');
 }
 
 /**
@@ -792,7 +813,7 @@ function pathRegexFor(match) {
  * @returns {RegExp}
  */
 function afterMatchesRegexFor(clause) {
-  return clause._afterMatchesRegex ?? new RegExp(clause.afterMatches);
+  return clause._afterMatchesRegex ?? compilePattern(clause.afterMatches);
 }
 
 /**
@@ -800,7 +821,7 @@ function afterMatchesRegexFor(clause) {
  * @returns {RegExp}
  */
 function afterAnyMatchesRegexFor(clause) {
-  return clause._afterAnyMatchesRegex ?? new RegExp(clause.afterAnyMatches);
+  return clause._afterAnyMatchesRegex ?? compilePattern(clause.afterAnyMatches);
 }
 
 /**
