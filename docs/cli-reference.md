@@ -632,6 +632,7 @@ exactly the lines that changed. A snapshot commit is meant to be reviewable.
 | `FLECTO_ALLOW_RC_WRITES` | `ci`, `report` | `1` allows `.flectorc` to point `--output` / `--baseline` outside the project |
 | `FLECTO_ALLOW_RC_PLUGINS` | all commands | `1` allows plugins declared in `.flectorc` |
 | `FLECTO_ALLOW_RC_ALERTS` | `watch` | `1` allows `.flectorc` to declare `command` / `webhook` / `webhookHeader` |
+| `FLECTO_ALLOW_RC_BASELINE` | `ci` | `1` allows `.flectorc` to declare `snapshotRef`, which chooses what every change is measured against |
 | `FLECTO_EXPLAIN_PROVIDER`, `_MODEL`, `_API_KEY`, `_API_URL` | `explain`, `ci --explain` | Narration provider settings; see [explain.md](explain.md#environment-variables) |
 | `FLECTO_EXPLAIN_MAX_TOKENS`, `_MAX_INPUT_TOKENS`, `_TIMEOUT_MS`, `_CACHE_DIR` | `explain`, `ci --explain` | Narration cost, time, and cache bounds |
 | `FLECTO_EXPLAIN` | `explain`, `ci --explain` | `0` disables narration on this runner |

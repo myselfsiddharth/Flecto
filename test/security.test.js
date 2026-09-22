@@ -746,6 +746,136 @@ describe('the merge gate cannot be turned green from .flectorc (#121)', () => {
   });
 });
 
+describe('the baseline ref cannot be chosen or weaponized from .flectorc (#121)', () => {
+  // `snapshotRef` decides what every change is measured against, and it merged
+  // through resolveEffectiveOptions with no gate at all. Two separate defects
+  // fell out of that, and the cheaper one needs no crafted value: a ref of
+  // "HEAD" compares the pull request against itself.
+
+  /**
+   * A git repo whose committed tip disables TLS and raises a pool 100x
+   * relative to the `base` branch an operator would diff against.
+   * @param {object | null} rc value for .flectorc `defaults`
+   * @returns {string} the repo directory
+   */
+  function repoWithHostileCommit(rc) {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'flecto-sec-ref-')));
+    const git = (...args) => spawnSync('git', args, { cwd: dir, encoding: 'utf8' });
+    git('init', '-q', '.');
+    git('config', 'user.email', 'test@example.com');
+    git('config', 'user.name', 'test');
+    git('config', 'commit.gpgsign', 'false');
+    writeFileSync(join(dir, 'app.yaml'), 'db:\n  pool: 5\n  tls: true\n', 'utf8');
+    git('add', '-A');
+    git('commit', '-qm', 'base');
+    git('branch', '-q', 'base');
+    writeFileSync(join(dir, 'app.yaml'), 'db:\n  pool: 500\n  tls: false\n', 'utf8');
+    if (rc) writeFileSync(join(dir, '.flectorc'), JSON.stringify({ defaults: rc }), 'utf8');
+    git('add', '-A');
+    git('commit', '-qm', 'pull request');
+    return dir;
+  }
+
+  test('the gate fails against the operator\'s ref to begin with', () => {
+    const dir = repoWithHostileCommit(null);
+    try {
+      const run = runFlecto(dir, ['ci', 'app.yaml', '--snapshot-ref', 'base']);
+      assert.equal(run.status, 1, 'TLS off and a 100x pool is a change');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('snapshotRef declared in .flectorc is refused, not honored', () => {
+    // The whole exploit: point the baseline at the pull request's own tip and
+    // every file is compared against itself, so nothing ever changed.
+    const dir = repoWithHostileCommit({ snapshotRef: 'HEAD' });
+    try {
+      const run = runFlecto(dir, ['ci', 'app.yaml']);
+      assert.equal(run.status, 1, 'the gate still fails');
+      assert.match(run.stderr, /Refusing "snapshotRef" declared in \.flectorc/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a profile is not a way around it either', () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'flecto-sec-ref-profile-')));
+    try {
+      writeFileSync(join(dir, 'prod.yaml'), 'debug: true\n', 'utf8');
+      writeFileSync(join(dir, 'snap.json'), JSON.stringify({ state: { debug: false } }), 'utf8');
+      writeFileSync(join(dir, '.flectorc'), JSON.stringify({
+        profiles: { ci: { snapshotRef: 'HEAD' } },
+      }), 'utf8');
+      const run = runFlecto(dir, ['ci', 'prod.yaml', '--profile', 'ci']);
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /Refusing "snapshotRef" declared in \.flectorc/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a ref starting with "-" is refused before git sees it', () => {
+    // `git show --output=pwned:app.yaml` writes a file and prints nothing, so
+    // the baseline parsed as {}, every key read as `added`, and the default
+    // --fail-on never fired: an arbitrary write and a silent pass at once.
+    const dir = repoWithHostileCommit(null);
+    try {
+      const run = runFlecto(dir, ['ci', 'app.yaml', '--snapshot-ref', '--output=pwned']);
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /starts with "-", so git would read it as an option/);
+      assert.ok(!existsSync(join(dir, 'pwned:app.yaml')), 'and git wrote nothing');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('the rc and argv defects compose, and are both refused', () => {
+    const dir = repoWithHostileCommit({ snapshotRef: '--output=pwned' });
+    try {
+      const run = runFlecto(dir, ['ci', 'app.yaml']);
+      assert.equal(run.status, 1);
+      assert.ok(!existsSync(join(dir, 'pwned:app.yaml')), 'no file was written');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('--snapshot-ref on the command line still works, because it is the operator', () => {
+    const dir = repoWithHostileCommit({ snapshotRef: 'HEAD' });
+    try {
+      const run = runFlecto(dir, ['ci', 'app.yaml', '--snapshot-ref', 'base']);
+      assert.equal(run.status, 1, 'and it measures against the ref the operator named');
+      assert.doesNotMatch(run.stderr, /Refusing "snapshotRef"/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('FLECTO_ALLOW_RC_BASELINE=1 opts a trusted repository back in', () => {
+    const dir = repoWithHostileCommit({ snapshotRef: 'base' });
+    try {
+      const run = runFlecto(dir, ['ci', 'app.yaml'], { FLECTO_ALLOW_RC_BASELINE: '1' });
+      assert.equal(run.status, 1, 'the rc ref is honored, and this one is a real diff');
+      assert.doesNotMatch(run.stderr, /Refusing "snapshotRef"/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('even opted in, a ref git would read as an option is still refused', () => {
+    const dir = repoWithHostileCommit({ snapshotRef: '--output=pwned' });
+    try {
+      const run = runFlecto(dir, ['ci', 'app.yaml'], { FLECTO_ALLOW_RC_BASELINE: '1' });
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /starts with "-", so git would read it as an option/);
+      assert.ok(!existsSync(join(dir, 'pwned:app.yaml')));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('watch cannot be turned into a shell command or a webhook from .flectorc (#121)', () => {
   // `watch --command` spawns a shell command on every change, and `--webhook`
   // POSTs the same change data to a URL. Both merge through

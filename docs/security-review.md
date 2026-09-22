@@ -313,6 +313,58 @@ Regression tests in `test/alerter.test.js` cover each, and the two that are
 behavioural were first confirmed to reproduce against pre-fix `main`: a test
 that only passes after a fix proves less than one watched to fail before it.
 
+### The baseline ref could be chosen, and weaponized, from `.flectorc` — fixed
+
+Found by asking of `snapshotRef` the question the `watch --command` entry above
+should have been asked of `command`: not "what does this option do" but "where
+does its value come from". It comes from `resolveEffectiveOptions`, like every
+other option, and nothing gated it.
+
+Two defects, of quite different cost to exploit.
+
+The **cheap one needs no crafted value at all.** `snapshotRef` names the
+baseline every change is measured against, so whoever sets it defines what
+"changed" means. A committed `.flectorc` carrying `{"defaults": {"snapshotRef":
+"HEAD"}}` points the baseline at the pull request's own tip: every file is
+compared against itself, every diff is empty, and `flecto ci` exits 0 whatever
+the change did. Confirmed end to end on a repo whose tip disables TLS and
+raises a pool size 100x — exit 1 against the operator's ref, exit 0 with the rc
+file present. This is the same shape as the `updateBaseline` finding above and
+strictly cheaper: no second option, no write, one key.
+
+The **second is argv injection.** The ref is interpolated into `git show
+<rev>:<path>` and passed through `execFileSync`, so no shell is involved — but
+argv is not the same boundary as a shell, and a ref beginning with `-` is still
+parsed by *git* as one of its options. `snapshotRef: "--output=pwned"` turns
+the baseline read into a file write (`pwned:app.yaml`, attacker-chosen prefix,
+forced `:<rel>` suffix). Because the read then returns nothing, the baseline
+parses as an empty document, every key reads as `added` rather than `changed`,
+and the default `--fail-on changed,policy,error` never fires. One string, an
+arbitrary write and a silent pass.
+
+**Fixed** in the two places the review's own pattern already points at.
+`assertSnapshotRefFromCli` refuses an rc-declared or profile-declared
+`snapshotRef` unless `FLECTO_ALLOW_RC_BASELINE=1` opts in — a ref named on the
+command line is operator intent and untouched, so `flecto ci config.yaml
+--snapshot-ref origin/main` is unchanged, and every documented use of the flag
+is the CLI form. `assertSafeGitRef` refuses a leading `-`, a newline, or a NUL
+in any ref whatever its provenance, and both call sites now pass
+`--end-of-options` so git refuses to read the operand as an option on its own
+account. The guard is kept *in addition to* `--end-of-options` because the
+latter needs git 2.24, and because a refusal that names the problem beats
+`fatal: option ... must come before non-option arguments`.
+
+`src/lsp-analysis.js` reads a ref the same way and is hardened identically. The
+MCP server was already safe: `assertSafeRef` refuses a leading `-` before
+anything spawns, which is why this never reached that surface.
+
+This is a **breaking change**, and deliberately shipped in 4.0 rather than a
+patch: a repository that legitimately keeps `snapshotRef` in `.flectorc` must
+now either move it to the command line or set `FLECTO_ALLOW_RC_BASELINE=1`.
+That cost is real but small — the flag is what every example and every doc page
+already uses — and the alternative is a merge gate a pull request can silence
+with one line.
+
 ### Bitbucket path segments were interpolated unencoded — hardened
 
 `BITBUCKET_WORKSPACE` and `BITBUCKET_REPO_SLUG` went into the request path raw,

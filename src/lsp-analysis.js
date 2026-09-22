@@ -4,6 +4,7 @@ import { dirname, isAbsolute, relative, resolve } from 'path';
 
 import { applyBaseline, baselineRelativePath, loadBaseline } from './baseline.js';
 import {
+  assertSafeGitRef,
   assertWriteDestinationContained,
   loadRcConfig,
   resolveEffectiveOptions,
@@ -320,7 +321,7 @@ function readBaseline(root, path, settings, effective) {
   try {
     const rel = relative(canonical(top), canonical(path)).replaceAll('\\', '/');
     if (!rel || rel.startsWith('..') || isAbsolute(rel)) throw new Error('outside the repository');
-    raw = execFileSync('git', ['-C', top, 'show', `${ref}:${rel}`], {
+    raw = execFileSync('git', ['-C', top, 'show', '--end-of-options', `${assertSafeGitRef(ref)}:${rel}`], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
       maxBuffer: 64 * 1024 * 1024,

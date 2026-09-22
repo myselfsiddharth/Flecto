@@ -82,6 +82,8 @@ import {
   assertTargetContained,
   assertWriteDestinationContained,
   assertAlertActionsFromCli,
+  assertSnapshotRefFromCli,
+  assertSafeGitRef,
 } from './src/config.js';
 
 const PKG = JSON.parse(
@@ -381,7 +383,13 @@ function readSnapshotStateFromRef(filePath, snapshotRef, store) {
   }
 
   const rel = gitRepoRelativePath(filePath);
-  const raw = execFileSync('git', ['show', `${snapshotRef}:${rel}`], { encoding: 'utf8' });
+  // `--end-of-options` stops git reading the operand as one of its own flags;
+  // assertSafeGitRef refuses the shape outright so the failure names itself.
+  const raw = execFileSync(
+    'git',
+    ['show', '--end-of-options', `${assertSafeGitRef(snapshotRef)}:${rel}`],
+    { encoding: 'utf8' },
+  );
   return parseContent(filePath, raw);
 }
 
@@ -1125,6 +1133,7 @@ program
       const cliOverrides = stripUnsetCliOverrides(opts, command);
       const effective = resolveEffectiveOptions(config, profile, cliOverrides);
       assertExplainNotFromRc(effective, cliOverrides);
+      assertSnapshotRefFromCli(effective, cliOverrides);
       const explainDryRun = Boolean(cliOverrides.explainDryRun);
       const explainRequested = Boolean(cliOverrides.explain) || explainDryRun;
       const { policies: packIds, plugins, severityRemap } = resolvePolicyOptions(effective, { pluginsFromCli: cliOverrides.plugins !== undefined });
