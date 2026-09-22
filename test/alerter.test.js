@@ -1,7 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'http';
-import { fireAlerts, postWebhook } from '../src/alerter.js';
+import { mkdtempSync, rmSync, readFileSync, readdirSync, existsSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import { fireAlerts, postWebhook, runCommand, redactWebhookUrl } from '../src/alerter.js';
 import { createEnvelope } from '../src/envelope.js';
 import { maskChangeEvent } from '../src/renderer.js';
 
@@ -205,3 +208,131 @@ test('fireAlerts surfaces queue errors and recovers the queue', async () => {
   assert.deepEqual(result, { ok: true });
 });
 
+
+// --- Hardening of the three alerter findings (#121) -------------------------
+// Each of these fails on the code as it stood before: the URL appeared whole in
+// the warning, the queue delivered to whatever endpoint ran next, and the spill
+// file was left behind world-readable.
+
+test('a failed delivery does not print the webhook URL, which is itself a credential', async () => {
+  // A Slack incoming webhook keeps its secret in the path, so a transient 500
+  // used to copy that secret into the CI log.
+  const server = await startRecordingServer({ status: 500 });
+  const secretUrl = `${server.url.replace('/hook', '')}/services/T00000000/B00000000/SUPERSECRETTOKEN`;
+  const warnings = [];
+  const originalWrite = process.stderr.write.bind(process.stderr);
+  process.stderr.write = (chunk, ...rest) => {
+    warnings.push(String(chunk));
+    return originalWrite(chunk, ...rest);
+  };
+  try {
+    await postWebhook(secretUrl, createEnvelope({ file: 'a.yaml', changes: [], source: 'watch' }), { retries: 0 });
+  } finally {
+    process.stderr.write = originalWrite;
+    await server.close();
+  }
+  const printed = warnings.join('');
+  assert.ok(!printed.includes('SUPERSECRETTOKEN'), `secret leaked into: ${printed}`);
+  assert.ok(printed.includes('127.0.0.1'), 'but the operator can still tell which endpoint failed');
+});
+
+test('redactWebhookUrl keeps the origin and drops userinfo, path, and query', () => {
+  assert.equal(redactWebhookUrl('https://hooks.slack.com/services/T0/B0/XYZ'), 'https://hooks.slack.com/...');
+  assert.equal(redactWebhookUrl('https://user:pass@example.com/x?token=abc'), 'https://example.com/...');
+  assert.equal(redactWebhookUrl('https://example.com'), 'https://example.com');
+  assert.equal(redactWebhookUrl('not a url'), '<webhook>');
+});
+
+test('a queued event is never delivered to a different endpoint', async () => {
+  // The exploit shape: queue while pointed at A, then run pointed at B.
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-queue-'));
+  const cwd = process.cwd();
+  process.chdir(dir);
+  const down = await startRecordingServer();
+  const downUrl = down.url;
+  await down.close(); // nothing is listening, so delivery fails and queues
+
+  const other = await startRecordingServer();
+  try {
+    const opts = { deliveryMode: 'at-least-once', webhookRetries: 0, webhookTimeoutMs: 300 };
+    await fireAlerts(
+      { ...opts, webhook: downUrl },
+      createEnvelope({ file: 'secret.yaml', changes: [{ type: 'changed', path: 'db.password' }], source: 'watch' }),
+    );
+    // Now a run configured for a completely different destination.
+    await fireAlerts(
+      { ...opts, webhook: other.url },
+      createEnvelope({ file: 'b.yaml', changes: [], source: 'watch' }),
+    );
+    const bodies = other.requests.map((r) => r.body).join('');
+    assert.ok(!bodies.includes('secret.yaml'), 'the event queued for the first endpoint reached the second');
+    assert.equal(other.requests.length, 1, 'only its own event was delivered');
+  } finally {
+    await other.close();
+    process.chdir(cwd);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a queued event is still delivered to the endpoint it was addressed to', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-queue-same-'));
+  const cwd = process.cwd();
+  process.chdir(dir);
+  const first = await startRecordingServer();
+  const url = first.url;
+  await first.close();
+
+  try {
+    const opts = { webhook: url, deliveryMode: 'at-least-once', webhookRetries: 0, webhookTimeoutMs: 300 };
+    await fireAlerts(opts, createEnvelope({ file: 'queued.yaml', changes: [], source: 'watch' }));
+
+    // Same port, so the same destination fingerprint: the backlog must flush.
+    const revived = createServer((req, res) => {
+      let body = '';
+      req.on('data', (c) => { body += c; });
+      req.on('end', () => { revived.seen.push(body); res.statusCode = 200; res.end('ok'); });
+    });
+    revived.seen = [];
+    await new Promise((ready) => revived.listen(new URL(url).port, ready));
+    try {
+      await fireAlerts(opts, createEnvelope({ file: 'live.yaml', changes: [], source: 'watch' }));
+      const seen = revived.seen.join('');
+      assert.ok(seen.includes('queued.yaml'), 'the backlog was flushed');
+      assert.ok(seen.includes('live.yaml'), 'and the new event went too');
+    } finally {
+      await new Promise((done) => revived.close(done));
+    }
+  } finally {
+    process.chdir(cwd);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('an oversized change set is spilled 0600 and removed once the command exits', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-spill-'));
+  const cwd = process.cwd();
+  process.chdir(dir);
+  try {
+    const changes = Array.from({ length: 2000 }, (_, i) => ({
+      type: 'changed', path: `svc.key${i}`, before: 'x'.repeat(20), after: 'AKIAIOSFODNN7EXAMPLE',
+    }));
+    const envelope = createEnvelope({ file: 'big.yaml', changes, source: 'watch' });
+    const probe = join(dir, 'mode.txt');
+    // The command records the spill file's mode while it still exists.
+    const ok = await runCommand(
+      process.platform === 'win32'
+        ? `node -e "require('fs').writeFileSync(process.argv[1], 'skipped')" ${JSON.stringify(probe)}`
+        : `stat -f '%Lp' "$FLECTO_CHANGES_FILE" > ${JSON.stringify(probe)} 2>/dev/null || stat -c '%a' "$FLECTO_CHANGES_FILE" > ${JSON.stringify(probe)}`,
+      envelope,
+    );
+    assert.equal(ok, true);
+    if (process.platform !== 'win32') {
+      assert.equal(readFileSync(probe, 'utf8').trim(), '600', 'the spill file is owner-only');
+    }
+    const leftovers = existsSync('.flecto-tmp') ? readdirSync('.flecto-tmp') : [];
+    assert.deepEqual(leftovers, [], 'and nothing is left on disk afterwards');
+  } finally {
+    process.chdir(cwd);
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

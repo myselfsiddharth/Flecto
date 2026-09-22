@@ -268,6 +268,51 @@ different-shaped problem than command execution or exfiltration, and closing
 it would mean refusing a key `flecto init` writes by default. Left open,
 named here rather than silently excluded.
 
+### The alert path leaked, misrouted, and left behind what it carried — fixed
+
+Three findings in `src/alerter.js`, reached by a route worth recording: they
+were already written up as **draft advisories** against 2.x
+(GHSA-7m3q-8mvc-465r, GHSA-5wmr-3v28-p7q2, GHSA-pppr-9966-2hm6), each marked
+`patched_versions: null`, and never revisited. Reading the current file rather
+than the advisory metadata showed all three behaviours still present on `main`.
+The affected range on those drafts (`<= 2.1.0`) was simply wrong — nothing had
+fixed them, so every release since is affected too.
+
+**The webhook URL was printed whole on failure.** A webhook URL is routinely
+*itself* the credential — a Slack incoming webhook carries its secret in the
+path — and `postWebhook` interpolated the full URL into both the HTTP-status
+warning and the exhausted-retries warning. A transient 500 copied the secret
+into the terminal and, in CI, into a log that is often world readable and
+retained far longer than the run. Fixed with `redactWebhookUrl`: origin only,
+plus a marker that a path was elided. Enough to tell *which* endpoint failed,
+not enough to call it.
+
+**The persistent queue was not bound to a destination.** `enqueuePersistent`
+stored the envelope alone, and `flushPersistentQueue` delivered it with
+whatever options the *current* `fireAlerts` call carried. An event queued while
+`watch` pointed at one endpoint was posted to whichever endpoint ran next — a
+different channel, a different vendor, a URL from a different profile — carrying
+configuration data the operator had deliberately directed elsewhere. This is not
+hypothetical; it reproduces in a dozen lines against `main`. Fixed by keying
+`.flecto-queue/` by a hash of URL, headers, and format, so a flush only ever
+reads its own backlog. Hashing rather than storing keeps the URL and any auth
+header out of the queue file. Events queued by an earlier version have no
+recorded destination: they are left undelivered and named once, because
+delivering them is the bug and deleting them discards an event that was promised
+at-least-once.
+
+**The oversized-payload spill file outlived its command.** A change set over
+16,000 characters is written to `.flecto-tmp/changes-<ts>-<id>.json` — the
+complete, *unmasked* change set, including values `--mask-secrets` hides on
+screen — with the process umask (`0644` typically) and no cleanup. It sat in the
+workspace for whatever ran next: a later build step, an artifact upload, a cache
+action. Now `0600` inside a `0700` directory, removed on every exit path of
+`runCommand` including the throw.
+
+Regression tests in `test/alerter.test.js` cover each, and the two that are
+behavioural were first confirmed to reproduce against pre-fix `main`: a test
+that only passes after a fix proves less than one watched to fail before it.
+
 ### Bitbucket path segments were interpolated unencoded — hardened
 
 `BITBUCKET_WORKSPACE` and `BITBUCKET_REPO_SLUG` went into the request path raw,

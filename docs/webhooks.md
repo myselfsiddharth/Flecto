@@ -89,6 +89,20 @@ Pick `best-effort` for a chat notification you can afford to miss, and
 Note that `at-least-once` means exactly that — a receiver may see the same
 `event_id` twice, so make handlers idempotent.
 
+A queued event is bound to the destination it was addressed to. `.flecto-queue/`
+holds one directory per destination, keyed by a hash of the URL, headers, and
+format, and a flush only ever reads its own. Change the webhook URL and the old
+backlog is not redirected to the new endpoint — it stays queued under the old
+key until that destination is configured again. Before this binding existed, a
+flush delivered whatever was queued to whichever endpoint the current run named,
+so an event could arrive at a different team's channel or a different vendor
+entirely.
+
+Events queued by Flecto 3.x sit at the top level of `.flecto-queue/` with no
+destination recorded. They are **not** delivered — where they were headed is
+not knowable — and Flecto names them once so you can inspect and re-send or
+remove them deliberately.
+
 ---
 
 ## Running a command on change
@@ -120,6 +134,14 @@ if [ -n "${FLECTO_CHANGES_FILE}" ]; then
 fi
 echo "${payload}" | jq -r '.[] | "\(.type) \(.path)"'
 ```
+
+The spill file holds the **complete, unmasked** change set — including values
+`--mask-secrets` hides on screen. It is written `0600` inside a `0700`
+`.flecto-tmp/`, and removed as soon as the command exits, so read it from within
+the command rather than expecting it to be there afterwards. Earlier versions
+left it behind with whatever the process umask gave it (`0644` on a typical
+runner), where a later build step, artifact upload, or cache action could pick
+it up.
 
 ---
 
