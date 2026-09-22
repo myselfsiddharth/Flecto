@@ -10,7 +10,7 @@ import {
   realpathSync,
   symlinkSync,
 } from 'fs';
-import { join, resolve } from 'path';
+import { dirname, join, resolve } from 'path';
 import { tmpdir } from 'os';
 import { spawn, spawnSync } from 'child_process';
 
@@ -865,7 +865,7 @@ describe('the baseline ref cannot be chosen or weaponized from .flectorc (#121)'
 
       const run = runFlecto(dir, ['ci', 'app.yaml', '--snapshot-ref', 'HEAD~1']);
       assert.equal(run.status, 1, 'the revision wins, so the gate still sees the change');
-      assert.match(run.stderr, /names both a git revision and a file/);
+      assert.match(run.stdout, /"type": *"changed"/, 'and it is the real diff, not the shadow file');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -886,16 +886,66 @@ describe('the baseline ref cannot be chosen or weaponized from .flectorc (#121)'
     }
   });
 
-  test('a ref-shaped value that does not resolve is an error, not a file read', () => {
-    // The residual of the shadow finding: in a shallow clone `HEAD~1` is a
-    // revision the operator meant but git cannot resolve, and falling back to
-    // a file of that name would hand the baseline back to the pull request.
+  test('a branch or tag name that does not resolve is an error, not a file read', () => {
+    // The critical finding of the second review, and the reason the "is it
+    // ref-shaped?" test was abandoned: branch and tag names are ordinary
+    // words, so a denylist over them cannot work. On a pull_request event
+    // actions/checkout creates no origin/<base> ref at all, which makes
+    // `--snapshot-ref origin/main` -- the form this project's own docs put in
+    // a workflow -- the default configuration rather than an edge case.
+    //
+    // The shadow file is crafted to match the hostile tip, so the diff it
+    // produces is genuinely empty: no --fail-on value catches it. Only
+    // refusing to read the file does.
     const dir = repoWithHostileCommit(null);
     try {
-      writeFileSync(join(dir, 'HEAD~99'), '{"db":{"pool":500,"tls":false}}', 'utf8');
-      const run = runFlecto(dir, ['ci', 'app.yaml', '--snapshot-ref', 'HEAD~99']);
+      for (const ref of ['origin/main', 'main', 'v1.2.3', 'develop', 'HEAD~99']) {
+        mkdirSync(join(dir, dirname(ref)), { recursive: true });
+        writeFileSync(join(dir, ref), '{"db":{"pool":500,"tls":false}}', 'utf8');
+        const run = runFlecto(dir, ['ci', 'app.yaml', '--snapshot-ref', ref]);
+        assert.equal(run.status, 1, `${ref} must not pass the gate`);
+        assert.match(run.stderr, /does not resolve to a git revision/);
+        assert.match(run.stderr, /was NOT read as the baseline/);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('git being unusable fails closed rather than falling back to a file', () => {
+    // Not knowing whether the revision exists is exactly when reading a
+    // same-named file is most dangerous, so "git is missing" and "git is too
+    // old for --end-of-options" must not look like "not a revision".
+    const dir = repoWithHostileCommit(null);
+    try {
+      writeFileSync(join(dir, 'main'), '{"db":{"pool":500,"tls":false}}', 'utf8');
+      const run = runFlecto(dir, ['ci', 'app.yaml', '--snapshot-ref', 'main'], { PATH: '/nonexistent' });
       assert.equal(run.status, 1);
-      assert.match(run.stderr, /looks like a git revision but does not resolve/);
+      assert.match(run.stderr, /cannot resolve "main" as a git revision/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('--snapshot-file reads a path and never consults git', () => {
+    const dir = repoWithHostileCommit(null);
+    try {
+      writeFileSync(join(dir, 'snap.json'), JSON.stringify({ state: { db: { pool: 5, tls: true } } }), 'utf8');
+      const run = runFlecto(dir, ['ci', 'app.yaml', '--snapshot-file', 'snap.json'], { PATH: '/nonexistent' });
+      assert.equal(run.status, 1, run.stderr);
+      assert.match(run.stdout, /"type": *"changed"/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('snapshotFile declared in .flectorc is refused like snapshotRef', () => {
+    const dir = repoWithHostileCommit({ snapshotFile: 'evil.json' });
+    try {
+      writeFileSync(join(dir, 'evil.json'), JSON.stringify({ state: { db: { pool: 500, tls: false } } }), 'utf8');
+      const run = runFlecto(dir, ['ci', 'app.yaml']);
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /Refusing "snapshotFile" declared in \.flectorc/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

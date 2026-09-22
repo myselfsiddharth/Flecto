@@ -81,7 +81,8 @@ flecto ci "config/**/*.yaml" --snapshot-ref HEAD~1 --fail-on "policy,error"
 | Flag | Default | Description |
 |---|---|---|
 | `-p, --profile <name>` | — | Use a profile from `.flectorc` (else `FLECTO_PROFILE`) |
-| `--snapshot-ref <ref>` | local snapshot | Baseline: a snapshot file path, or a git ref |
+| `--snapshot-ref <ref>` | local snapshot | Baseline git revision. A path-shaped value (absolute, `./`, or ending `.json`/`.yaml`) is read as a snapshot file |
+| `--snapshot-file <path>` | — | Baseline snapshot file, never consulted as a git revision |
 | `--format <type>` | `json` | `json`, `ndjson`, `sarif`, `github-annotations`, or `pr-comment` |
 | `--pr-comment-post` | off | With `--format pr-comment`, upsert the sticky comment on the PR |
 | `--pr-provider <name>` | detect | Force the delivery target: `github`, `gitlab`, or `bitbucket` |
@@ -146,7 +147,8 @@ FLECTO_EXPLAIN_PROVIDER=anthropic FLECTO_EXPLAIN_API_KEY=sk-ant-... \
 | Flag | Default | Description |
 |---|---|---|
 | `-p, --profile <name>` | — | Use a profile from `.flectorc` for diff and policy options |
-| `--snapshot-ref <ref>` | snapshot store | Baseline: a snapshot file path, or a git ref |
+| `--snapshot-ref <ref>` | snapshot store | Baseline git revision (a path-shaped value is read as a snapshot file) |
+| `--snapshot-file <path>` | — | Baseline snapshot file, never consulted as a git revision |
 | `--snapshot-store <id>` / `--snapshot-dir <path>` | `local` | Which snapshot store to read when there is no `--snapshot-ref` |
 | `--provider <id>` | `FLECTO_EXPLAIN_PROVIDER` | `anthropic` or `openai` (any OpenAI-compatible server) |
 | `--model <name>` | `FLECTO_EXPLAIN_MODEL` | Model id; `anthropic` defaults to `claude-opus-5` |

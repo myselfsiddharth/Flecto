@@ -378,11 +378,34 @@ that is not exactly one commit, and `git show` is handed the resolved SHA rather
 than any string the attacker wrote. `assertSafeGitRef` refuses `..` by name too,
 because "Needed a single revision" explains less.
 
-That both of these survived the first fix is the lesson worth recording: the
-guard addressed the option the finding named, and the property that actually
-matters is *whoever picks the baseline picks the verdict*. Anything that makes
-the baseline read empty or attacker-authored is the same vulnerability wearing
-different syntax.
+A **third** review round found that the shadow fix was still wrong, and the
+way it was wrong is the most useful thing in this entry. It asked "does this
+value look like a revision?" and allowed the file branch when it did not --
+a denylist over a value space *identical* to the one it was excluding, because
+branch and tag names are ordinary words. `origin/main`, `main`, `v1.2.3`, and
+`develop` all fell straight through it. Reproduced in a byte-faithful
+`actions/checkout` pull-request checkout: `--snapshot-ref origin/main`, the
+form this project's own `docs/explain.md` puts in a workflow, exited 0 on a
+config disabling TLS. On a `pull_request` event no `origin/<base>` ref exists
+unless it is fetched deliberately, so that was the *default* configuration,
+not an edge case. And because the shadow file is written to match the hostile
+tip, the diff is genuinely empty -- no `--fail-on` value catches it.
+
+**Fixed by removing the ambiguity instead of enumerating it again.** The
+polarity is inverted: the *file* branch must now prove itself with a shape no
+one gives a git ref (absolute, an explicit `./` or `../`, or a `.json`/`.yaml`
+extension), and everything else is a revision or an error. `--snapshot-file`
+is added as the unambiguous form and is gated from `.flectorc` exactly as
+`snapshotRef` is, since it picks the baseline just as directly. `resolveGitCommit`
+also stopped collapsing "git is missing", "not a repository", and "git is too
+old" into "not a revision" -- not knowing whether a revision exists is precisely
+when reading a same-named file is most dangerous, so those now fail closed.
+
+The lesson worth recording is that three rounds of this finding were all the
+same mistake: patching the syntax that was demonstrated rather than the
+property underneath. *Whoever picks the baseline picks the verdict.* Anything
+that lets the change under review choose, or emptily answer, what it is
+compared against is this vulnerability wearing different syntax.
 
 `src/lsp-analysis.js` reads a ref the same way and is hardened identically. The
 MCP server was already safe from the dash shape -- `assertSafeRef` refuses a

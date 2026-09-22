@@ -483,17 +483,20 @@ function rcBaselineAllowed() {
  */
 export function assertSnapshotRefFromCli(effective, cliOverrides) {
   if (rcBaselineAllowed()) return;
-  if (effective.snapshotRef === undefined || cliOverrides.snapshotRef !== undefined) return;
-  throw new Error(
-    `Refusing "snapshotRef" declared in .flectorc: it chooses the baseline every change is`
-    + ' measured against, so a pull request that edits it decides what counts as changed —'
-    + ' pointing it at "HEAD" compares every file against itself and exits 0.\n'
-    // Quoted: the value is attacker-written, and an unescaped newline in it
-    // would forge extra lines in a CI log.
-    + `Declared: ${JSON.stringify(effective.snapshotRef)}\n`
-    + 'Pass --snapshot-ref on the command line instead, or set FLECTO_ALLOW_RC_BASELINE=1'
-    + ' if this config is trusted.',
-  );
+  // `snapshotFile` picks the baseline just as directly, so it is gated with it
+  // rather than left as the way around it.
+  for (const option of ['snapshotRef', 'snapshotFile']) {
+    if (effective[option] === undefined || cliOverrides[option] !== undefined) continue;
+    throw new Error(
+      `Refusing "${option}" declared in .flectorc: it chooses the baseline every change is`
+      + ' measured against, so a pull request that edits it decides what counts as changed --'
+      + ' pointing it at "HEAD", or at a file it committed, compares every file against itself'
+      + ' and exits 0.\n'
+      + `Declared: ${JSON.stringify(effective[option])}\n`
+      + `Pass --${option === 'snapshotRef' ? 'snapshot-ref' : 'snapshot-file'} on the command line`
+      + ' instead, or set FLECTO_ALLOW_RC_BASELINE=1 if this config is trusted.',
+    );
+  }
 }
 
 /**

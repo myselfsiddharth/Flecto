@@ -51,10 +51,19 @@ flecto watch config/prod.yaml --polling --interval 500
 
 Two common causes:
 
-**git older than 2.24.** Baseline reads pass `--end-of-options`, which git
-gained in 2.24 (2019). On an older git every `--snapshot-ref <git-ref>` read
-fails with `Failed to resolve snapshot baseline`. It fails closed rather than
-silently, but the fix is to upgrade git.
+**git older than 2.24, missing, or a directory that is not a repository.**
+Baseline reads pass `--end-of-options`, which git gained in 2.24 (2019). When
+git cannot answer whether a revision exists, Flecto refuses rather than
+guessing: it will not fall back to reading a file that happens to share the
+ref's name, because on a pull request that file is something the change under
+review can add. Upgrade git, or pass `--snapshot-file <path>` when you mean a
+file.
+
+**`origin/main` does not resolve on a pull request.** `actions/checkout` does
+not create `refs/remotes/origin/<base>` for a `pull_request` event at any
+shallow depth. Fetch it deliberately (`fetch-depth: 0`, or an explicit `git
+fetch origin main`), or compare against `HEAD~1`. Flecto fails closed here
+rather than treating a same-named file as the baseline.
 
 **A shallow checkout.** `--snapshot-ref HEAD~1` needs a parent commit. GitHub's
 default checkout is depth 1, which has none:

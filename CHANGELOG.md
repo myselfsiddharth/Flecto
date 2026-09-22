@@ -81,6 +81,13 @@ The format is based on [Keep a Changelog], and this project adheres to
   config that disabled TLS. Pass `--snapshot-ref` on the command line — the form
   every example and the shipped Action already use — or set
   `FLECTO_ALLOW_RC_BASELINE=1` if the rc file is trusted.
+- **`--snapshot-file <path>` is added, and `--snapshot-ref` is a git revision**
+  ([#121]). Overloading one flag with both is what let an attacker-committed
+  file stand in for the operator's baseline. A path-shaped value (absolute,
+  `./`, or ending `.json`/`.yaml`) still reads as a file, so existing usage
+  keeps working; anything else must resolve as a revision or the run fails.
+  When git is missing, too old, or not looking at a repository, Flecto refuses
+  rather than falling back to a file.
 - **A baseline ref can no longer be crafted into a file write, a shadowed
   baseline, or an empty diff** ([#121]). Three shapes, one property:
   `--output=pwned` was read by git as an *option* and wrote a file while the
