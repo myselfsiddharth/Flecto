@@ -51,6 +51,11 @@ flecto watch config/prod.yaml --polling --interval 500
 
 Two common causes:
 
+**git older than 2.24.** Baseline reads pass `--end-of-options`, which git
+gained in 2.24 (2019). On an older git every `--snapshot-ref <git-ref>` read
+fails with `Failed to resolve snapshot baseline`. It fails closed rather than
+silently, but the fix is to upgrade git.
+
 **A shallow checkout.** `--snapshot-ref HEAD~1` needs a parent commit. GitHub's
 default checkout is depth 1, which has none:
 

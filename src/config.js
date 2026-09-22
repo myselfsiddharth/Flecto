@@ -488,7 +488,9 @@ export function assertSnapshotRefFromCli(effective, cliOverrides) {
     `Refusing "snapshotRef" declared in .flectorc: it chooses the baseline every change is`
     + ' measured against, so a pull request that edits it decides what counts as changed —'
     + ' pointing it at "HEAD" compares every file against itself and exits 0.\n'
-    + `Declared: ${String(effective.snapshotRef)}\n`
+    // Quoted: the value is attacker-written, and an unescaped newline in it
+    // would forge extra lines in a CI log.
+    + `Declared: ${JSON.stringify(effective.snapshotRef)}\n`
     + 'Pass --snapshot-ref on the command line instead, or set FLECTO_ALLOW_RC_BASELINE=1'
     + ' if this config is trusted.',
   );
@@ -516,6 +518,21 @@ export function assertSnapshotRefFromCli(effective, cliOverrides) {
  * @throws {Error} when git would read the ref as an option
  */
 export function assertSafeGitRef(ref) {
+  if (typeof ref !== 'string') {
+    throw new Error('Refusing snapshot ref: it must be a string.');
+  }
+  if (ref.includes('..')) {
+    // `git show A..B` is a *range*: it succeeds and prints nothing, so the
+    // baseline parses empty, every key reads as `added`, and the default
+    // `--fail-on` never fires. Callers resolve refs through
+    // `rev-parse --verify <ref>^{commit}`, which already refuses a range; this
+    // refuses it by name, because "Needed a single revision" explains less. A
+    // valid ref cannot contain `..` in any case (git-check-ref-format).
+    throw new Error(
+      `Refusing snapshot ref "${ref}": ".." makes it a commit range rather than a single`
+      + ' revision, which git reads as an empty diff.',
+    );
+  }
   if (ref.startsWith('-')) {
     throw new Error(
       `Refusing snapshot ref "${ref}": it starts with "-", so git would read it as an option`

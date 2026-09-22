@@ -302,6 +302,14 @@ function readBaseline(root, path, settings, effective) {
   }
 
   const ref = settings.snapshotRef ?? 'HEAD';
+  // Hoisted out of the try below: a refused ref is a different diagnosis from
+  // "this file is not in that ref", and reporting the latter would name the
+  // one explanation that is certainly wrong.
+  try {
+    assertSafeGitRef(ref);
+  } catch (err) {
+    return { state: null, label: ref, maskHashes: false, error: err.message };
+  }
   let top;
   try {
     top = execFileSync('git', ['-C', dirname(path), 'rev-parse', '--show-toplevel'], {
@@ -321,7 +329,7 @@ function readBaseline(root, path, settings, effective) {
   try {
     const rel = relative(canonical(top), canonical(path)).replaceAll('\\', '/');
     if (!rel || rel.startsWith('..') || isAbsolute(rel)) throw new Error('outside the repository');
-    raw = execFileSync('git', ['-C', top, 'show', '--end-of-options', `${assertSafeGitRef(ref)}:${rel}`], {
+    raw = execFileSync('git', ['-C', top, 'show', '--end-of-options', `${ref}:${rel}`], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
       maxBuffer: 64 * 1024 * 1024,

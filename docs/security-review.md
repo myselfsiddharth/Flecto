@@ -354,9 +354,40 @@ account. The guard is kept *in addition to* `--end-of-options` because the
 latter needs git 2.24, and because a refusal that names the problem beats
 `fatal: option ... must come before non-option arguments`.
 
+Review of that first fix found **two more ways to the same property**, both
+confirmed, both now closed in the same change.
+
+A ref was resolved as a *filesystem path* before it was tried as a revision,
+and the path resolved against the checkout root -- whose file names an
+untrusted pull request controls. Committing a file named `HEAD~1`, which is
+exactly what the shipped GitHub Action passes by default, replaced the
+operator's baseline with one the attacker wrote: exit 0 on a config that
+disables TLS. No `.flectorc` needed, so it worked in repositories where that
+file is CODEOWNERS-protected. Resolution is now revision-first, and a ref-shaped
+value that does not resolve -- the shallow-clone case, where `HEAD~1` is real
+but unreachable -- is an error rather than a fallback to a file of that name. A
+file that is *also* a revision is reported rather than silently preferred.
+
+A ref could also be a commit *range*. `git show A..B` succeeds and prints
+nothing, so `HEAD:..` or `base..` produced an empty baseline, every key read as
+`added`, and the default `--fail-on changed,policy,error` never fired -- the
+same silent pass as the injection, with no dash involved, and reachable even
+through the `FLECTO_ALLOW_RC_BASELINE` opt-out. Refs now resolve through
+`git rev-parse --verify --end-of-options <ref>^{commit}`, which refuses anything
+that is not exactly one commit, and `git show` is handed the resolved SHA rather
+than any string the attacker wrote. `assertSafeGitRef` refuses `..` by name too,
+because "Needed a single revision" explains less.
+
+That both of these survived the first fix is the lesson worth recording: the
+guard addressed the option the finding named, and the property that actually
+matters is *whoever picks the baseline picks the verdict*. Anything that makes
+the baseline read empty or attacker-authored is the same vulnerability wearing
+different syntax.
+
 `src/lsp-analysis.js` reads a ref the same way and is hardened identically. The
-MCP server was already safe: `assertSafeRef` refuses a leading `-` before
-anything spawns, which is why this never reached that surface.
+MCP server was already safe from the dash shape -- `assertSafeRef` refuses a
+leading `-` before anything spawns -- and reaches the range and path fixes
+through the CLI it spawns.
 
 This is a **breaking change**, and deliberately shipped in 4.0 rather than a
 patch: a repository that legitimately keeps `snapshotRef` in `.flectorc` must

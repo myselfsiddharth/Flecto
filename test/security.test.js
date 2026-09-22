@@ -841,6 +841,77 @@ describe('the baseline ref cannot be chosen or weaponized from .flectorc (#121)'
     }
   });
 
+  test('a committed file cannot shadow the ref the operator named', () => {
+    // Found in review of the first version of this fix. The path branch ran
+    // before the git branch and resolved against the checkout root, whose file
+    // names a pull request controls -- so committing a file called `HEAD~1`,
+    // the default the shipped Action passes, replaced the operator's baseline
+    // with one the attacker wrote. No .flectorc needed at all.
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'flecto-sec-shadow-')));
+    const git = (...args) => spawnSync('git', args, { cwd: dir, encoding: 'utf8' });
+    try {
+      git('init', '-q', '.');
+      git('config', 'user.email', 'test@example.com');
+      git('config', 'user.name', 'test');
+      git('config', 'commit.gpgsign', 'false');
+      writeFileSync(join(dir, 'app.yaml'), 'db:\n  pool: 5\n  tls: true\n', 'utf8');
+      git('add', '-A');
+      git('commit', '-qm', 'base');
+      // One commit carrying both the hostile change and the shadow file.
+      writeFileSync(join(dir, 'app.yaml'), 'db:\n  pool: 500\n  tls: false\n', 'utf8');
+      writeFileSync(join(dir, 'HEAD~1'), '{"db":{"pool":500,"tls":false}}', 'utf8');
+      git('add', '-A');
+      git('commit', '-qm', 'pull request');
+
+      const run = runFlecto(dir, ['ci', 'app.yaml', '--snapshot-ref', 'HEAD~1']);
+      assert.equal(run.status, 1, 'the revision wins, so the gate still sees the change');
+      assert.match(run.stderr, /names both a git revision and a file/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a commit range is refused, because git reads one as an empty diff', () => {
+    // `git show A..B` succeeds and prints nothing, so the baseline parsed as
+    // {}, every key read as `added`, and the default --fail-on never fired --
+    // the same silent pass as the --output= injection, with no dash involved.
+    const dir = repoWithHostileCommit(null);
+    try {
+      for (const ref of ['HEAD:..', 'base..', 'HEAD..HEAD']) {
+        const run = runFlecto(dir, ['ci', 'app.yaml', '--snapshot-ref', ref]);
+        assert.equal(run.status, 1, `${ref} must not pass the gate`);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a ref-shaped value that does not resolve is an error, not a file read', () => {
+    // The residual of the shadow finding: in a shallow clone `HEAD~1` is a
+    // revision the operator meant but git cannot resolve, and falling back to
+    // a file of that name would hand the baseline back to the pull request.
+    const dir = repoWithHostileCommit(null);
+    try {
+      writeFileSync(join(dir, 'HEAD~99'), '{"db":{"pool":500,"tls":false}}', 'utf8');
+      const run = runFlecto(dir, ['ci', 'app.yaml', '--snapshot-ref', 'HEAD~99']);
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /looks like a git revision but does not resolve/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a snapshot file that is not ref-shaped is still read, because that is the feature', () => {
+    const dir = repoWithHostileCommit(null);
+    try {
+      writeFileSync(join(dir, 'snap.json'), JSON.stringify({ state: { db: { pool: 500, tls: false } } }), 'utf8');
+      const run = runFlecto(dir, ['ci', 'app.yaml', '--snapshot-ref', 'snap.json']);
+      assert.equal(run.status, 0, run.stderr);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('--snapshot-ref on the command line still works, because it is the operator', () => {
     const dir = repoWithHostileCommit({ snapshotRef: 'HEAD' });
     try {

@@ -364,6 +364,60 @@ function canonicalPath(path) {
   }
 }
 
+/**
+ * Resolve a ref to the single commit it names, or null when it names none.
+ *
+ * `git show` accepts far more than a commit: `A..B` is a *range*, and asking
+ * it to show one succeeds while printing nothing. An empty read then parses as
+ * an empty document, every key looks `added` rather than `changed`, and the
+ * default `--fail-on changed,policy,error` never fires -- the same silent-pass
+ * chain as the `--output=` injection, reached without a single dash.
+ * `rev-parse --verify <ref>^{commit}` refuses anything that is not exactly one
+ * commit, which closes the whole shape rather than the one spelling of it.
+ *
+ * Resolving also means the value handed to `git show` afterwards is a hex SHA
+ * this function produced, not a string the attacker wrote.
+ * @param {string} ref
+ * @param {string} dir a directory inside the repository
+ * @returns {string | null} the commit SHA, or null when `ref` is not a revision
+ */
+function resolveGitCommit(ref, dir) {
+  try {
+    return execFileSync(
+      'git',
+      ['-C', dir, 'rev-parse', '--verify', '--quiet', '--end-of-options', `${ref}^{commit}`],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
+    ).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Does this value look like someone meant a git revision by it?
+ *
+ * Used to decide whether an unresolvable value may fall back to being read as
+ * a *file*. `--snapshot-ref` accepts either, and that ambiguity is itself the
+ * vulnerability: the path branch resolves against the checkout root, whose
+ * file names an untrusted pull request controls. Committing a file named
+ * `HEAD~1` -- the default the shipped GitHub Action passes -- shadowed the
+ * operator's own baseline with one the attacker wrote.
+ *
+ * Resolving as a revision first makes that unreachable whenever the revision
+ * exists. This covers the remaining case: a shallow clone, where `HEAD~1` is a
+ * revision the operator meant but git cannot resolve. Rather than silently
+ * reading the attacker's file, a ref-shaped value that does not resolve is an
+ * error.
+ * @param {string} value
+ * @returns {boolean}
+ */
+function looksLikeGitRev(value) {
+  return /^HEAD/i.test(value)
+    || /[~^:]/.test(value)
+    || /@\{/.test(value)
+    || /^[0-9a-f]{7,40}$/i.test(value);
+}
+
 function readSnapshotStateFromRef(filePath, snapshotRef, store) {
   if (!snapshotRef) {
     // Failing closed here is right — a diff with no baseline is not a clean
@@ -377,20 +431,40 @@ function readSnapshotStateFromRef(filePath, snapshotRef, store) {
     }
     return record.state;
   }
-  const maybePath = resolve(snapshotRef);
+  const ref = assertSafeGitRef(snapshotRef);
+  const commit = resolveGitCommit(ref, dirname(resolve(filePath)));
+
+  // A revision wins over a file of the same name. The reverse order let a pull
+  // request shadow the operator's baseline by committing a file named after
+  // their ref; saying so is better than quietly preferring one, because the
+  // file being there at all is the interesting part.
+  if (commit) {
+    if (existsSync(resolve(ref))) {
+      renderWarn(
+        `"${ref}" names both a git revision and a file in this directory; reading the revision.`
+        + ' Pass a path that is not also a revision if you meant the file.',
+      );
+    }
+    const rel = gitRepoRelativePath(filePath);
+    // `--end-of-options` is belt to the braces of passing a resolved SHA.
+    const raw = execFileSync('git', ['show', '--end-of-options', `${commit}:${rel}`], { encoding: 'utf8' });
+    return parseContent(filePath, raw);
+  }
+
+  if (looksLikeGitRev(ref)) {
+    throw new Error(
+      `"${ref}" looks like a git revision but does not resolve to one here`
+      + ' (a shallow clone is the usual reason -- fetch more history, e.g. actions/checkout with'
+      + ' fetch-depth: 0). It is not read as a file: a file of that name is something a pull'
+      + ' request can add, and reading it would let the baseline be chosen by the change under review.',
+    );
+  }
+
+  const maybePath = resolve(ref);
   if (existsSync(maybePath)) {
     return readSnapshotStateFromFile(maybePath);
   }
-
-  const rel = gitRepoRelativePath(filePath);
-  // `--end-of-options` stops git reading the operand as one of its own flags;
-  // assertSafeGitRef refuses the shape outright so the failure names itself.
-  const raw = execFileSync(
-    'git',
-    ['show', '--end-of-options', `${assertSafeGitRef(snapshotRef)}:${rel}`],
-    { encoding: 'utf8' },
-  );
-  return parseContent(filePath, raw);
+  throw new Error(`"${ref}" is neither a git revision nor an existing snapshot file`);
 }
 
 function shouldFailFromPolicy(findings, failOn) {
