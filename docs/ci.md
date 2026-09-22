@@ -28,7 +28,7 @@ git ref and read with `git show <ref>:<file>`.
 ```bash
 flecto ci config/prod.yaml --snapshot-ref HEAD~1
 flecto ci config/prod.yaml --snapshot-ref origin/main
-flecto ci config/prod.yaml --snapshot-ref .flecto-snapshots/4b8cbbd70d1832a2.json
+flecto ci config/prod.yaml --snapshot-file .flecto-snapshots/4b8cbbd70d1832a2.json
 ```
 
 Omit `--snapshot-ref` entirely and Flecto compares against the snapshot store —

@@ -392,14 +392,36 @@ not an edge case. And because the shadow file is written to match the hostile
 tip, the diff is genuinely empty -- no `--fail-on` value catches it.
 
 **Fixed by removing the ambiguity instead of enumerating it again.** The
-polarity is inverted: the *file* branch must now prove itself with a shape no
-one gives a git ref (absolute, an explicit `./` or `../`, or a `.json`/`.yaml`
-extension), and everything else is a revision or an error. `--snapshot-file`
-is added as the unambiguous form and is gated from `.flectorc` exactly as
-`snapshotRef` is, since it picks the baseline just as directly. `resolveGitCommit`
-also stopped collapsing "git is missing", "not a repository", and "git is too
-old" into "not a revision" -- not knowing whether a revision exists is precisely
-when reading a same-named file is most dangerous, so those now fail closed.
+polarity is inverted: the *file* branch must prove itself, and everything else
+must resolve as a revision or the run fails. `--snapshot-file` is added as the
+unambiguous form and is gated from `.flectorc` exactly as `snapshotRef` is,
+since it picks the baseline just as directly. `resolveGitCommit` also stopped
+collapsing "git is missing", "not a repository", and "git is too old" into "not
+a revision" -- not knowing whether a revision exists is precisely when reading a
+same-named file is most dangerous, so those now fail closed.
+
+A **fourth** round found the first version of that inversion still wrong, in the
+same way one more time. It accepted a `.json`/`.yaml` suffix as proof of
+path-ness -- but git only forbids `..`, a trailing `.`, and a `.lock` suffix in
+a ref name, so `release/v1.json` is a perfectly legal ref. A pull request
+committing a file of that name beat a **resolvable tag** of the same name, in a
+full clone, with no shallow checkout involved. An extension is a convention; the
+ref grammar is a grammar. Only an absolute path or an explicit `./` or `../`
+now short-circuits to a file, because those are the shapes git's own ref format
+cannot produce. The suffix arm was also pure surface with no benefit:
+`readSnapshotStateFromFile` is `JSON.parse`, so a real `.yaml` snapshot never
+worked anyway.
+
+The same round found the file branch had **no containment at all**, which is a
+different bug in the same function. A baseline named as a path was `resolve`d
+and read with no `assertTargetContained` -- so where an operator names an
+in-repo baseline such as `.flecto/baseline.json`, a pull request replaces it
+with a symlink and the contents of any JSON file on the runner become the
+"baseline", printed as `removed` changes. Flecto already enforced exactly this
+rule for targets, for the snapshot store root, and in `src/mcp.js` for a ref
+naming a file; the CLI baseline read was the one surface that had been missed,
+and this change had been about to add a second flag to it. Both branches now go
+through one `readSnapshotFile` that contains, refuses an empty value, and reads.
 
 The lesson worth recording is that three rounds of this finding were all the
 same mistake: patching the syntax that was demonstrated rather than the

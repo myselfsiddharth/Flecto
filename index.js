@@ -309,6 +309,37 @@ function restoreSnapshotDocumentKeys(state, snapshot) {
   return withDocumentKeys(state, documents.map(String));
 }
 
+/**
+ * Read a snapshot named as a path, with the containment every other read in
+ * Flecto already has.
+ *
+ * A baseline path is attacker-reachable in the shape that matters: the
+ * operator names an in-repo snapshot such as `.flecto/baseline.json`, and the
+ * pull request replaces that file with a symlink. Without this check the
+ * contents of any JSON file on the runner became the "baseline" and were
+ * printed as `removed` changes -- the same read-outside-the-repo leak that
+ * `assertTargetContained` was added for, and that `src/mcp.js` already refuses
+ * for a ref naming a file. This was the one remaining surface without the rule.
+ *
+ * `assertTargetContained` is about escape, not location, so an operator's
+ * deliberate absolute path to a snapshot outside the project still works.
+ * @param {string} given
+ * @param {string} option the flag to name in an error
+ * @returns {unknown}
+ */
+function readSnapshotFile(given, option) {
+  if (given === '') {
+    // An unset CI variable expands to this. Everything else here refuses
+    // loudly; silently falling back to the local store would be the one path
+    // that quietly compares against something the operator did not choose.
+    throw new Error(`${option} was given an empty value`);
+  }
+  const resolved = resolve(given);
+  assertTargetContained(resolved, process.cwd());
+  if (!existsSync(resolved)) throw new Error(`no snapshot file at "${given}"`);
+  return readSnapshotStateFromFile(resolved);
+}
+
 function readSnapshotStateFromFile(snapshotPath) {
   const snap = JSON.parse(readFileSync(snapshotPath, 'utf8'));
   return restoreSnapshotDocumentKeys(snap?.state ?? snap, snap);
@@ -381,6 +412,16 @@ function canonicalPath(path) {
  * @param {string} dir a directory inside the repository
  * @returns {string | null} the commit SHA, or null when `ref` is not a revision
  */
+function gitFailureReason(err) {
+  if (err?.code === 'ENOENT') return 'git is not installed or not on PATH';
+  if (err?.status === 128) return 'this is not a git repository';
+  // The most likely remaining cause by far: `--end-of-options` arrived in git
+  // 2.24 (2019), and an older git rejects it as an unknown option. Naming a
+  // version someone can check beats printing the raw spawn failure.
+  return 'git rejected the command -- Flecto needs git 2.24 or newer'
+    + ` (${String(err?.message ?? 'unknown error').split('\n')[0]})`;
+}
+
 function resolveGitCommit(ref, dir) {
   try {
     const out = execFileSync(
@@ -396,8 +437,8 @@ function resolveGitCommit(ref, dir) {
     // Flecto cannot tell whether the ref exists. Collapsing those into "not a
     // revision" is what let a missing git turn a baseline into whatever file
     // happened to share the ref's name.
-    if (err?.code !== 'ENOENT' && err?.status === 1) return { usable: true, commit: null };
-    return { usable: false, commit: null, reason: err?.code === 'ENOENT' ? 'git is not installed or not on PATH' : (err?.status === 128 ? 'this is not a git repository' : `git failed (${err?.message ?? 'unknown error'})`) };
+    if (err?.status === 1) return { usable: true, commit: null };
+    return { usable: false, commit: null, reason: gitFailureReason(err) };
   }
 }
 
@@ -420,31 +461,35 @@ function resolveGitCommit(ref, dir) {
  * documentation puts in a workflow.
  *
  * So the polarity is inverted. The *file* branch must prove itself, and the
- * proof is a shape no one gives a git ref: an absolute path, an explicit
- * `./` or `../`, or a snapshot file extension. Everything else is a revision
- * or an error. The failure mode is now "an unusually named snapshot file is
- * refused, and says to use --snapshot-file" rather than "an attacker's file is
- * read as the baseline".
+ * proof is a shape the git ref grammar cannot produce: an absolute path, or an
+ * explicit `./` or `../`. Everything else must resolve as a revision or the run
+ * fails, pointing at `--snapshot-file`. The failure mode is now "a snapshot
+ * file named like a ref is refused, and says which flag to use" rather than
+ * "an attacker's file is read as the baseline".
  * @param {string} value
  * @returns {boolean}
  */
-function looksLikePath(value) {
+function isExplicitPath(value) {
+  // git-check-ref-format forbids a ref whose component begins with `.` and a
+  // ref beginning with `/`, so none of these can name a revision. An earlier
+  // version of this also accepted a `.json`/`.yaml` suffix, which was the same
+  // mistake a third time: those ARE legal in a ref name, so `release/v1.json`
+  // skipped git entirely and read an attacker's committed file in preference to
+  // a real, resolvable tag of that name. A suffix is a convention; these are a
+  // grammar.
   return isAbsolute(value)
     || value.startsWith('./')
     || value.startsWith('../')
     || value.startsWith('.\\')
-    || value.startsWith('..\\')
-    || /\.(json|ya?ml)$/i.test(value);
+    || value.startsWith('..\\');
 }
 
 function readSnapshotStateFromRef(filePath, snapshotRef, store, snapshotFile) {
   // `--snapshot-file` is the unambiguous form: a path, never a revision. It
   // exists because overloading one flag with both is what made an
   // attacker-committed file able to stand in for the operator's baseline.
-  if (snapshotFile) {
-    const explicit = resolve(String(snapshotFile));
-    if (!existsSync(explicit)) throw new Error(`no snapshot file at "${snapshotFile}"`);
-    return readSnapshotStateFromFile(explicit);
+  if (snapshotFile !== undefined) {
+    return readSnapshotFile(String(snapshotFile), '--snapshot-file');
   }
   if (!snapshotRef) {
     // Failing closed here is right — a diff with no baseline is not a clean
@@ -458,17 +503,14 @@ function readSnapshotStateFromRef(filePath, snapshotRef, store, snapshotFile) {
     }
     return record.state;
   }
-  const ref = assertSafeGitRef(snapshotRef);
-  const repoDir = dirname(resolve(filePath));
-
-  // A path-shaped value is a snapshot file and never consults git, so a
-  // repository without git, or without this revision, still reads it.
-  if (looksLikePath(ref)) {
-    const maybePath = resolve(ref);
-    if (existsSync(maybePath)) return readSnapshotStateFromFile(maybePath);
-    throw new Error(`no snapshot file at "${ref}"`);
+  // The path decision comes before assertSafeGitRef, which refuses `..` -- a
+  // legitimate `../snapshots/base.json` is a path, not a commit range.
+  if (isExplicitPath(String(snapshotRef))) {
+    return readSnapshotFile(String(snapshotRef), '--snapshot-ref');
   }
 
+  const ref = assertSafeGitRef(snapshotRef);
+  const repoDir = dirname(resolve(filePath));
   const { usable, commit, reason } = resolveGitCommit(ref, repoDir);
   if (!usable) {
     // Never fall through to a file here. Not knowing whether the revision
@@ -495,10 +537,12 @@ function readSnapshotStateFromRef(filePath, snapshotRef, store, snapshotFile) {
   const rel = gitRepoRelativePath(filePath);
   // `-C repoDir` matches where the revision was resolved, and the operand is a
   // SHA this process produced rather than any string the attacker wrote.
+  // maxBuffer matches the LSP's reader: a megabyte-scale baseline blob is
+  // ordinary, and the default 1 MB dies with a raw ENOBUFS.
   const raw = execFileSync(
     'git',
     ['-C', repoDir, 'show', '--end-of-options', `${commit}:${rel}`],
-    { encoding: 'utf8' },
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 * 1024 * 1024 },
   );
   return parseContent(filePath, raw);
 }
@@ -1514,6 +1558,7 @@ program
       const cliOverrides = stripUnsetCliOverrides(opts, command);
       const effective = resolveEffectiveOptions(config, profile, cliOverrides);
       assertExplainNotFromRc(effective, cliOverrides);
+      assertSnapshotRefFromCli(effective, cliOverrides);
       // Everything that shapes the request is read from the command line, never
       // from the merged options: `.flectorc` can name a `format` or `model` for
       // other commands, and none of it may steer where the diff goes.

@@ -416,7 +416,7 @@ describe('flecto policies add', () => {
 
       const run = runFlecto(dir, [
         'ci', 'config.json',
-        '--snapshot-ref', 'snapshot.json',
+        '--snapshot-file', 'snapshot.json',
         '--policies', 'deployment-safety',
         '--fail-on', 'policy',
         '--format', 'json',

@@ -80,7 +80,7 @@ describe('policy plugins are not loaded from an untrusted .flectorc', () => {
     // is what runs on pull requests and takes no attacker-supplied flags.
     const { dir, marker } = hostileProject('./p.js');
     try {
-      const run = runFlecto(dir, ['ci', 'c.json', '--snapshot-ref', 'snap.json']);
+      const run = runFlecto(dir, ['ci', 'c.json', '--snapshot-file', 'snap.json']);
       assert.equal(existsSync(marker), false, 'plugin from .flectorc must not execute');
       assert.equal(run.status, 1);
       assert.match(run.stderr, /Refusing to load policy plugins declared in \.flectorc/);
@@ -106,7 +106,7 @@ describe('policy plugins are not loaded from an untrusted .flectorc', () => {
     // still a failure. The run must not succeed.
     const { dir } = hostileProject('./p.js');
     try {
-      const run = runFlecto(dir, ['ci', 'c.json', '--snapshot-ref', 'snap.json']);
+      const run = runFlecto(dir, ['ci', 'c.json', '--snapshot-file', 'snap.json']);
       assert.equal(run.status, 1);
       assert.equal(run.stdout.trim(), '', 'no findings output on a refused run');
     } finally {
@@ -117,7 +117,7 @@ describe('policy plugins are not loaded from an untrusted .flectorc', () => {
   test('an rc plugin outside the project is refused even with the opt-in set', () => {
     const { dir, marker } = hostileProject('../../../../../../tmp/elsewhere.mjs');
     try {
-      const run = runFlecto(dir, ['ci', 'c.json', '--snapshot-ref', 'snap.json'], {
+      const run = runFlecto(dir, ['ci', 'c.json', '--snapshot-file', 'snap.json'], {
         FLECTO_ALLOW_RC_PLUGINS: '1',
       });
       assert.equal(existsSync(marker), false);
@@ -131,7 +131,7 @@ describe('policy plugins are not loaded from an untrusted .flectorc', () => {
   test('FLECTO_ALLOW_RC_PLUGINS lets a trusted in-project rc plugin run', () => {
     const { dir, marker } = hostileProject('./p.js');
     try {
-      runFlecto(dir, ['ci', 'c.json', '--snapshot-ref', 'snap.json'], {
+      runFlecto(dir, ['ci', 'c.json', '--snapshot-file', 'snap.json'], {
         FLECTO_ALLOW_RC_PLUGINS: '1',
       });
       assert.equal(existsSync(marker), true, 'the documented opt-in must still work');
@@ -145,7 +145,7 @@ describe('policy plugins are not loaded from an untrusted .flectorc', () => {
     // living outside the working directory are a legitimate monorepo setup.
     const { dir, marker } = hostileProject(null);
     try {
-      runFlecto(dir, ['ci', 'c.json', '--snapshot-ref', 'snap.json', '--plugins', './p.js']);
+      runFlecto(dir, ['ci', 'c.json', '--snapshot-file', 'snap.json', '--plugins', './p.js']);
       assert.equal(existsSync(marker), true, '--plugins must keep working');
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -156,7 +156,7 @@ describe('policy plugins are not loaded from an untrusted .flectorc', () => {
     const { dir } = hostileProject(null);
     try {
       writeFileSync(join(dir, '.flectorc'), JSON.stringify({ defaults: { policies: ['default'] } }), 'utf8');
-      const run = runFlecto(dir, ['ci', 'c.json', '--snapshot-ref', 'snap.json']);
+      const run = runFlecto(dir, ['ci', 'c.json', '--snapshot-file', 'snap.json']);
       assert.equal(run.status, 1, 'a real diff still exits 1');
       assert.doesNotMatch(run.stderr, /Refusing to load policy plugins/);
     } finally {
@@ -215,7 +215,7 @@ describe('denial-of-service hardening (#121)', () => {
       const start = Date.now();
       const run = spawnSync(
         process.execPath,
-        [rootIndex, 'ci', 'bomb.yaml', '--snapshot-ref', 'snap.json', '--allow-empty'],
+        [rootIndex, 'ci', 'bomb.yaml', '--snapshot-file', 'snap.json', '--allow-empty'],
         { cwd: dir, encoding: 'utf8', timeout: 20_000 },
       );
       assert.ok(Date.now() - start < 15_000, 'must not hang on an alias bomb');
@@ -264,7 +264,7 @@ describe('symlinked targets cannot read outside the project (#121)', () => {
     try {
       const run = spawnSync(
         process.execPath,
-        [rootIndex, 'ci', '*.yaml', '--snapshot-ref', 'snap.json', '--format', 'json'],
+        [rootIndex, 'ci', '*.yaml', '--snapshot-file', 'snap.json', '--format', 'json'],
         { cwd: dir, encoding: 'utf8' },
       );
 
@@ -283,7 +283,7 @@ describe('symlinked targets cannot read outside the project (#121)', () => {
     try {
       const run = spawnSync(
         process.execPath,
-        [rootIndex, 'ci', 'leaked.yaml', '--snapshot-ref', 'snap.json'],
+        [rootIndex, 'ci', 'leaked.yaml', '--snapshot-file', 'snap.json'],
         { cwd: dir, encoding: 'utf8' },
       );
       assert.equal(run.status, 1);
@@ -298,7 +298,7 @@ describe('symlinked targets cannot read outside the project (#121)', () => {
     try {
       const run = spawnSync(
         process.execPath,
-        [rootIndex, 'ci', 'leaked.yaml', '--snapshot-ref', 'snap.json', '--fail-on', 'error'],
+        [rootIndex, 'ci', 'leaked.yaml', '--snapshot-file', 'snap.json', '--fail-on', 'error'],
         { cwd: dir, encoding: 'utf8', env: { ...process.env, FLECTO_ALLOW_SYMLINK_TARGETS: '1' } },
       );
       // The gate still fires on what it found (secret-key-changed is an error);
@@ -316,7 +316,7 @@ describe('symlinked targets cannot read outside the project (#121)', () => {
       symlinkSync(join(dir, 'real.yaml'), join(dir, 'alias.yaml'));
       const run = spawnSync(
         process.execPath,
-        [rootIndex, 'ci', 'alias.yaml', '--snapshot-ref', 'snap.json', '--fail-on', 'error'],
+        [rootIndex, 'ci', 'alias.yaml', '--snapshot-file', 'snap.json', '--fail-on', 'error'],
         { cwd: dir, encoding: 'utf8' },
       );
       assert.equal(run.status, 0, `an in-project link must still work:\n${run.stderr}`);
@@ -333,7 +333,7 @@ describe('symlinked targets cannot read outside the project (#121)', () => {
       // about it is a link escaping a repository.
       const run = spawnSync(
         process.execPath,
-        [rootIndex, 'ci', outside, '--snapshot-ref', 'snap.json', '--fail-on', 'changed'],
+        [rootIndex, 'ci', outside, '--snapshot-file', 'snap.json', '--fail-on', 'changed'],
         { cwd: dir, encoding: 'utf8' },
       );
       assert.doesNotMatch(run.stderr, /link out of the project/);
@@ -419,7 +419,7 @@ describe('prototype pollution from config file contents (#121)', () => {
 
       const run = spawnSync(
         process.execPath,
-        [rootIndex, 'ci', 'a.ini', 'b.yaml', '--snapshot-ref', 'snap.json', '--fail-on', 'error'],
+        [rootIndex, 'ci', 'a.ini', 'b.yaml', '--snapshot-file', 'snap.json', '--fail-on', 'error'],
         { cwd: dir, encoding: 'utf8' },
       );
 
@@ -578,7 +578,7 @@ describe('write destinations a pull request can redirect (#121)', () => {
     try {
       const run = spawnSync(
         process.execPath,
-        [rootIndex, 'ci', 'prod.yaml', '--snapshot-ref', 'snap.json', '--fail-on', 'error'],
+        [rootIndex, 'ci', 'prod.yaml', '--snapshot-file', 'snap.json', '--fail-on', 'error'],
         { cwd: dir, encoding: 'utf8' },
       );
       assert.equal(run.status, 1);
@@ -682,7 +682,7 @@ describe('the merge gate cannot be turned green from .flectorc (#121)', () => {
     return dir;
   }
 
-  const gate = ['ci', 'prod.yaml', '--snapshot-ref', 'snap.json', '--fail-on', 'error'];
+  const gate = ['ci', 'prod.yaml', '--snapshot-file', 'snap.json', '--fail-on', 'error'];
 
   test('the gate fails on the finding to begin with', () => {
     const dir = failingRepo(null);
@@ -955,8 +955,92 @@ describe('the baseline ref cannot be chosen or weaponized from .flectorc (#121)'
     const dir = repoWithHostileCommit(null);
     try {
       writeFileSync(join(dir, 'snap.json'), JSON.stringify({ state: { db: { pool: 500, tls: false } } }), 'utf8');
-      const run = runFlecto(dir, ['ci', 'app.yaml', '--snapshot-ref', 'snap.json']);
+      const run = runFlecto(dir, ['ci', 'app.yaml', '--snapshot-file', 'snap.json']);
       assert.equal(run.status, 0, run.stderr);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a ref name ending .json does not divert to a file, even when a real tag exists', () => {
+    // The third round of this finding. `release/v1.json` is a LEGAL git ref --
+    // git only forbids `..`, a trailing `.`, and a `.lock` suffix -- so an
+    // extension is a convention, not a grammar. Treating one as proof of
+    // path-ness let an attacker's committed file beat a resolvable tag of the
+    // same name, in a full clone, with no shallow-checkout involved.
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'flecto-sec-extref-')));
+    const git = (...args) => spawnSync('git', args, { cwd: dir, encoding: 'utf8' });
+    try {
+      git('init', '-q', '.');
+      git('config', 'user.email', 'test@example.com');
+      git('config', 'user.name', 'test');
+      git('config', 'commit.gpgsign', 'false');
+      writeFileSync(join(dir, 'app.yaml'), 'db:\n  pool: 5\n  tls: true\n', 'utf8');
+      git('add', '-A');
+      git('commit', '-qm', 'base');
+      const base = git('rev-parse', 'HEAD').stdout.trim();
+      writeFileSync(join(dir, 'app.yaml'), 'db:\n  pool: 500\n  tls: false\n', 'utf8');
+      // The shadow file matches the hostile tip, so if it is read the diff is
+      // genuinely empty and no --fail-on value would catch it.
+      writeFileSync(join(dir, 'v1.json'), JSON.stringify({ state: { db: { pool: 500, tls: false } } }), 'utf8');
+      git('add', '-A');
+      git('commit', '-qm', 'pull request');
+      git('tag', '-f', 'v1.json', base);
+
+      const run = runFlecto(dir, ['ci', 'app.yaml', '--snapshot-ref', 'v1.json']);
+      assert.equal(run.status, 1, 'the tag must win over the committed file');
+      assert.match(run.stdout, /"type": *"changed"/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a snapshot file that leaves the project through a link is refused', () => {
+    // The operator names an in-repo baseline; the pull request replaces it with
+    // a symlink, and the contents of any JSON file on the runner became the
+    // baseline and were printed as `removed` changes. Every other read in
+    // Flecto already had this check.
+    const outside = realpathSync(mkdtempSync(join(tmpdir(), 'flecto-sec-outside-')));
+    const dir = repoWithHostileCommit(null);
+    try {
+      writeFileSync(join(outside, 'SECRET.json'), JSON.stringify({ state: { token: 'ghp_SUPERSECRETVALUE' } }), 'utf8');
+      symlinkSync(join(outside, 'SECRET.json'), join(dir, 'baseline.json'));
+      for (const args of [
+        ['ci', 'app.yaml', '--snapshot-file', 'baseline.json'],
+        ['ci', 'app.yaml', '--snapshot-ref', './baseline.json'],
+      ]) {
+        const run = runFlecto(dir, args);
+        assert.equal(run.status, 1, args.join(' '));
+        assert.match(run.stderr, /link out of the project/);
+        assert.ok(!run.stdout.includes('ghp_SUPERSECRETVALUE'), 'and nothing from outside was printed');
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  test('an empty baseline value is refused rather than silently using the store', () => {
+    // An unset CI variable expands to "". Falling back to the local store there
+    // would compare against something the operator did not choose.
+    const dir = repoWithHostileCommit(null);
+    try {
+      const run = runFlecto(dir, ['ci', 'app.yaml', '--snapshot-file', '']);
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /empty value/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a relative snapshot path climbing out of the project is a path, not a commit range', () => {
+    // `..` is refused in a REF because it makes a commit range; the path
+    // decision has to happen first or `../snapshots/base.json` is misdiagnosed.
+    const dir = repoWithHostileCommit(null);
+    try {
+      const run = runFlecto(dir, ['ci', 'app.yaml', '--snapshot-ref', '../nope.json']);
+      assert.equal(run.status, 1);
+      assert.doesNotMatch(run.stderr, /commit range/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -153,7 +153,7 @@ describe('flecto ci --format sarif', () => {
     try {
       const run = spawnSync(
         process.execPath,
-        [rootIndex, 'ci', 'config.yaml', '--snapshot-ref', 'snap.json', '--format', 'sarif', '--fail-on', ''],
+        [rootIndex, 'ci', 'config.yaml', '--snapshot-file', 'snap.json', '--format', 'sarif', '--fail-on', ''],
         { cwd: dir, encoding: 'utf8' },
       );
       assert.equal(run.status, 0, run.stderr);
@@ -171,7 +171,7 @@ describe('flecto ci --format sarif', () => {
     try {
       const run = spawnSync(
         process.execPath,
-        [rootIndex, 'ci', 'config.yaml', '--snapshot-ref', 'snap.json', '--format', 'sarif', '--mask-secrets', '--fail-on', ''],
+        [rootIndex, 'ci', 'config.yaml', '--snapshot-file', 'snap.json', '--format', 'sarif', '--mask-secrets', '--fail-on', ''],
         { cwd: dir, encoding: 'utf8' },
       );
       assert.equal(run.status, 0, run.stderr);
@@ -187,7 +187,7 @@ describe('flecto ci --format sarif', () => {
     try {
       const run = spawnSync(
         process.execPath,
-        [rootIndex, 'ci', 'config.yaml', '--snapshot-ref', 'snap.json', '--format', 'nope'],
+        [rootIndex, 'ci', 'config.yaml', '--snapshot-file', 'snap.json', '--format', 'nope'],
         { cwd: dir, encoding: 'utf8' },
       );
       assert.equal(run.status, 1);

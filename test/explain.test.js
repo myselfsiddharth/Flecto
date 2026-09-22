@@ -439,7 +439,7 @@ test('flecto explain sends only the masked diff and labels the answer as model o
   const dir = fixtureProject();
   const provider = await startProvider(narrationReply);
   try {
-    const run = await runCli(['explain', 'prod.yaml', '--snapshot-ref', 'snapshot.json'], { cwd: dir, env: providerEnv(provider, dir) });
+    const run = await runCli(['explain', 'prod.yaml', '--snapshot-file', 'snapshot.json'], { cwd: dir, env: providerEnv(provider, dir) });
     assert.equal(run.status, 0, run.stderr);
     assert.equal(provider.requests.length, 1);
     const [request] = provider.requests;
@@ -461,7 +461,7 @@ test('flecto explain --dry-run prints the request and sends nothing', async () =
   const dir = fixtureProject();
   const provider = await startProvider(narrationReply);
   try {
-    const run = await runCli(['explain', 'prod.yaml', '--snapshot-ref', 'snapshot.json', '--dry-run', '--format', 'json'], { cwd: dir, env: providerEnv(provider, dir) });
+    const run = await runCli(['explain', 'prod.yaml', '--snapshot-file', 'snapshot.json', '--dry-run', '--format', 'json'], { cwd: dir, env: providerEnv(provider, dir) });
     assert.equal(run.status, 0, run.stderr);
     assert.equal(provider.requests.length, 0);
     const shown = JSON.parse(run.stdout);
@@ -478,7 +478,7 @@ test('flecto explain --dry-run prints the request and sends nothing', async () =
 test('flecto explain with no provider configured is a usage error', async () => {
   const dir = fixtureProject();
   try {
-    const run = await runCli(['explain', 'prod.yaml', '--snapshot-ref', 'snapshot.json'], { cwd: dir, env: {} });
+    const run = await runCli(['explain', 'prod.yaml', '--snapshot-file', 'snapshot.json'], { cwd: dir, env: {} });
     assert.equal(run.status, 1);
     assert.match(run.stderr, /no provider configured/u);
   } finally {
@@ -491,7 +491,7 @@ test('flecto explain ignores format and model declared in .flectorc for other co
   const provider = await startProvider(narrationReply);
   try {
     writeFileSync(join(dir, '.flectorc'), JSON.stringify({ defaults: { format: 'sarif', model: 'attacker-model', provider: 'openai' } }), 'utf8');
-    const run = await runCli(['explain', 'prod.yaml', '--snapshot-ref', 'snapshot.json'], { cwd: dir, env: providerEnv(provider, dir) });
+    const run = await runCli(['explain', 'prod.yaml', '--snapshot-file', 'snapshot.json'], { cwd: dir, env: providerEnv(provider, dir) });
     assert.equal(run.status, 0, run.stderr);
     assert.equal(JSON.parse(provider.requests[0].body).model, 'claude-opus-5');
   } finally {
@@ -504,7 +504,7 @@ test('ci --explain never changes the exit code, and stdout stays machine output'
   const dir = fixtureProject();
   const provider = await startProvider(narrationReply);
   try {
-    const failing = await runCli(['ci', 'prod.yaml', '--snapshot-ref', 'snapshot.json', '--explain'], { cwd: dir, env: providerEnv(provider, dir) });
+    const failing = await runCli(['ci', 'prod.yaml', '--snapshot-file', 'snapshot.json', '--explain'], { cwd: dir, env: providerEnv(provider, dir) });
     assert.equal(failing.status, 1, 'the gate still fails on a change');
     const [result] = JSON.parse(failing.stdout);
     assert.equal(result.envelope.schema_version, '2.0');
@@ -513,7 +513,7 @@ test('ci --explain never changes the exit code, and stdout stays machine output'
     const broken = await startProvider(() => ({ status: 500, json: { type: 'error', error: { type: 'api_error', message: 'boom' } } }));
     try {
       const passing = await runCli(
-        ['ci', 'prod.yaml', '--snapshot-ref', 'snapshot.json', '--explain', '--fail-on', ''],
+        ['ci', 'prod.yaml', '--snapshot-file', 'snapshot.json', '--explain', '--fail-on', ''],
         { cwd: dir, env: { ...providerEnv(broken, dir), FLECTO_EXPLAIN_CACHE_DIR: join(dir, 'other-cache') } },
       );
       assert.equal(passing.status, 0, 'a provider failure never fails the run');
@@ -531,7 +531,7 @@ test('ci --explain --format pr-comment puts the narration in the comment body', 
   const dir = fixtureProject();
   const provider = await startProvider(narrationReply);
   try {
-    const run = await runCli(['ci', 'prod.yaml', '--snapshot-ref', 'snapshot.json', '--explain', '--format', 'pr-comment'], { cwd: dir, env: providerEnv(provider, dir) });
+    const run = await runCli(['ci', 'prod.yaml', '--snapshot-file', 'snapshot.json', '--explain', '--format', 'pr-comment'], { cwd: dir, env: providerEnv(provider, dir) });
     assert.equal(run.status, 1);
     assert.match(run.stdout, /### Model-generated narration \(advisory\)\n/u);
     assert.match(run.stdout, /```text\n- pool size quadruples\n```/u);
@@ -547,7 +547,7 @@ test('.flectorc cannot switch narration on, from defaults or a profile', async (
   try {
     for (const rc of [{ defaults: { explain: true } }, { profiles: { ci: { explainDryRun: true } } }]) {
       writeFileSync(join(dir, '.flectorc'), JSON.stringify(rc), 'utf8');
-      const run = await runCli(['ci', 'prod.yaml', '--snapshot-ref', 'snapshot.json', '--profile', 'ci'], { cwd: dir, env: providerEnv(provider, dir) });
+      const run = await runCli(['ci', 'prod.yaml', '--snapshot-file', 'snapshot.json', '--profile', 'ci'], { cwd: dir, env: providerEnv(provider, dir) });
       assert.equal(run.status, 1);
       assert.match(run.stderr, /Refusing "explain(DryRun)?" declared in \.flectorc/u);
     }

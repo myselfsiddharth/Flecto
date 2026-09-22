@@ -14,7 +14,7 @@ This is that check ([#125]).
 The proof-of-concept from the advisory, run unchanged against a clean `npm ci`
 install of each released version. A `.flectorc` declaring
 `plugins: ["./evil-plugin.js"]`, a plugin that writes a marker file, and
-`flecto ci config.json --snapshot-ref snap.json` with **no** attacker-controlled
+`flecto ci config.json --snapshot-file snap.json` with **no** attacker-controlled
 flags. "Vulnerable" means the marker was written.
 
 | Version | `plugins` option exists | Exploit | Notes |
