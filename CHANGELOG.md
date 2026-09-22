@@ -72,6 +72,26 @@ The format is based on [Keep a Changelog], and this project adheres to
   untrusted-PR threat model. `--plugins` must be absolute paths. See
   [docs/editor.md](docs/editor.md).
 
+### Security
+
+- **BREAKING: pack-supplied regular expressions are compiled with RE2**
+  ([#121]). A policy pack is attacker input on an untrusted pull request --
+  `policies/*.json` is committed and `.flectorc` selects which packs run -- and
+  Node's engine backtracks, so `^(a+)+$` took **97 seconds** against a 44-character
+  value and grew exponentially. No in-process timeout could help: the
+  backtracking happens inside one uninterruptible call into the engine. Packs
+  outside `src/packs/` now use a linear-time engine (`re2js`, pure JS, no native
+  build), which answers the same pattern in 3 ms. The packs Flecto ships keep
+  the native engine. RE2 does not support lookaround, backreferences, `\uXXXX`
+  escapes, or `v`-flag set subtraction, so a pack using them now fails to load
+  with a message naming the rule; a few constructs also *match* differently, and
+  [docs/policy-packs.md](docs/policy-packs.md#regular-expressions-in-packs)
+  tables both sets.
+- **A pack regex with the `g` flag no longer fires on alternate files.** Packs
+  are cached and shared across every file in a run, and a `g` regex carries a
+  mutable `lastIndex` that `.test()` advances, so such a rule matched every
+  other value it saw.
+
 ### Fixed
 
 - **The shared snapshot store now refuses a Windows target on another drive or

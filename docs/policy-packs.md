@@ -412,7 +412,31 @@ is a regular operation:
 | Inline flags | `(?i)` | supported |
 | `i`, `m`, `s` flags | `pathFlags: "i"` | supported |
 
+| `\uXXXX`, `\cX` escapes | `\u0041` | **not supported** (RE2 spells it `\x{41}`) |
+
 A pack using an unsupported construct now fails to **load**, naming the rule,
 rather than working until someone hands it the wrong value. Negative lookahead
 is usually expressible as a separate rule with the positive form, or by
 inverting which side of the diff the rule matches on.
+
+### What behaves differently without failing
+
+These compile on both engines and **match different strings**, which is the more
+dangerous kind of difference — a rule that silently stops firing weakens a gate
+without telling anyone. Check a pack that uses any of them:
+
+| Pattern | Input | Native | RE2 | Effect |
+|---|---|---|---|---|
+| `\s` | non-breaking space, `\v` | matches | **no match** | a rule like `^\s*$` stops firing on exotic whitespace |
+| `.` | `\r` | no match | **matches** | fires more often |
+| `\p{L}` without the `u` flag | `abc` | no match | **matches** | fires more often |
+| `^.$` | `👍` | no match | **matches** | RE2 counts code points, native counts UTF-16 units |
+| `^abc$` with `m` | `x\rabc\ry` | matches | **no match** | RE2 does not treat a bare CR as a line end |
+
+`\d` and `\w` are ASCII-only in both and do not differ. Anchoring, alternation,
+case-insensitive matching (including `é`/`É` and `ß`/`ss`), and `pathFlags: "i"`
+all agree.
+
+Only one pattern in everything Flecto ships or documents fails under RE2 — the
+`github-actions` lookahead — and that pack keeps the native engine, so nothing
+shipped changes behaviour.

@@ -802,9 +802,12 @@ function compileClauseRegexes(clause, trusted = false) {
  * @returns {RegExp}
  */
 function pathRegexFor(match) {
-  // Packs loaded via loadPack() always carry a pre-compiled regex here; the
-  // fallback exists only so a pack built some other way (bypassing loadPack)
-  // still behaves exactly as it did before regex compilation was hoisted.
+  // Packs loaded via loadPack() always carry a pre-compiled regex here. The
+  // fallback covers a pack built some other way (bypassing loadPack), whose
+  // provenance is therefore unknown -- so it compiles as UNTRUSTED, which is
+  // the fail-safe direction but not what it did before RE2. Such a pack using
+  // lookahead now throws during evaluation rather than at load, and each call
+  // recompiles. Both are acceptable for a path no shipped caller takes.
   return match._pathRegex ?? compilePattern(match.path, match.pathFlags ?? '');
 }
 

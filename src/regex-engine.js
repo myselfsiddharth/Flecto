@@ -121,7 +121,14 @@ export function checkPattern(pattern, flags = '', options = {}) {
  * @returns {string}
  */
 export function explainPatternFailure(reason) {
-  if (/Perl syntax|invalid escape sequence|lookbehind/i.test(reason)) {
+  // Order matters: an escape failure also contains "invalid escape sequence",
+  // and telling someone to remove lookahead from a pattern that has none is
+  // worse than saying nothing.
+  if (/invalid escape sequence: `\\[ucC]/.test(reason)) {
+    return `${reason}. RE2 spells a unicode escape \`\\x{41}\`, not \`\\u0041\`, and has no`
+      + ' control-character escape. Policy packs outside src/packs/ are matched with RE2.';
+  }
+  if (/Perl syntax|invalid escape sequence|lookbehind|invalid named capture/i.test(reason)) {
     return `${reason}. Policy packs outside src/packs/ are matched with RE2, which does not`
       + ' support lookahead, lookbehind, or backreferences -- they are what make backtracking'
       + ' unbounded, and a pack is attacker-controlled on an untrusted pull request. Rewrite the'
