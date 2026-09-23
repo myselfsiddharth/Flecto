@@ -41,7 +41,7 @@ import { assertTargetContained } from './config.js';
  * secrets is a feature request to answer with "no".
  */
 
-import { createHash } from 'crypto';
+import { createHmac, randomBytes } from 'crypto';
 
 /**
  * The complete set of commands this binary may run. Anything not here cannot be
@@ -54,8 +54,12 @@ import { createHash } from 'crypto';
  * @type {Record<string, { tool: string, verbs: string[] }>}
  */
 const ALLOWED_COMMANDS = {
-  kubectl: { tool: 'kubectl', verbs: ['get'] },
-  aws: { tool: 'aws', verbs: ['ssm'] },
+  // `verbAt` is which argv position carries the verb: `kubectl get …` puts it
+  // first, while `aws ssm get-parameters-by-path …` names a *service* first.
+  // Gating position 0 for aws would have allowed `ssm put-parameter` through
+  // the check whose docstring calls it "the assertion that keeps it that way".
+  kubectl: { tool: 'kubectl', verbAt: 0, verbs: ['get'] },
+  aws: { tool: 'aws', verbAt: 1, verbs: ['get-parameters-by-path'], services: ['ssm'] },
 };
 
 /** Kubernetes names, per RFC 1123: the pattern the API server itself enforces. */
@@ -73,7 +77,8 @@ const SSM_PATH_RE = /^\/(?!.*\.\.)[A-Za-z0-9_.\-/]*$/;
  * @typedef {{
  *   kind: 'configmap' | 'secret' | 'ssm' | 'tfstate',
  *   label: string,
- *   sensitive: boolean
+ *   sensitive: boolean,
+ *   shapedKeys: Set<string>
  * }} SourceMeta
  * @typedef {{ state: Record<string, unknown>, meta: SourceMeta }} LiveState
  */
@@ -107,10 +112,13 @@ function assertComponent(value, pattern, what) {
 function readOnly(name, args) {
   const entry = ALLOWED_COMMANDS[name];
   if (!entry) throw new Error(`drift: ${name} is not an allowed command`);
-  if (!entry.verbs.includes(args[0])) {
+  if (entry.services && !entry.services.includes(args[0])) {
+    throw new Error(`drift: "${args[0]}" is not an allowed ${name} service`);
+  }
+  if (!entry.verbs.includes(args[entry.verbAt])) {
     // Unreachable from any URI -- the verb is a literal at each call site. This
     // is the assertion that keeps it that way.
-    throw new Error(`drift: "${args[0]}" is not a read-only verb for ${name}`);
+    throw new Error(`drift: "${args[entry.verbAt]}" is not a read-only verb for ${name}`);
   }
   const run = spawnSync(entry.tool, args, {
     encoding: 'utf8',
@@ -142,9 +150,18 @@ function readOnly(name, args) {
  * @param {string} value
  * @returns {string}
  */
+const SHAPE_KEY = randomBytes(32);
+
 function shapeOf(value) {
-  const digest = createHash('sha256').update(value, 'utf8').digest('hex').slice(0, 12);
-  return `<${value.length} bytes, sha256:${digest}>`;
+  // Keyed with a per-invocation random key, not a bare digest. Both sides of
+  // the comparison are hashed in the same process, so drift detection is
+  // unaffected -- but a bare truncated SHA-256 printed into a CI log is an
+  // offline oracle: 48 bits is trivially brute-forced for a low-entropy secret,
+  // and being unsalted it is a stable cross-run, cross-org identifier for a
+  // shared credential. Keyed, the printed digest is worth nothing to anyone
+  // holding the log.
+  const digest = createHmac('sha256', SHAPE_KEY).update(value, 'utf8').digest('hex').slice(0, 12);
+  return `<${value.length} bytes, digest:${digest}>`;
 }
 
 /**
@@ -154,8 +171,45 @@ function shapeOf(value) {
  */
 function shapesOnly(data) {
   return Object.fromEntries(
-    Object.entries(data).map(([key, value]) => [key, shapeOf(String(value ?? ''))]),
+    Object.entries(data).map(([key, value]) => [key, shapeOf(stableString(value))]),
   );
+}
+
+/**
+ * A value as a string, without collapsing structure.
+ *
+ * `String(value)` turns every object into `"[object Object]"`, so two different
+ * secrets produced an identical shape and a rotation between them was
+ * invisible -- the one thing shape comparison exists to show.
+ * @param {unknown} value
+ * @returns {string}
+ */
+function stableString(value) {
+  if (typeof value === 'string') return value;
+  if (value === null || value === undefined) return '';
+  return JSON.stringify(value);
+}
+
+/**
+ * Parse a tool's stdout as JSON without quoting it back on failure.
+ *
+ * `JSON.parse`'s own message quotes the bytes it choked on, and those bytes are
+ * a response from a live secret store. `readTerraformState` already guards this
+ * deliberately; the same reasoning applies to every reader.
+ * @param {string} raw
+ * @param {string} tool
+ * @returns {any}
+ */
+function parseToolJson(raw, tool) {
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed === null || typeof parsed !== 'object') {
+      throw new Error('not an object');
+    }
+    return parsed;
+  } catch {
+    throw new Error(`drift: ${tool} did not return the JSON document expected`);
+  }
 }
 
 /**
@@ -203,7 +257,7 @@ function readKubernetes(rest) {
     'get', kind, name, '--namespace', namespace, '--output', 'json',
   ]);
   /** @type {{ data?: Record<string, string>, stringData?: Record<string, string> }} */
-  const parsed = JSON.parse(raw);
+  const parsed = parseToolJson(raw, 'kubectl');
   const data = { ...(parsed.data ?? {}), ...(parsed.stringData ?? {}) };
 
   if (kind === 'secret') {
@@ -211,12 +265,22 @@ function readKubernetes(rest) {
     // the plaintext is never materialized at all.
     return {
       state: shapesOnly(data),
-      meta: { kind: 'secret', label: `k8s secret ${namespace}/${name}`, sensitive: true },
+      meta: {
+        kind: 'secret',
+        label: `k8s secret ${namespace}/${name}`,
+        sensitive: true,
+        shapedKeys: new Set(Object.keys(data)),
+      },
     };
   }
   return {
     state: { ...data },
-    meta: { kind: 'configmap', label: `k8s configmap ${namespace}/${name}`, sensitive: false },
+    meta: {
+      kind: 'configmap',
+      label: `k8s configmap ${namespace}/${name}`,
+      sensitive: false,
+      shapedKeys: new Set(),
+    },
   };
 }
 
@@ -231,28 +295,38 @@ function readKubernetes(rest) {
  */
 function readSsm(rest) {
   const path = rest.startsWith('/') ? rest : `/${rest}`;
+  if (path === '/') {
+    // `--path / --recursive` is every parameter in the account. One typo
+    // (`ssm://`) would read another team's namespace, which is the opposite of
+    // the one-named-source-per-invocation rule this tool is built on.
+    throw new Error(
+      'drift: ssm:// needs a parameter path, e.g. ssm:///app/prod.'
+      + ' Reading from the account root would fetch every parameter there.',
+    );
+  }
   assertComponent(path, SSM_PATH_RE, 'parameter path');
 
   const raw = readOnly('aws', [
     'ssm', 'get-parameters-by-path', '--path', path, '--recursive', '--output', 'json',
   ]);
   /** @type {{ Parameters?: Array<{ Name: string, Value: string, Type: string }> }} */
-  const parsed = JSON.parse(raw);
+  const parsed = parseToolJson(raw, 'aws');
   /** @type {Record<string, unknown>} */
-  const state = {};
-  let sawSecure = false;
+  const state = Object.create(null);
+  /** @type {Set<string>} */
+  const shapedKeys = new Set();
   for (const parameter of parsed.Parameters ?? []) {
     const key = String(parameter.Name).slice(path.length).replace(/^\//, '') || parameter.Name;
     if (parameter.Type === 'SecureString') {
-      sawSecure = true;
-      state[key] = shapeOf(String(parameter.Value ?? ''));
+      shapedKeys.add(key);
+      state[key] = shapeOf(stableString(parameter.Value));
     } else {
       state[key] = parameter.Value;
     }
   }
   return {
     state,
-    meta: { kind: 'ssm', label: `ssm ${path}`, sensitive: sawSecure },
+    meta: { kind: 'ssm', label: `ssm ${path}`, sensitive: shapedKeys.size > 0, shapedKeys },
   };
 }
 
@@ -286,21 +360,29 @@ function readTerraformState(rest) {
     // slice of whatever the file actually was.
     throw new Error(`drift: "${rest}" is not valid terraform state JSON`);
   }
+  // Built with fromEntries rather than assignment, so a `__proto__` output is
+  // an ordinary own key: kept and visible in the diff, never reaching
+  // Object.prototype. The three readers now agree on this rule.
   /** @type {Record<string, unknown>} */
-  const state = {};
-  let sawSensitive = false;
+  const state = Object.create(null);
+  /** @type {Set<string>} */
+  const shapedKeys = new Set();
   for (const [key, output] of Object.entries(parsed.outputs ?? {})) {
-    if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue;
     if (output?.sensitive) {
-      sawSensitive = true;
-      state[key] = shapeOf(JSON.stringify(output.value ?? null));
+      shapedKeys.add(key);
+      state[key] = shapeOf(stableString(output.value));
     } else {
       state[key] = output?.value;
     }
   }
   return {
     state,
-    meta: { kind: 'tfstate', label: `terraform state ${rest}`, sensitive: sawSensitive },
+    meta: {
+      kind: 'tfstate',
+      label: `terraform state ${rest}`,
+      sensitive: shapedKeys.size > 0,
+      shapedKeys,
+    },
   };
 }
 

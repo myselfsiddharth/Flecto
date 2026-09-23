@@ -33,9 +33,10 @@ import { createRequire } from 'module';
 import { resolve } from 'path';
 import { diffTrees } from './src/differ.js';
 import { assertTargetContained } from './src/config.js';
+import { documentKeysOf } from './src/documents.js';
 import { parseFile } from './src/parser.js';
 import { renderDiff, renderError, renderInfo, renderNote } from './src/renderer.js';
-import { readLiveState } from './src/drift-sources.js';
+import { readLiveState, shapeOf } from './src/drift-sources.js';
 
 const require = createRequire(import.meta.url);
 const { version } = require('./package.json');
@@ -52,40 +53,70 @@ const { version } = require('./package.json');
  * @returns {unknown}
  */
 function declaredComparable(declared) {
-  if (declared && typeof declared === 'object' && !Array.isArray(declared)) {
-    const record = /** @type {Record<string, unknown>} */ (declared);
-    if (record.data && typeof record.data === 'object' && !Array.isArray(record.data)) {
-      return record.data;
-    }
+  if (!declared || typeof declared !== 'object' || Array.isArray(declared)) return declared;
+  let record = /** @type {Record<string, unknown>} */ (declared);
+
+  // A manifest carrying apiVersion + kind + metadata.name is wrapped by the
+  // parser under a synthetic `Kind/ns/name` document key, so the `data` block
+  // sits one level down. Looking only at the top level found nothing, and the
+  // documented headline case -- a committed ConfigMap against an identical live
+  // one -- reported the whole manifest as drift and exited 1 forever.
+  const documents = documentKeysOf(declared) ?? [];
+  if (documents.length === 1 && typeof record[documents[0]] === 'object' && record[documents[0]] !== null) {
+    record = /** @type {Record<string, unknown>} */ (record[documents[0]]);
   }
-  return declared;
+
+  if (record.data && typeof record.data === 'object' && !Array.isArray(record.data)) {
+    return record.data;
+  }
+  if (documents.length > 1) {
+    throw new Error(
+      `drift: ${documents.length} documents in this file, and a live source is one object.`
+      + ' Point drift at a file holding a single manifest.',
+    );
+  }
+  return record;
 }
 
 /**
- * Compare declared values against live ones, shaping the declared side when the
- * live side is shape-only.
+ * Compare declared values against live ones, shaping the declared side for
+ * exactly the keys the live side shaped.
  *
- * Comparing a plaintext declared value against a live *shape* would report
- * every key as changed, every run, which is noise that trains people to ignore
- * the tool. So when the source is sensitive, both sides are reduced to shapes
- * and the comparison is honest about what it is: same length and digest, or
- * not.
+ * Comparing a plaintext declared value against a live *shape* would report that
+ * key as changed on every run, which is noise that trains people to ignore the
+ * tool. So a shaped key is shaped on both sides, and every other key is
+ * compared by value.
  * @param {unknown} declared
  * @param {Record<string, unknown>} live
- * @param {boolean} sensitive
+ * @param {Set<string>} shapedKeys the live keys compared by shape
  * @param {(v: string) => string} shape
  * @returns {{ before: unknown, after: unknown }}
  */
-function alignForComparison(declared, live, sensitive, shape) {
+function alignForComparison(declared, live, shapedKeys, shape) {
   const comparable = declaredComparable(declared);
-  if (!sensitive || !comparable || typeof comparable !== 'object' || Array.isArray(comparable)) {
+  if (shapedKeys.size === 0 || !comparable || typeof comparable !== 'object' || Array.isArray(comparable)) {
     return { before: comparable, after: live };
   }
+  // Per key, not per source. Shaping the whole declared side because *one*
+  // value was sensitive compared a shaped declared value against a raw live
+  // one, so every non-secret key drifted on every run -- the "trains people to
+  // ignore the tool" failure this function exists to prevent.
   const shaped = Object.fromEntries(
     Object.entries(/** @type {Record<string, unknown>} */ (comparable))
-      .map(([key, value]) => [key, shape(String(value ?? ''))]),
+      .map(([key, value]) => [key, shapedKeys.has(key) ? shape(stableString(value)) : value]),
   );
   return { before: shaped, after: live };
+}
+
+/**
+ * A value as a string, matching how the live side stringifies before hashing.
+ * @param {unknown} value
+ * @returns {string}
+ */
+function stableString(value) {
+  if (typeof value === 'string') return value;
+  if (value === null || value === undefined) return '';
+  return JSON.stringify(value);
 }
 
 program
@@ -113,12 +144,7 @@ program
       const declared = parseFile(filepath);
 
       const { state: live, meta } = readLiveState(opts.against);
-      const { before, after } = alignForComparison(
-        declared,
-        live,
-        meta.sensitive,
-        (await import('./src/drift-sources.js')).shapeOf,
-      );
+      const { before, after } = alignForComparison(declared, live, meta.shapedKeys, shapeOf);
 
       // Declared is `before`, live is `after`, so the verbs read the way the
       // question is asked: what has the running system done to what we wrote.
@@ -138,7 +164,11 @@ program
       } else if (changes.length === 0) {
         renderInfo(`No drift: ${filepath} matches ${meta.label}.`);
       } else {
-        renderDiff(filepath, changes, { baseline: meta.label });
+        // Masked, like every other render path in Flecto. Drift prints values
+        // read out of a live system into a CI log, so it needs this more than
+        // the others, not less -- a ConfigMap value under a secret-shaped key
+        // is still a secret.
+        renderDiff(filepath, changes, { maskSecrets: true, baseline: meta.label });
         if (meta.sensitive) {
           renderNote(
             'Values from a secret store are compared by shape (length and digest), never by value.',

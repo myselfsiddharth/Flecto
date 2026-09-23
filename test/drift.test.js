@@ -20,6 +20,7 @@ function projectWithStubs(answers = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'flecto-drift-'));
   mkdirSync(join(dir, 'bin'), { recursive: true });
   const configmap = JSON.stringify(answers.configmap ?? { data: { pool_size: '50', tls: 'false' } });
+  const aws = JSON.stringify(answers.aws ?? { Parameters: [] });
   const secret = JSON.stringify(answers.secret ?? { data: { db_password: 'bGl2ZQ==' } });
   writeFileSync(join(dir, 'bin', 'kubectl'),
     '#!/bin/sh\n'
@@ -29,6 +30,8 @@ function projectWithStubs(answers = {}) {
     + `  *secret*) echo '${secret}' ;;\n`
     + 'esac\n', 'utf8');
   chmodSync(join(dir, 'bin', 'kubectl'), 0o755);
+  writeFileSync(join(dir, 'bin', 'aws'), `#!/bin/sh\necho '${aws}'\n`, 'utf8');
+  chmodSync(join(dir, 'bin', 'aws'), 0o755);
   writeFileSync(join(dir, 'app.yaml'), 'data:\n  pool_size: "5"\n  tls: "true"\n', 'utf8');
   return dir;
 }
@@ -123,7 +126,7 @@ describe('a value from a secret store is never printed', () => {
       assert.equal(report.comparison, 'shape-only');
       assert.ok(!run.stdout.includes('cm90YXRlZA'), 'the live value leaked');
       assert.ok(!run.stdout.includes('declared-value'), 'the declared value leaked');
-      assert.match(run.stdout, /sha256:/, 'but a rotation is still visible as a change');
+      assert.match(run.stdout, /digest:/, 'but a rotation is still visible as a change');
       assert.equal(report.drifted, true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -151,10 +154,110 @@ describe('a value from a secret store is never printed', () => {
 
   test('a shape carries length and digest, and nothing of the value', () => {
     const shape = shapeOf('hunter2');
-    assert.match(shape, /^<7 bytes, sha256:[0-9a-f]{12}>$/);
+    assert.match(shape, /^<7 bytes, digest:[0-9a-f]{12}>$/);
     assert.ok(!shape.includes('hunter'));
     assert.notEqual(shapeOf('a'), shapeOf('b'));
     assert.equal(shapeOf('same'), shapeOf('same'), 'and is stable, or every run reports drift');
+  });
+});
+
+describe('what the review found, kept as tests', () => {
+  test('a manifest compared against an identical live ConfigMap reports no drift', () => {
+    // The documented headline case. The parser wraps a manifest carrying
+    // apiVersion + kind + metadata.name under a synthetic document key, so the
+    // `data` block sits a level below where the comparison looked -- and every
+    // such run reported the whole manifest as drift and exited 1 forever.
+    const live = { pool_size: '5', tls: 'true' };
+    const dir = projectWithStubs({
+      configmap: { apiVersion: 'v1', kind: 'ConfigMap', metadata: { name: 'api', namespace: 'prod' }, data: live },
+    });
+    try {
+      writeFileSync(join(dir, 'cm.yaml'),
+        'apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: api\n  namespace: prod\n'
+        + 'data:\n  pool_size: "5"\n  tls: "true"\n', 'utf8');
+      const run = runDrift(dir, ['cm.yaml', '--against', 'k8s://prod/configmap/api', '--fail-on-drift']);
+      assert.equal(run.status, 0, run.stdout + run.stderr);
+      assert.match(run.stdout, /No drift/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a live value under a secret-shaped key is masked, like every other output path', () => {
+    // drift was the only render path in Flecto with no masking -- and it is the
+    // one printing values read out of a live system into a CI log.
+    const dir = projectWithStubs({ configmap: { data: { db_password: 'live-plaintext-pw' } } });
+    try {
+      writeFileSync(join(dir, 'cm.yaml'), 'data:\n  db_password: "old-pw"\n', 'utf8');
+      const run = runDrift(dir, ['cm.yaml', '--against', 'k8s://prod/configmap/api']);
+      assert.ok(!run.stdout.includes('live-plaintext-pw'), `leaked: ${run.stdout}`);
+      assert.match(run.stdout, /\*\*\*/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('ssm:// without a path is refused rather than reading the whole account', () => {
+    const dir = projectWithStubs();
+    try {
+      const run = runDrift(dir, ['app.yaml', '--against', 'ssm://']);
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /needs a parameter path/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('one SecureString does not make every plain parameter look changed', () => {
+    // Shaping was decided per *source*, so a single sensitive value shaped the
+    // whole declared side and every non-secret key drifted on every run.
+    const dir = projectWithStubs({
+      aws: {
+        Parameters: [
+          { Name: '/app/region', Value: 'us-east-1', Type: 'String' },
+          { Name: '/app/db_pw', Value: 'enc', Type: 'SecureString' },
+        ],
+      },
+    });
+    try {
+      writeFileSync(join(dir, 'ssm.yaml'), 'region: us-east-1\ndb_pw: enc\n', 'utf8');
+      const run = runDrift(dir, ['ssm.yaml', '--against', 'ssm:///app', '--format', 'json']);
+      assert.equal(run.status, 0, run.stderr);
+      assert.equal(JSON.parse(run.stdout).drifted, false, run.stdout);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('two different secret values do not collapse to one shape', () => {
+    // String(value) turned every object into "[object Object]", so a rotation
+    // between two structured secrets was invisible.
+    assert.notEqual(shapeOf(JSON.stringify({ a: 1 })), shapeOf(JSON.stringify({ b: 2 })));
+  });
+
+  test('the printed digest is keyed, so a log does not carry an offline oracle', () => {
+    // An unsalted truncated SHA-256 of a low-entropy secret is brute-forceable
+    // from the log alone, and is a stable cross-run identifier. Both sides are
+    // hashed in one process, so keying costs nothing.
+    const run = spawnSync(process.execPath, ['-e',
+      "import('./src/drift-sources.js').then(m => process.stdout.write(m.shapeOf('hunter2')))"],
+    { encoding: 'utf8' });
+    assert.match(run.stdout, /^<7 bytes, digest:[0-9a-f]{12}>$/);
+    assert.notEqual(run.stdout, shapeOf('hunter2'), 'a different process must produce a different digest');
+  });
+
+  test('a tool answering with non-JSON does not have its bytes echoed', () => {
+    const dir = projectWithStubs();
+    try {
+      writeFileSync(join(dir, 'bin', 'kubectl'), '#!/bin/sh\necho "## leaked-looking header"\n', 'utf8');
+      chmodSync(join(dir, 'bin', 'kubectl'), 0o755);
+      const run = runDrift(dir, ['app.yaml', '--against', 'k8s://prod/configmap/api']);
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /did not return the JSON document expected/);
+      assert.ok(!run.stderr.includes('leaked-looking'), run.stderr);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -190,7 +293,7 @@ describe('terraform state is read narrowly', () => {
     try {
       const run = runDrift(dir, ['app.yaml', '--against', `tfstate://${join(dir, 'state.json')}`, '--format', 'json']);
       assert.ok(!run.stdout.includes('supersecret'));
-      assert.match(run.stdout, /sha256:/);
+      assert.match(run.stdout, /digest:/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

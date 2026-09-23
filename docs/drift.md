@@ -87,7 +87,7 @@ and a truncated digest — never by value:
 
 ```
 config/secrets.yaml — 1 change from k8s secret production/creds:
-  ~ db_password: "<11 bytes, sha256:f75778f7425b>" → "<16 bytes, sha256:7f1413226447>"
+  ~ db_password: "<11 bytes, digest:f75778f7425b>" → "<16 bytes, digest:7f1413226447>"
 ```
 
 A rotation is still visible, which is the entire point of drift detection, and
@@ -95,8 +95,26 @@ the plaintext never enters a change event, a report, or a terminal. SSM is read
 **without** `--with-decryption`, so a SecureString's plaintext never leaves AWS
 at all.
 
+The digest is **keyed with a random key generated per invocation**, not a bare
+hash. Both sides are hashed in the same process, so drift detection is
+unaffected — but a bare truncated SHA-256 written into a CI log would be an
+offline oracle for a low-entropy secret, and unsalted it would be a stable
+identifier for a shared credential across runs and organizations. Keyed, the
+printed digest is worth nothing to anyone holding the log. It also means
+digests are **not comparable between runs** — only within one.
+
+Shaping is decided **per key**, not per source. A single SecureString in a path
+of otherwise-plain parameters does not make the plain ones look changed.
+
 **There is no flag to turn this off**, because a flag that prints production
 secrets is a feature request whose answer is no.
+
+## Output is masked
+
+Drift output goes through the same secret masking as every other Flecto render
+path. A ConfigMap is not a secret store, but a value under a key named
+`db_password` is still a credential, and this is the one command printing
+values read out of a live system into a CI log.
 
 ## Terraform state
 
@@ -124,4 +142,6 @@ consumer never has to guess whether a value in the report is real or a digest.
 - **No credential handling.** See above.
 - **No secret values.** See above.
 - **No cluster-wide or account-wide scan.** One named source per invocation, so
-  the blast radius of a mistake is one ConfigMap.
+  the blast radius of a mistake is one ConfigMap. `ssm://` with no path is
+  refused rather than reading from the account root, because one typo should
+  not fetch another team's parameters.
