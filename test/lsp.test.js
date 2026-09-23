@@ -443,10 +443,13 @@ describe('flecto lsp', () => {
     // can be slow -- so it is exercised through a plugin now that a pack regex
     // can no longer hang.
     const dir = repo({
-      'hang.mjs': 'import { existsSync, writeFileSync } from \'fs\';\n'
-      + 'const latch = new URL(\'./hung.marker\', import.meta.url);\n'
-      + 'export function evaluate() {\n'
-      + '  if (!existsSync(latch)) { writeFileSync(latch, \'1\'); const end = Date.now() + 60000; while (Date.now() < end) {} }\n'
+      'hang.mjs': 'export function evaluate(changes) {\n'
+      + '  // Hangs only for a document carrying the marker, so the recovery run\n'
+      + '  // is fast. Keyed on content rather than a disk latch: the latch file\n'
+      + '  // did not hold on Windows, and content needs no filesystem at all.\n'
+      + '  if (JSON.stringify(changes).includes("HANGME")) {\n'
+      + '    const end = Date.now() + 60000; while (Date.now() < end) {}\n'
+      + '  }\n'
       + '  return [];\n'
       + '}\n',
     });
@@ -455,7 +458,7 @@ describe('flecto lsp', () => {
       const docUri = pathToFileURL(join(dir, 'prod.yaml')).href;
       server.send({ id: 1, method: 'initialize', params: { rootUri: pathToFileURL(dir).href } });
       await server.client.next((m) => m.id === 1);
-      server.send({ method: 'textDocument/didOpen', params: { textDocument: { uri: docUri, languageId: 'yaml', version: 1, text: `db:\n  pool_size: 5\nx: ${'a'.repeat(40)}!\n` } } });
+      server.send({ method: 'textDocument/didOpen', params: { textDocument: { uri: docUri, languageId: 'yaml', version: 1, text: 'db:\n  pool_size: 5\nx: HANGME\n' } } });
       const hung = await server.client.next(diagnosticsFor(docUri, 1), 15000);
       assert.equal(hung.params.diagnostics[0].code, 'timeout');
 
@@ -488,10 +491,13 @@ describe('flecto lsp', () => {
 
   test('the job after a timed-out one runs on a fresh worker and is not blamed for the old one exiting', async () => {
     const dir = repo({
-      'hang.mjs': 'import { existsSync, writeFileSync } from \'fs\';\n'
-      + 'const latch = new URL(\'./hung.marker\', import.meta.url);\n'
-      + 'export function evaluate() {\n'
-      + '  if (!existsSync(latch)) { writeFileSync(latch, \'1\'); const end = Date.now() + 60000; while (Date.now() < end) {} }\n'
+      'hang.mjs': 'export function evaluate(changes) {\n'
+      + '  // Hangs only for a document carrying the marker, so the recovery run\n'
+      + '  // is fast. Keyed on content rather than a disk latch: the latch file\n'
+      + '  // did not hold on Windows, and content needs no filesystem at all.\n'
+      + '  if (JSON.stringify(changes).includes("HANGME")) {\n'
+      + '    const end = Date.now() + 60000; while (Date.now() < end) {}\n'
+      + '  }\n'
       + '  return [];\n'
       + '}\n',
     });
@@ -499,7 +505,7 @@ describe('flecto lsp', () => {
     try {
       const path = join(dir, 'prod.yaml');
       const settings = { plugins: [join(dir, 'hang.mjs')] };
-      const hung = await executor.run({ root: dir, path, text: 'x: anything\n', settings });
+      const hung = await executor.run({ root: dir, path, text: 'x: HANGME\n', settings });
       assert.equal(hung.timedOut, true);
       // Started at once, before the terminated worker has finished exiting.
       const next = await executor.run({ root: dir, path, text: 'x: fine\n', settings });
