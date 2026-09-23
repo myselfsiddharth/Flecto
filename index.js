@@ -2,7 +2,7 @@
 
 import { program } from 'commander';
 import { readFileSync, writeFileSync, mkdirSync, existsSync, realpathSync } from 'fs';
-import { resolve, relative, dirname, join, isAbsolute } from 'path';
+import { resolve, relative, dirname, basename, join, isAbsolute } from 'path';
 import { fileURLToPath } from 'url';
 import { execFileSync } from 'child_process';
 import chalk from 'chalk';
@@ -360,7 +360,41 @@ function gitRepoRelativePath(filePath) {
   const top = execFileSync('git', ['-C', dirname(filePath), 'rev-parse', '--show-toplevel'], {
     encoding: 'utf8',
   }).trim();
-  return relative(canonicalPath(top), canonicalPath(filePath)).replaceAll('\\', '/');
+  // Canonicalize the *directory* and keep the name as written. Canonicalizing
+  // the file itself resolved its final symlink, so the path handed to
+  // `git show` was the link's destination rather than the path the operator
+  // gated -- and a pull request that replaced the gated file with a link to any
+  // other file unchanged in the baseline got `before == after`, a genuinely
+  // empty diff that no --fail-on value catches. Every reason the comment above
+  // gives for canonicalizing (Windows 8.3 and case, the macOS /tmp and /var
+  // links) is a property of directories, so none of it is lost.
+  const nominal = join(canonicalPath(dirname(filePath)), basename(filePath));
+  return relative(canonicalPath(top), nominal).replaceAll('\\', '/');
+}
+
+/**
+ * Is the entry at this path, in this commit, a symbolic link?
+ *
+ * Git stores a link as mode 120000 whose blob is the *target path*, so reading
+ * one as a config file yields the target string rather than any configuration.
+ * That is a baseline Flecto cannot honestly compare against, and saying so
+ * beats emitting a diff between a filename and a document.
+ * @param {string} commit
+ * @param {string} rel
+ * @param {string} dir
+ * @returns {boolean}
+ */
+function baselineEntryIsSymlink(commit, rel, dir) {
+  try {
+    const entry = execFileSync(
+      'git',
+      ['-C', dir, 'ls-tree', '--format=%(objectmode)', '--end-of-options', commit, '--', rel],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
+    ).trim();
+    return entry === '120000';
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -395,6 +429,16 @@ function canonicalPath(path) {
   }
 }
 
+function gitFailureReason(err) {
+  if (err?.code === 'ENOENT') return 'git is not installed or not on PATH';
+  if (err?.status === 128) return 'this is not a git repository';
+  // The most likely remaining cause by far: `--end-of-options` arrived in git
+  // 2.24 (2019), and an older git rejects it as an unknown option. Naming a
+  // version someone can check beats printing the raw spawn failure.
+  return 'git rejected the command -- Flecto needs git 2.24 or newer'
+    + ` (${String(err?.message ?? 'unknown error').split('\n')[0]})`;
+}
+
 /**
  * Resolve a ref to the single commit it names, or null when it names none.
  *
@@ -412,16 +456,6 @@ function canonicalPath(path) {
  * @param {string} dir a directory inside the repository
  * @returns {string | null} the commit SHA, or null when `ref` is not a revision
  */
-function gitFailureReason(err) {
-  if (err?.code === 'ENOENT') return 'git is not installed or not on PATH';
-  if (err?.status === 128) return 'this is not a git repository';
-  // The most likely remaining cause by far: `--end-of-options` arrived in git
-  // 2.24 (2019), and an older git rejects it as an unknown option. Naming a
-  // version someone can check beats printing the raw spawn failure.
-  return 'git rejected the command -- Flecto needs git 2.24 or newer'
-    + ` (${String(err?.message ?? 'unknown error').split('\n')[0]})`;
-}
-
 function resolveGitCommit(ref, dir) {
   try {
     const out = execFileSync(
@@ -485,6 +519,13 @@ function isExplicitPath(value) {
 }
 
 function readSnapshotStateFromRef(filePath, snapshotRef, store, snapshotFile) {
+  if (snapshotRef === '') {
+    // The same unset-CI-variable case readSnapshotFile refuses. Falling back to
+    // the store here would compare against something the operator did not
+    // choose -- and on an untrusted pull request a committed shared store is
+    // something the change under review wrote.
+    throw new Error('--snapshot-ref was given an empty value');
+  }
   // `--snapshot-file` is the unambiguous form: a path, never a revision. It
   // exists because overloading one flag with both is what made an
   // attacker-committed file able to stand in for the operator's baseline.
@@ -535,6 +576,13 @@ function readSnapshotStateFromRef(filePath, snapshotRef, store, snapshotFile) {
   }
 
   const rel = gitRepoRelativePath(filePath);
+  if (baselineEntryIsSymlink(commit, rel, repoDir)) {
+    throw new Error(
+      `"${rel}" is a symbolic link in ${ref}, so the baseline there is a path, not a configuration.`
+      + ' Point --snapshot-ref at a revision where it is a regular file, or gate the file the link'
+      + ' resolves to.',
+    );
+  }
   // `-C repoDir` matches where the revision was resolved, and the operand is a
   // SHA this process produced rather than any string the attacker wrote.
   // maxBuffer matches the LSP's reader: a megabyte-scale baseline blob is

@@ -62,7 +62,7 @@ export const TOOLS = [
     name: 'flecto_diff',
     description:
       'Semantic changes to one config file against a baseline (a git ref, default HEAD, '
-      + 'or a snapshot path). Returns the meaningful diff — the small answer — not the file. '
+      + 'or a path-shaped snapshot file). Returns the meaningful diff — the small answer — not the file. '
       + 'Secret-like values are masked by default.',
     inputSchema: {
       type: 'object',
@@ -70,7 +70,7 @@ export const TOOLS = [
         file: { type: 'string', description: 'Path to the config file, relative to the working directory.' },
         ref: {
           type: 'string',
-          description: 'Baseline to diff against: a git ref (default "HEAD") or a snapshot file path.',
+          description: 'Baseline to diff against: a git revision (default "HEAD"), or a snapshot file named as a path (absolute, ./ or ../).',
         },
         mask: {
           type: 'boolean',
@@ -116,7 +116,7 @@ export const TOOLS = [
       properties: {
         file: { type: 'string', description: 'Path to the config file, relative to the working directory.' },
         path: { type: 'string', description: 'The configuration path to explain, in dot/index notation.' },
-        ref: { type: 'string', description: 'Baseline to diff against: a git ref (default "HEAD") or a snapshot path.' },
+        ref: { type: 'string', description: 'Baseline to diff against: a git revision (default "HEAD"), or a snapshot file named as a path (absolute, ./ or ../).' },
         mask: { type: 'boolean', description: 'Mask secret-like values (default true).' },
       },
       required: ['file', 'path'],

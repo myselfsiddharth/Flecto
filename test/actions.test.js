@@ -107,7 +107,7 @@ describe('bundled GitHub Actions', () => {
     const { doc } = loadAction('flecto-ci');
     assert.deepEqual(Object.keys(doc.inputs), [
       'targets', 'fail-on', 'policies', 'profile', 'format',
-      'pr-comment-post', 'github-token', 'snapshot-ref', 'node-version',
+      'pr-comment-post', 'github-token', 'snapshot-ref', 'snapshot-file', 'node-version',
     ]);
     const defaults = Object.fromEntries(
       Object.entries(doc.inputs).map(([key, spec]) => [key, spec.default]),
@@ -121,6 +121,10 @@ describe('bundled GitHub Actions', () => {
       'pr-comment-post': 'false',
       'github-token': '',
       'snapshot-ref': 'HEAD~1',
+      // Added in 4.0, optional and empty by default, so existing consumers are
+      // unaffected. It exists because --snapshot-ref no longer accepts a bare
+      // snapshot filename, and without it those users would have no route.
+      'snapshot-file': '',
       'node-version': '20',
     });
   });

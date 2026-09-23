@@ -1,6 +1,6 @@
 import { execFileSync } from 'child_process';
 import { realpathSync } from 'fs';
-import { dirname, isAbsolute, relative, resolve } from 'path';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'path';
 
 import { applyBaseline, baselineRelativePath, loadBaseline } from './baseline.js';
 import {
@@ -327,7 +327,12 @@ function readBaseline(root, path, settings, effective) {
   }
   let raw;
   try {
-    const rel = relative(canonical(top), canonical(path)).replaceAll('\\', '/');
+    // Canonicalize the directory, keep the name: canonicalizing the file
+    // resolves its final symlink, which would read the link's destination
+    // out of the ref rather than the path the editor has open. Same fix as
+    // gitRepoRelativePath in index.js.
+    const nominal = join(canonical(dirname(path)), basename(path));
+    const rel = relative(canonical(top), nominal).replaceAll('\\', '/');
     if (!rel || rel.startsWith('..') || isAbsolute(rel)) throw new Error('outside the repository');
     raw = execFileSync('git', ['-C', top, 'show', '--end-of-options', `${ref}:${rel}`], {
       encoding: 'utf8',

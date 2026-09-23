@@ -211,7 +211,16 @@ export function assertTargetContained(file, cwd = process.cwd()) {
   // there.
   const nominal = join(canonical(dirname(given)), basename(given));
   // Named from outside the project: nothing was escaped, it was never inside.
-  if (!isInside(nominal, root)) return;
+  //
+  // That judgement must also be made on the path *as given*, not only on a
+  // canonicalized parent -- the parent is a component an untrusted pull request
+  // controls. With a directory symlink (`repo/b -> /outside`),
+  // `canonical(dirname(given))` already points outside, so `nominal` looked
+  // externally-named and this returned without checking anything:
+  // `repo/b/baseline.json` read straight out of the project. Replacing the
+  // *file* with a link was refused; replacing its *directory* was the same
+  // effort and was not.
+  if (!isInside(nominal, root) && !isInside(resolve(given), root)) return;
 
   const real = canonical(given);
   if (isInside(real, root)) return;

@@ -1046,6 +1046,99 @@ describe('the baseline ref cannot be chosen or weaponized from .flectorc (#121)'
     }
   });
 
+  test('a symlinked target cannot redirect the baseline to another file', () => {
+    // The most severe route of all, and the one that survived three rounds of
+    // fixes because it is not in the ref at all -- it is in the *path*.
+    // gitRepoRelativePath canonicalized the file, resolving its final symlink,
+    // so `git show <sha>:<rel>` read the link's destination rather than the
+    // path the operator gated. A pull request replacing the gated file with a
+    // link to any file unchanged in the baseline got before == after: a
+    // genuinely empty diff no --fail-on value catches. The whole exploit is a
+    // one-line diff plausibly titled "dedupe prod/staging config".
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'flecto-sec-link-')));
+    const git = (...args) => spawnSync('git', args, { cwd: dir, encoding: 'utf8' });
+    try {
+      git('init', '-q', '.');
+      git('config', 'user.email', 'test@example.com');
+      git('config', 'user.name', 'test');
+      git('config', 'commit.gpgsign', 'false');
+      mkdirSync(join(dir, 'config'), { recursive: true });
+      writeFileSync(join(dir, 'config', 'prod.yaml'), 'tls: true\ndebug: false\n', 'utf8');
+      writeFileSync(join(dir, 'config', 'staging.yaml'), 'tls: false\ndebug: true\n', 'utf8');
+      git('add', '-A');
+      git('commit', '-qm', 'base');
+
+      rmSync(join(dir, 'config', 'prod.yaml'));
+      symlinkSync('staging.yaml', join(dir, 'config', 'prod.yaml'));
+      git('add', '-A');
+      git('commit', '-qm', 'chore: dedupe prod/staging config');
+
+      const run = runFlecto(dir, ['ci', 'config/prod.yaml', '--snapshot-ref', 'HEAD~1']);
+      assert.equal(run.status, 1, 'disabling TLS through a link must not be an empty diff');
+      assert.match(run.stdout, /"type": *"changed"/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a baseline that is itself a symlink is refused, not diffed against a filename', () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'flecto-sec-linkbase-')));
+    const git = (...args) => spawnSync('git', args, { cwd: dir, encoding: 'utf8' });
+    try {
+      git('init', '-q', '.');
+      git('config', 'user.email', 'test@example.com');
+      git('config', 'user.name', 'test');
+      git('config', 'commit.gpgsign', 'false');
+      writeFileSync(join(dir, 'real.yaml'), 'tls: true\n', 'utf8');
+      symlinkSync('real.yaml', join(dir, 'app.yaml'));
+      git('add', '-A');
+      git('commit', '-qm', 'base');
+      rmSync(join(dir, 'app.yaml'));
+      writeFileSync(join(dir, 'app.yaml'), 'tls: false\n', 'utf8');
+      git('add', '-A');
+      git('commit', '-qm', 'pr');
+
+      const run = runFlecto(dir, ['ci', 'app.yaml', '--snapshot-ref', 'HEAD~1']);
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /is a symbolic link in HEAD~1/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a snapshot file reached through a linked *directory* is refused too', () => {
+    // The containment added for a linked file was decided on a canonicalized
+    // parent -- a component a pull request controls. Linking the directory
+    // instead was the same effort and skipped the check entirely.
+    const outside = realpathSync(mkdtempSync(join(tmpdir(), 'flecto-sec-out-')));
+    const dir = repoWithHostileCommit(null);
+    try {
+      writeFileSync(join(outside, 'baseline.json'), JSON.stringify({ state: { token: 'AKIA_SECRET_FROM_RUNNER' } }), 'utf8');
+      symlinkSync(outside, join(dir, 'b'));
+      const run = runFlecto(dir, ['ci', 'app.yaml', '--snapshot-file', 'b/baseline.json']);
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /link out of the project/);
+      assert.ok(!run.stdout.includes('AKIA_SECRET_FROM_RUNNER'));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  test('an empty --snapshot-ref is refused rather than falling back to the store', () => {
+    // An unset CI variable expands to "". The store is committed on a shared
+    // setup, so falling back would compare against something the pull request
+    // itself wrote.
+    const dir = repoWithHostileCommit(null);
+    try {
+      const run = runFlecto(dir, ['ci', 'app.yaml', '--snapshot-ref', '']);
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /empty value/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('--snapshot-ref on the command line still works, because it is the operator', () => {
     const dir = repoWithHostileCommit({ snapshotRef: 'HEAD' });
     try {

@@ -83,9 +83,12 @@ The format is based on [Keep a Changelog], and this project adheres to
   `FLECTO_ALLOW_RC_BASELINE=1` if the rc file is trusted.
 - **`--snapshot-file <path>` is added, and `--snapshot-ref` is a git revision**
   ([#121]). Overloading one flag with both is what let an attacker-committed
-  file stand in for the operator's baseline. A path-shaped value (absolute,
-  `./`, or ending `.json`/`.yaml`) still reads as a file, so existing usage
-  keeps working; anything else must resolve as a revision or the run fails.
+  file stand in for the operator's baseline. **This is breaking**: only a value
+  that is unambiguously a path — absolute, or starting `./` or `../`, shapes
+  git's ref format cannot produce — is still read as a file by
+  `--snapshot-ref`. A bare `--snapshot-ref snapshots/base.json` now fails and
+  says to use `--snapshot-file`. The bundled `flecto-ci` Action gains a
+  `snapshot-file:` input for the same reason.
   When git is missing, too old, or not looking at a repository, Flecto refuses
   rather than falling back to a file.
 - **A baseline ref can no longer be crafted into a file write, a shadowed

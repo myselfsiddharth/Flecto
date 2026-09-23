@@ -39,9 +39,18 @@ inputs:
     required: false
     default: ""
   snapshot-ref:
-    description: Git ref or snapshot file used as the baseline.
+    description: >-
+      Git revision used as the baseline. A snapshot *file* goes in
+      snapshot-file: since 4.0 this input is a revision, because accepting
+      either let a pull request shadow the baseline with a committed file.
     required: false
     default: HEAD~1
+  snapshot-file:
+    description: >-
+      Snapshot file used as the baseline, instead of a revision. Never
+      consulted as a git revision.
+    required: false
+    default: ""
   node-version:
     description: Node.js version used to run Flecto.
     required: false
@@ -64,6 +73,7 @@ runs:
         INPUT_PROFILE: ${{ inputs.profile }}
         INPUT_FORMAT: ${{ inputs.format }}
         INPUT_SNAPSHOT_REF: ${{ inputs.snapshot-ref }}
+        INPUT_SNAPSHOT_FILE: ${{ inputs.snapshot-file }}
         INPUT_PR_COMMENT_POST: ${{ inputs.pr-comment-post }}
         # Always set explicitly: an empty value makes Flecto skip posting rather
         # than fall back to an ambient token.
@@ -82,7 +92,9 @@ runs:
         if [[ -n "$INPUT_PROFILE" ]]; then
           args+=(--profile "$INPUT_PROFILE")
         fi
-        if [[ -n "$INPUT_SNAPSHOT_REF" ]]; then
+        if [[ -n "$INPUT_SNAPSHOT_FILE" ]]; then
+          args+=(--snapshot-file "$INPUT_SNAPSHOT_FILE")
+        elif [[ -n "$INPUT_SNAPSHOT_REF" ]]; then
           args+=(--snapshot-ref "$INPUT_SNAPSHOT_REF")
         fi
         if [[ "$INPUT_PR_COMMENT_POST" == "true" ]]; then

@@ -441,6 +441,49 @@ That cost is real but small — the flag is what every example and every doc pag
 already uses — and the alternative is a merge gate a pull request can silence
 with one line.
 
+### A symlinked target redirected the baseline itself — fixed
+
+The fourth and most severe route to the same property, and the one that
+survived three rounds of fixes because it is not in the ref at all — it is in
+the **path**.
+
+`gitRepoRelativePath` canonicalized the *file*, which resolves its final
+symlink, so the path handed to `git show <sha>:<rel>` was the link's
+destination rather than the path the operator gated. A pull request that
+replaces the gated file with a link to any other file unchanged in the baseline
+gets `before == after`: a genuinely empty diff that **no `--fail-on` value
+catches**, because there is nothing to catch.
+
+The whole exploit is a one-line diff, plausibly titled *"chore: dedupe
+prod/staging config"*:
+
+```
+rm config/prod.yaml && ln -s staging.yaml config/prod.yaml
+```
+
+`config/prod.yaml` now effectively carries staging's `tls: false`, and
+`flecto ci --snapshot-ref HEAD~1` — the shipped Action's default — reports
+`"changes": []` and exits 0. Pre-existing on `main`, not introduced by the
+baseline work, and it would have shipped under a review record claiming the
+property it breaks.
+
+**Fixed** by canonicalizing the *directory* and keeping the name as written.
+Every reason the original comment gives for canonicalizing (Windows 8.3 names
+and case, the macOS `/tmp` and `/var` links) is a property of directories, so
+nothing is lost. A baseline entry that is itself a symlink is now refused
+rather than diffed against a filename — git stores a link as mode 120000 whose
+blob is the target *path*, which is not a configuration.
+`src/lsp-analysis.js` had the identical line and the identical fix.
+
+Found alongside it: `assertTargetContained`'s escape hatch for "named from
+outside the project" was decided on `canonical(dirname(given))` — a component
+an untrusted pull request controls. With a **directory** symlink
+(`repo/b -> /outside`), that already pointed outside, so the function returned
+without checking anything and `repo/b/baseline.json` read straight out of the
+project. Replacing the *file* with a link was refused; replacing its
+*directory* was the same effort and was not. The judgement is now made on the
+path as given as well.
+
 ### Bitbucket path segments were interpolated unencoded — hardened
 
 `BITBUCKET_WORKSPACE` and `BITBUCKET_REPO_SLUG` went into the request path raw,

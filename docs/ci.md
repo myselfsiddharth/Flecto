@@ -21,9 +21,15 @@ flecto ci "config/**/*.yaml" \
 
 ## Choosing a baseline
 
-`--snapshot-ref` accepts either a git ref or a snapshot file path. The value is
-resolved as a filesystem path first; if no such file exists, it's treated as a
-git ref and read with `git show <ref>:<file>`.
+`--snapshot-ref` takes a **git revision**; `--snapshot-file` takes a **snapshot
+file**. They are separate flags since 4.0, because accepting either in one flag
+let a pull request shadow the operator's baseline by committing a file named
+after their ref.
+
+A value that is unambiguously a path — absolute, or starting `./` or `../` —
+is still read as a file by `--snapshot-ref`, since git's ref format cannot
+produce those shapes. Anything else must resolve as a revision, or the run
+fails and says to use `--snapshot-file`.
 
 ```bash
 flecto ci config/prod.yaml --snapshot-ref HEAD~1

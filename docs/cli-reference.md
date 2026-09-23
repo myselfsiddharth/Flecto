@@ -81,7 +81,7 @@ flecto ci "config/**/*.yaml" --snapshot-ref HEAD~1 --fail-on "policy,error"
 | Flag | Default | Description |
 |---|---|---|
 | `-p, --profile <name>` | — | Use a profile from `.flectorc` (else `FLECTO_PROFILE`) |
-| `--snapshot-ref <ref>` | local snapshot | Baseline git revision. A path-shaped value (absolute, `./`, or ending `.json`/`.yaml`) is read as a snapshot file |
+| `--snapshot-ref <ref>` | local snapshot | Baseline git revision. A value that is unambiguously a path (absolute, `./`, `../`) is read as a snapshot file instead |
 | `--snapshot-file <path>` | — | Baseline snapshot file, never consulted as a git revision |
 | `--format <type>` | `json` | `json`, `ndjson`, `sarif`, `github-annotations`, or `pr-comment` |
 | `--pr-comment-post` | off | With `--format pr-comment`, upsert the sticky comment on the PR |
