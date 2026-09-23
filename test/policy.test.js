@@ -275,14 +275,9 @@ describe('policy engine', () => {
     const rules = [
       { id: 'unicode-prop', severity: 'warn', match: { path: String.raw`\p{L}+`, pathFlags: 'u' } },
     ];
-    // Unicode sets need the `v` flag and fail path-only RegExp() construction.
-    // Skip on engines that do not support `v` yet (Node 18).
-    try {
-      new RegExp('[a--b]', 'v');
-      rules.push({ id: 'unicode-set', severity: 'warn', match: { path: '[a--b]', pathFlags: 'v' } });
-    } catch {
-      // ignore
-    }
+    // `v`-flag unicode *sets* (`[a--b]`) are set subtraction, which RE2 does
+    // not implement -- see the companion test below. Unicode properties
+    // (`\p{L}`) are supported natively and still load.
 
     withLocalPack('flagged-regexp', {
       id: 'flagged-regexp',

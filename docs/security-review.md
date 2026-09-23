@@ -406,13 +406,50 @@ repository. Both are `encodeURIComponent`d now, matching GitLab.
     request commits”), alongside the store's functional suite in
     `test/snapshot-store.test.js`.
 
+### Pack-supplied regexes could hang the merge gate (ReDoS) -- fixed
+
+The last item this review left open, held back because the fix is a dependency
+decision and those belong in a major version.
+
+A policy pack is attacker input in this threat model: `policies/*.json` is a
+committed file and `.flectorc` selects which packs run. Re-confirmed live from a
+pull request -- a committed `policies/evil.json` with `afterMatches: "^(a+)+$"`
+pinned `flecto ci` past 15 seconds on a 44-character value, exponential from
+there. Measured here at **97 seconds**. No in-process timeout addresses it: the
+backtracking happens inside one uninterruptible call into the engine, which is
+also why the LSP's worker timeout only ever contained it rather than fixed it.
+
+**Fixed** by compiling pack-supplied patterns with RE2 (`re2js`, a pure-JS port
+-- 870 KB, no native build, so the "nothing extra has to exist on the CI runner"
+promise survives; the native `re2` binding is 13 MB and needs a toolchain or a
+prebuild). Matching is linear in the input length, and the same pattern now
+answers in 3 ms.
+
+The split is **provenance, not content**: packs Flecto ships in `src/packs/`
+keep the native engine, because they are reviewed, change only in a release, and
+are not reachable by a pull request -- and `github-actions.json` legitimately
+uses a negative lookahead to mean "not pinned to a full SHA". A local pack that
+*overrides* a built-in id is still local, and still untrusted.
+
+The cost is real and is why this is 4.0: RE2 omits lookaround, backreferences,
+and `v`-flag set subtraction, so a pack using them now fails to load with a
+message naming the rule and the construct.
+
 ## Not yet closed
 
-- **Attacker-supplied regexes in custom packs.** A `.flectorc`-selected local
-  pack can carry a catastrophic `match.path` / `afterMatches`. Node has no regex
-  timeout, so a full fix means a timeout-capable engine (e.g. `re2`) — a
-  dependency decision left to the maintainer. Documented as a known limitation in
-  [`SECURITY.md`](../SECURITY.md).
+Nothing from the original "not yet reviewed" list remains open. The last item —
+attacker-supplied regexes in custom packs — is closed above, in 4.0, once the
+dependency decision it was waiting on was taken.
+
+Two findings raised during this review were split out rather than patched here,
+because neither is a `#121` attack-surface item:
+
+- **[#186]** — an empty baseline reads as all-`added`, and neither `ci`'s
+  default `--fail-on` nor the bundled Action's includes `added`. This was the
+  *amplifier* behind three separate baseline defects; the routes are closed, the
+  amplifier is a product decision.
+- **[#185]** — `runCommand` treats a signal-killed command as success, so
+  `--on-alert-failure` does not fire for an OOM-killed alert handler.
 
 ## Fuzzing the same boundary
 
@@ -487,3 +524,6 @@ choose. It narrows where to look; it does not replace looking.
 [#141]: https://github.com/myselfsiddharth/Flecto/issues/141
 [#147]: https://github.com/myselfsiddharth/Flecto/pull/147
 [#150]: https://github.com/myselfsiddharth/Flecto/issues/150
+
+[#185]: https://github.com/myselfsiddharth/Flecto/issues/185
+[#186]: https://github.com/myselfsiddharth/Flecto/issues/186

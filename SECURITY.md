@@ -38,14 +38,14 @@ is available (unless we agree otherwise).
 
 ## Known limitations
 
-- **Custom policy packs run their own regular expressions.** A pack's
-  `match.path` and `afterMatches` are compiled and evaluated by Node's regex
-  engine, which has no execution timeout. A pack authored with a catastrophic
-  regex, evaluated against a matching value, can hang the process. Packs are
-  validated for *syntax* at load time, not for worst-case complexity. Flecto's
-  own detectors are bounded (see the review record below), but a locally
-  installed or `.flectorc`-selected third-party pack is only as safe as its
-  author. Review packs before enabling them, the same as any code you run in CI.
+- **Custom policy packs are still code you are choosing to run.** Their
+  regular expressions can no longer hang the process -- since 4.0 a pack
+  outside `src/packs/` compiles its `match.path`, `afterMatches`, and
+  `afterAnyMatches` with RE2, whose matching is linear in the length of the
+  input, so catastrophic backtracking is not expressible. What a pack can still
+  do is assert things you did not intend: define rules that never fire, or fire
+  on everything, and so shape the gate. Review packs before enabling them, the
+  same as any code you run in CI.
 
 - **`.flectorc` is trusted for settings, not for actions or destinations.** On an
   untrusted pull request the rc file is attacker-controlled, so the options that

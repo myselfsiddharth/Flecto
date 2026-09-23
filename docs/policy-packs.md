@@ -87,10 +87,10 @@ Each rule produces one finding for every change that satisfies all specified con
 | `id` | Finding identifier. Use a stable, descriptive id. |
 | `severity` | `info`, `warn`, or `error`. |
 | `when` | Optional change types: `added`, `removed`, and/or `changed`. Defaults to all three. |
-| `match.path` | Optional JavaScript regular expression matched against the semantic change path. |
+| `match.path` | Optional regular expression matched against the semantic change path. Compiled with [RE2](#regular-expressions-in-packs) unless the pack ships with Flecto. |
 | `match.pathFlags` | Optional JavaScript regular-expression flags, such as `i`. |
 | `afterEquals` | Optional exact post-change value matcher. |
-| `afterMatches` | Optional JavaScript regular expression matched against a **string** post-change value. |
+| `afterMatches` | Optional regular expression matched against a **string** post-change value. Compiled with [RE2](#regular-expressions-in-packs). |
 | `afterAnyMatches` | The same expression applied to the elements of an **array** post-change value; matches when any string element matches. |
 | `beforeLooksSecret` / `afterLooksSecret` | `true` when the value — or any string nested inside it — looks like a credential. |
 | `numericJump.minMultiple` | Optional numeric increase threshold. |
@@ -374,3 +374,69 @@ after `--policies` always matches what they installed.
 Two conventions worth following, neither enforced: publish with the
 `flecto-pack` keyword so packs are findable on npm, and ship a fixture
 directory so `flecto policies test` can act as the pack's test suite in CI.
+
+---
+
+## Regular expressions in packs
+
+A pack you install or write is attacker-controlled input on an untrusted pull
+request: `policies/*.json` is a committed file, and `.flectorc` selects which
+packs run. JavaScript's regex engine backtracks, so a pattern as short as
+`^(a+)+$` takes **~97 seconds** against a 45-character value and grows
+exponentially from there. A CI job that never finishes is a denial of service
+against the merge gate itself, and no timeout inside the process helps, because
+the backtracking happens inside a single uninterruptible call into the engine.
+
+So from 4.0, `match.path`, `afterMatches`, and `afterAnyMatches` in any pack
+**outside** `src/packs/` are compiled with [RE2](https://github.com/google/re2),
+whose matching time is linear in the length of the input. The same pattern now
+answers in about 3 ms.
+
+The packs Flecto ships keep the native engine. They are reviewed, change only
+in a release, and are not reachable by a pull request -- and one of them
+(`github-actions`) legitimately uses a negative lookahead to mean "not pinned
+to a full commit SHA".
+
+### What this costs
+
+RE2 omits the constructs that make backtracking unbounded, because none of them
+is a regular operation:
+
+| Construct | Example | Status |
+|---|---|---|
+| Lookahead / lookbehind | `(?=x)`, `(?!x)`, `(?<=x)` | **not supported** |
+| Backreferences | `(a)\1` | **not supported** |
+| Unicode set subtraction (`v` flag) | `[a--b]` | **not supported** |
+| Named groups | `(?<name>x)` | supported |
+| Unicode properties | `\p{L}` | supported |
+| Inline flags | `(?i)` | supported |
+| `i`, `m`, `s` flags | `pathFlags: "i"` | supported |
+
+| `\uXXXX`, `\cX` escapes | `\u0041` | **not supported** (RE2 spells it `\x{41}`) |
+
+A pack using an unsupported construct now fails to **load**, naming the rule,
+rather than working until someone hands it the wrong value. Negative lookahead
+is usually expressible as a separate rule with the positive form, or by
+inverting which side of the diff the rule matches on.
+
+### What behaves differently without failing
+
+These compile on both engines and **match different strings**, which is the more
+dangerous kind of difference — a rule that silently stops firing weakens a gate
+without telling anyone. Check a pack that uses any of them:
+
+| Pattern | Input | Native | RE2 | Effect |
+|---|---|---|---|---|
+| `\s` | non-breaking space, `\v` | matches | **no match** | a rule like `^\s*$` stops firing on exotic whitespace |
+| `.` | `\r` | no match | **matches** | fires more often |
+| `\p{L}` without the `u` flag | `abc` | no match | **matches** | fires more often |
+| `^.$` | `👍` | no match | **matches** | RE2 counts code points, native counts UTF-16 units |
+| `^abc$` with `m` | `x\rabc\ry` | matches | **no match** | RE2 does not treat a bare CR as a line end |
+
+`\d` and `\w` are ASCII-only in both and do not differ. Anchoring, alternation,
+case-insensitive matching (including `é`/`É` and `ß`/`ss`), and `pathFlags: "i"`
+all agree.
+
+Only one pattern in everything Flecto ships or documents fails under RE2 — the
+`github-actions` lookahead — and that pack keeps the native engine, so nothing
+shipped changes behaviour.
