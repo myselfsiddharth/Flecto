@@ -1114,11 +1114,16 @@ describe('the baseline ref cannot be chosen or weaponized from .flectorc (#121)'
     const dir = repoWithHostileCommit(null);
     try {
       writeFileSync(join(outside, 'baseline.json'), JSON.stringify({ state: { token: 'AKIA_SECRET_FROM_RUNNER' } }), 'utf8');
-      symlinkSync(outside, join(dir, 'b'));
+      // On Windows a link to a directory must be created as a junction;
+      // the default type is a file link, which does not traverse.
+      symlinkSync(outside, join(dir, 'b'), process.platform === 'win32' ? 'junction' : undefined);
+
       const run = runFlecto(dir, ['ci', 'app.yaml', '--snapshot-file', 'b/baseline.json']);
+      // The property that matters is that nothing from outside the project
+      // reaches the output, however the run ends.
+      assert.ok(!run.stdout.includes('AKIA_SECRET_FROM_RUNNER'), run.stdout);
       assert.equal(run.status, 1);
       assert.match(run.stderr, /link out of the project/);
-      assert.ok(!run.stdout.includes('AKIA_SECRET_FROM_RUNNER'));
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(outside, { recursive: true, force: true });
