@@ -35,7 +35,7 @@ import { diffTrees } from './src/differ.js';
 import { assertTargetContained } from './src/config.js';
 import { documentKeysOf } from './src/documents.js';
 import { parseFile } from './src/parser.js';
-import { renderDiff, renderError, renderInfo, renderNote } from './src/renderer.js';
+import { maskChangeEvent, renderDiff, renderError, renderInfo, renderNote } from './src/renderer.js';
 import { readLiveState, shapeOf } from './src/drift-sources.js';
 
 const require = createRequire(import.meta.url);
@@ -148,7 +148,11 @@ program
 
       // Declared is `before`, live is `after`, so the verbs read the way the
       // question is asked: what has the running system done to what we wrote.
-      const changes = diffTrees(before, after, {});
+      // Masked on both paths, not only the human one. A machine-readable
+      // report of live state is the likelier thing to be archived as a CI
+      // artifact, so leaving it raw would put the values somewhere they outlive
+      // the run.
+      const changes = diffTrees(before, after, {}).map(maskChangeEvent);
 
       if (format === 'json') {
         process.stdout.write(`${JSON.stringify({
@@ -168,7 +172,7 @@ program
         // read out of a live system into a CI log, so it needs this more than
         // the others, not less -- a ConfigMap value under a secret-shaped key
         // is still a secret.
-        renderDiff(filepath, changes, { maskSecrets: true, baseline: meta.label });
+        renderDiff(filepath, changes, { baseline: meta.label });
         if (meta.sensitive) {
           renderNote(
             'Values from a secret store are compared by shape (length and digest), never by value.',

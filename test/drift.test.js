@@ -189,9 +189,13 @@ describe('what the review found, kept as tests', () => {
     const dir = projectWithStubs({ configmap: { data: { db_password: 'live-plaintext-pw' } } });
     try {
       writeFileSync(join(dir, 'cm.yaml'), 'data:\n  db_password: "old-pw"\n', 'utf8');
-      const run = runDrift(dir, ['cm.yaml', '--against', 'k8s://prod/configmap/api']);
-      assert.ok(!run.stdout.includes('live-plaintext-pw'), `leaked: ${run.stdout}`);
-      assert.match(run.stdout, /\*\*\*/);
+      // Both output paths. A JSON report is the likelier one to be archived as
+      // a CI artifact, so leaving it raw would outlive the run.
+      for (const args of [[], ['--format', 'json']]) {
+        const run = runDrift(dir, ['cm.yaml', '--against', 'k8s://prod/configmap/api', ...args]);
+        assert.ok(!run.stdout.includes('live-plaintext-pw'), `leaked in ${args.join(' ') || 'human'}: ${run.stdout}`);
+        assert.match(run.stdout, /\*\*\*/);
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

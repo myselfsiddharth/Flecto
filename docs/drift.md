@@ -112,9 +112,11 @@ secrets is a feature request whose answer is no.
 ## Output is masked
 
 Drift output goes through the same secret masking as every other Flecto render
-path. A ConfigMap is not a secret store, but a value under a key named
-`db_password` is still a credential, and this is the one command printing
-values read out of a live system into a CI log.
+path — **both** the human format and `--format json`. A ConfigMap is not a
+secret store, but a value under a key named `db_password` is still a
+credential, and this is the one command printing values read out of a live
+system into a CI log. The JSON report is the likelier one to be archived as a
+build artifact, so it is masked too.
 
 ## Terraform state
 
