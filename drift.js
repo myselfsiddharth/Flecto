@@ -35,8 +35,8 @@ import { diffTrees } from './src/differ.js';
 import { assertTargetContained } from './src/config.js';
 import { documentKeysOf } from './src/documents.js';
 import { parseFile } from './src/parser.js';
-import { maskChangeEvent, renderDiff, renderError, renderInfo, renderNote } from './src/renderer.js';
-import { readLiveState, shapeOf } from './src/drift-sources.js';
+import { maskChangeEvent, renderDiff, renderError, renderInfo, renderNote, renderWarn } from './src/renderer.js';
+import { readLiveState, shapeOf, SHAPE_RE } from './src/drift-sources.js';
 
 const require = createRequire(import.meta.url);
 const { version } = require('./package.json');
@@ -62,18 +62,39 @@ function declaredComparable(declared) {
   // documented headline case -- a committed ConfigMap against an identical live
   // one -- reported the whole manifest as drift and exited 1 forever.
   const documents = documentKeysOf(declared) ?? [];
-  if (documents.length === 1 && typeof record[documents[0]] === 'object' && record[documents[0]] !== null) {
-    record = /** @type {Record<string, unknown>} */ (record[documents[0]]);
-  }
-
-  if (record.data && typeof record.data === 'object' && !Array.isArray(record.data)) {
-    return record.data;
-  }
+  // Refused *before* looking for `data`. A document's identity falls back to a
+  // top-level `id`/`name`, so a document can be keyed literally `data` -- and
+  // checking `record.data` first then matched that wrapper, compared the wrong
+  // subtree, and silently dropped every other document in the file.
   if (documents.length > 1) {
     throw new Error(
       `drift: ${documents.length} documents in this file, and a live source is one object.`
       + ' Point drift at a file holding a single manifest.',
     );
+  }
+  if (documents.length === 1 && typeof record[documents[0]] === 'object' && record[documents[0]] !== null) {
+    record = /** @type {Record<string, unknown>} */ (record[documents[0]]);
+  }
+
+  // `stringData` as well as `data`: readKubernetes merges both, and a plaintext
+  // Secret manifest uses `stringData`, so looking only at `data` reported the
+  // whole manifest as drift -- the same failure, on the other key.
+  const blocks = ['data', 'stringData']
+    .filter((key) => record[key] && typeof record[key] === 'object' && !Array.isArray(record[key]));
+  if (blocks.length > 0) {
+    const merged = Object.assign({}, ...blocks.map((key) => record[key]));
+    const dropped = Object.keys(record).filter((key) => !blocks.includes(key));
+    if (dropped.length > 0 && !documents.length) {
+      // For a manifest the surrounding keys have no live counterpart, which is
+      // the point. For an ordinary config file that happens to carry `data`,
+      // they are real settings -- say so rather than quietly comparing a third
+      // of the file.
+      renderWarn(
+        `Comparing only the ${blocks.join(' and ')} block; `
+        + `${dropped.length} other top-level key(s) in this file were not compared.`,
+      );
+    }
+    return merged;
   }
   return record;
 }
@@ -152,12 +173,22 @@ program
       // of live state is the likelier thing to be archived as a CI artifact, so
       // leaving it raw would put those values somewhere they outlive the run.
       //
-      // A key compared by shape is skipped, because a shape is already the
-      // safe form -- a keyed digest of a value this process never prints.
-      // Masking it again would replace it with `***` on both sides and throw
-      // away the one thing it exists to show: that the credential rotated.
-      const changes = diffTrees(before, after, {})
-        .map((event) => (meta.shapedKeys.has(String(event.path)) ? event : maskChangeEvent(event)));
+      // A shape is skipped, because it is already the safe form -- a keyed
+      // digest of a value this process never prints -- and masking it again
+      // would replace it with `***` on both sides, throwing away the one thing
+      // it exists to show: that the credential rotated.
+      //
+      // The test is on the **value**, not on the key it sits under. Keying it
+      // on `shapedKeys` trusted metadata that can fall out of step with the
+      // value beside it, and when it did, a live plaintext printed unmasked
+      // because its key was still marked as shaped. Every present side must be
+      // a shape, so a shape-to-plaintext change is masked rather than exempted.
+      const changes = diffTrees(before, after, {}).map((event) => {
+        const sides = [event.before, event.after].filter((value) => value !== undefined);
+        const allShaped = sides.length > 0
+          && sides.every((value) => typeof value === 'string' && SHAPE_RE.test(value));
+        return allShaped ? event : maskChangeEvent(event);
+      });
 
       if (format === 'json') {
         process.stdout.write(`${JSON.stringify({

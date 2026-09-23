@@ -1,12 +1,34 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
-import { join, resolve } from 'path';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { delimiter, join, resolve } from 'path';
 import { tmpdir } from 'os';
 import { spawnSync } from 'child_process';
 import { parseSourceUri, shapeOf } from '../src/drift-sources.js';
 
 const driftBin = resolve(process.cwd(), 'drift.js');
+
+
+/**
+ * Write an executable stub named `tool` that runs `body` under Node.
+ *
+ * On POSIX that is a `#!/bin/sh` wrapper; on Windows a `.cmd`, which is what
+ * PATHEXT resolves when something spawns `kubectl` by name.
+ * @param {string} dir the project directory (the stub lands in `dir/bin`)
+ * @param {string} tool
+ * @param {string} body JavaScript run by Node
+ */
+function writeStub(dir, tool, body) {
+  const impl = join(dir, 'bin', `${tool}-impl.js`);
+  writeFileSync(impl, body, 'utf8');
+  if (process.platform === 'win32') {
+    writeFileSync(join(dir, 'bin', `${tool}.cmd`), `@echo off\r\nnode "%~dp0${tool}-impl.js" %*\r\n`, 'utf8');
+    return;
+  }
+  const shim = join(dir, 'bin', tool);
+  writeFileSync(shim, `#!/bin/sh\nexec node "$(dirname "$0")/${tool}-impl.js" "$@"\n`, 'utf8');
+  chmodSync(shim, 0o755);
+}
 
 /**
  * A project with a stub `kubectl` on PATH that records the argv it was given.
@@ -22,16 +44,18 @@ function projectWithStubs(answers = {}) {
   const configmap = JSON.stringify(answers.configmap ?? { data: { pool_size: '50', tls: 'false' } });
   const aws = JSON.stringify(answers.aws ?? { Parameters: [] });
   const secret = JSON.stringify(answers.secret ?? { data: { db_password: 'bGl2ZQ==' } });
-  writeFileSync(join(dir, 'bin', 'kubectl'),
-    '#!/bin/sh\n'
-    + 'echo "$@" >> "$KUBECTL_ARGV_LOG"\n'
-    + 'case "$*" in\n'
-    + `  *configmap*) echo '${configmap}' ;;\n`
-    + `  *secret*) echo '${secret}' ;;\n`
-    + 'esac\n', 'utf8');
-  chmodSync(join(dir, 'bin', 'kubectl'), 0o755);
-  writeFileSync(join(dir, 'bin', 'aws'), `#!/bin/sh\necho '${aws}'\n`, 'utf8');
-  chmodSync(join(dir, 'bin', 'aws'), 0o755);
+  // Stubs are Node scripts behind a per-platform shim: Windows cannot execute a
+  // `#!/bin/sh` file, and `kubectl.cmd` is what PATHEXT resolves there.
+  writeStub(dir, 'kubectl',
+    'const fs = require("fs");\n'
+    + 'const args = process.argv.slice(2);\n'
+    + 'fs.appendFileSync(process.env.KUBECTL_ARGV_LOG, args.join(" ") + "\\n");\n'
+    + 'const joined = args.join(" ");\n'
+    + `const configmap = ${JSON.stringify(configmap)};\n`
+    + `const secret = ${JSON.stringify(secret)};\n`
+    + 'if (joined.includes("configmap")) process.stdout.write(configmap);\n'
+    + 'else if (joined.includes("secret")) process.stdout.write(secret);\n');
+  writeStub(dir, 'aws', `process.stdout.write(${JSON.stringify(aws)});\n`);
   writeFileSync(join(dir, 'app.yaml'), 'data:\n  pool_size: "5"\n  tls: "true"\n', 'utf8');
   return dir;
 }
@@ -44,7 +68,7 @@ function runDrift(dir, args) {
   return spawnSync(process.execPath, [driftBin, ...args], {
     cwd: dir,
     encoding: 'utf8',
-    env: { ...process.env, PATH: `${join(dir, 'bin')}:${process.env.PATH}`, KUBECTL_ARGV_LOG: join(dir, 'argv.log') },
+    env: { ...process.env, PATH: `${join(dir, 'bin')}${delimiter}${process.env.PATH}`, KUBECTL_ARGV_LOG: join(dir, 'argv.log') },
   });
 }
 
@@ -97,7 +121,7 @@ describe('flecto drift reads live state without holding a credential (#144)', ()
         ['k8s://prod/configmap/a;whoami', /is not a valid name/],
         ['k8s://prod/configmap/a b', /is not a valid name/],
         ['k8s://prod/delete/api', /not a readable kind/],
-        ['ssm://../../etc/passwd', /is not a valid parameter path/],
+        ['ssm://../../etc/passwd', /must not contain "\.\."/],
         ['file:///etc/passwd', /is not a supported source/],
         ['not-a-uri', /is not a source URI/],
       ];
@@ -259,6 +283,121 @@ describe('what the review found, kept as tests', () => {
       assert.equal(run.status, 1);
       assert.match(run.stderr, /did not return the JSON document expected/);
       assert.ok(!run.stderr.includes('leaked-looking'), run.stderr);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('the second review round, kept as tests', () => {
+  test('masking is decided on the value, not on the key it sits under', () => {
+    // The leak: the exemption trusted `shapedKeys`, which is metadata that can
+    // fall out of step with the value beside it. A declared key with no live
+    // counterpart is a raw value under a secret-shaped name and must be masked,
+    // while the shapes beside it must survive.
+    const dir = projectWithStubs({ secret: { data: { db_password: 'bGl2ZQ==' } } });
+    try {
+      writeFileSync(join(dir, 'sec.yaml'), 'db_password: declared\napi_token: MUST_NOT_PRINT_THIS\n', 'utf8');
+      for (const args of [[], ['--format', 'json']]) {
+        const run = runDrift(dir, ['sec.yaml', '--against', 'k8s://prod/secret/creds', ...args]);
+        assert.ok(!run.stdout.includes('MUST_NOT_PRINT_THIS'), `leaked: ${run.stdout}`);
+        assert.match(run.stdout, /\*\*\*/, 'the unshaped value is masked');
+        assert.match(run.stdout, /digest:/, 'and the shapes beside it survive');
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('two parameters resolving to one key are refused at the source', () => {
+    // How state and shapedKeys came to disagree in the first place.
+    const dir = projectWithStubs({
+      aws: {
+        Parameters: [
+          { Name: '/app/prod/db_password', Value: 'shaped', Type: 'SecureString' },
+          { Name: '/app/prod/db_password', Value: 'LIVE_PLAINTEXT', Type: 'String' },
+        ],
+      },
+    });
+    try {
+      writeFileSync(join(dir, 'a.yaml'), 'db_password: declared\n', 'utf8');
+      const run = runDrift(dir, ['a.yaml', '--against', 'ssm:///app/prod']);
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /resolve to the same key/);
+      assert.ok(!run.stdout.includes('LIVE_PLAINTEXT'));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('every root-equivalent ssm path is refused, not just the bare one', () => {
+    // A single `=== "/"` check left //, /., /./ and /.// reaching the CLI, and
+    // leaning on AWS to normalize them is the wrong place to draw the line.
+    const dir = projectWithStubs();
+    try {
+      for (const uri of ['ssm://', 'ssm:///', 'ssm:////', 'ssm://.', 'ssm://./', 'ssm://.//', 'ssm:///./']) {
+        const run = runDrift(dir, ['app.yaml', '--against', uri]);
+        assert.equal(run.status, 1, uri);
+        assert.match(run.stderr, /needs a parameter path/, uri);
+      }
+      assert.ok(!existsSync(join(dir, 'argv.log')), 'and none of them spawned aws');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a document keyed literally "data" does not swallow the rest of the file', () => {
+    // Document identity falls back to a top-level `id`/`name`, so a document
+    // can be keyed `data`. Checking record.data before the multi-document
+    // refusal matched that wrapper and dropped every other document.
+    const dir = projectWithStubs();
+    try {
+      writeFileSync(join(dir, 'multi.yaml'),
+        'name: data\nlog_level: info\n---\nname: second\nlog_level: DROPPED\n', 'utf8');
+      const run = runDrift(dir, ['multi.yaml', '--against', 'k8s://prod/configmap/api']);
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /2 documents in this file/);
+      assert.ok(!run.stdout.includes('DROPPED'));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a stringData Secret manifest compares as a manifest, not as drift', () => {
+    // readKubernetes merges data and stringData; looking only at `data` made a
+    // plaintext Secret manifest report its whole self as drift.
+    const dir = projectWithStubs({ secret: { data: { db_password: 'bGl2ZQ==' } } });
+    try {
+      writeFileSync(join(dir, 'sd.yaml'),
+        'apiVersion: v1\nkind: Secret\nmetadata:\n  name: creds\n  namespace: prod\n'
+        + 'stringData:\n  db_password: live\n', 'utf8');
+      const run = runDrift(dir, ['sd.yaml', '--against', 'k8s://prod/secret/creds']);
+      assert.doesNotMatch(run.stdout, /apiVersion|kind:|metadata/, run.stdout);
+      assert.match(run.stdout, /db_password/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('descending into a data block says what it did not compare', () => {
+    const dir = projectWithStubs({ configmap: { data: { log_level: 'info', retries: '3' } } });
+    try {
+      writeFileSync(join(dir, 'plain.yaml'),
+        'log_level: SIBLING\nretries: "999"\ndata:\n  log_level: info\n  retries: "3"\n', 'utf8');
+      const run = runDrift(dir, ['plain.yaml', '--against', 'k8s://prod/configmap/api']);
+      assert.match(run.stderr, /other top-level key\(s\) in this file were not compared/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a JSON array from a tool is not accepted as a document', () => {
+    const dir = projectWithStubs();
+    try {
+      writeStub(dir, 'kubectl', 'process.stdout.write("[\\"nope\\"]");\n');
+      const run = runDrift(dir, ['app.yaml', '--against', 'k8s://prod/configmap/api']);
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /did not return the JSON document expected/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

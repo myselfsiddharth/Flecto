@@ -134,8 +134,12 @@ function readOnly(name, args) {
     );
   }
   if (run.status !== 0) {
-    const detail = String(run.stderr ?? '').trim().split('\n')[0] || `exit ${run.status}`;
-    throw new Error(`drift: ${entry.tool} ${args[0]} failed: ${detail}`);
+    // The tool's own first line is kept, unlike its stdout: an error here is a
+    // diagnostic ("forbidden", "not found", "expired token") that the operator
+    // needs, where stdout is response *data*. Bounded, and attributed, so it is
+    // clear whose words these are.
+    const detail = String(run.stderr ?? '').trim().split('\n')[0].slice(0, 200) || `exit ${run.status}`;
+    throw new Error(`drift: ${entry.tool} failed: ${detail}`);
   }
   return run.stdout;
 }
@@ -151,6 +155,16 @@ function readOnly(name, args) {
  * @returns {string}
  */
 const SHAPE_KEY = randomBytes(32);
+
+/**
+ * What a shaped value looks like.
+ *
+ * Exported so the masking decision can be made on the *value* rather than on
+ * the key it sits under: a key name is metadata that can fall out of step with
+ * the value beside it, and when it did, a plaintext printed unmasked because
+ * its key was still marked as shaped.
+ */
+export const SHAPE_RE = /^<\d+ bytes, digest:[0-9a-f]{12}>$/;
 
 function shapeOf(value) {
   // Keyed with a per-invocation random key, not a bare digest. Both sides of
@@ -203,7 +217,7 @@ function stableString(value) {
 function parseToolJson(raw, tool) {
   try {
     const parsed = JSON.parse(raw);
-    if (parsed === null || typeof parsed !== 'object') {
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
       throw new Error('not an object');
     }
     return parsed;
@@ -294,16 +308,25 @@ function readKubernetes(rest) {
  * @returns {LiveState}
  */
 function readSsm(rest) {
-  const path = rest.startsWith('/') ? rest : `/${rest}`;
-  if (path === '/') {
-    // `--path / --recursive` is every parameter in the account. One typo
-    // (`ssm://`) would read another team's namespace, which is the opposite of
-    // the one-named-source-per-invocation rule this tool is built on.
+  // Built from real segments rather than normalized in place. A single literal
+  // `=== '/'` check left `//`, `/.`, `/./` and `/.//` all reaching the CLI with
+  // a root-equivalent path -- and leaning on AWS to normalize them is the very
+  // thing this module's own SSM_PATH_RE docstring calls the wrong place to draw
+  // the line.
+  const segments = rest.split('/').filter((segment) => segment !== '' && segment !== '.');
+  if (segments.some((segment) => segment === '..')) {
+    throw new Error(`drift: parameter path "${rest}" must not contain ".."`);
+  }
+  if (segments.length === 0) {
+    // `--path / --recursive` is every parameter in the account. One typo would
+    // read another team's namespace, which is the opposite of the
+    // one-named-source-per-invocation rule this tool is built on.
     throw new Error(
       'drift: ssm:// needs a parameter path, e.g. ssm:///app/prod.'
       + ' Reading from the account root would fetch every parameter there.',
     );
   }
+  const path = `/${segments.join('/')}`;
   assertComponent(path, SSM_PATH_RE, 'parameter path');
 
   const raw = readOnly('aws', [
@@ -316,7 +339,19 @@ function readSsm(rest) {
   /** @type {Set<string>} */
   const shapedKeys = new Set();
   for (const parameter of parsed.Parameters ?? []) {
-    const key = String(parameter.Name).slice(path.length).replace(/^\//, '') || parameter.Name;
+    const name = String(parameter.Name);
+    // `slice(path.length)` is a blind cut, so a Name outside the requested path
+    // would derive a key that collides with another. Two parameters deriving
+    // one key is how `state` and `shapedKeys` came to disagree -- a later plain
+    // value overwrote a shaped one while the key stayed marked as shaped, and
+    // the masking exemption then trusted the mark and printed the plaintext.
+    if (!name.startsWith(path)) {
+      throw new Error(`drift: ${name} is not under the requested path ${path}`);
+    }
+    const key = name.slice(path.length).replace(/^\//, '') || name;
+    if (Object.hasOwn(state, key)) {
+      throw new Error(`drift: two parameters resolve to the same key "${key}" under ${path}`);
+    }
     if (parameter.Type === 'SecureString') {
       shapedKeys.add(key);
       state[key] = shapeOf(stableString(parameter.Value));
