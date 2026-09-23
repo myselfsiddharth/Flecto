@@ -89,6 +89,35 @@ Pick `best-effort` for a chat notification you can afford to miss, and
 Note that `at-least-once` means exactly that — a receiver may see the same
 `event_id` twice, so make handlers idempotent.
 
+A queued event is bound to the destination it was addressed to. `.flecto-queue/`
+holds one directory per destination, keyed by a hash of the URL, headers, and
+format, and a flush only ever reads its own. Change the webhook URL and the old
+backlog is not redirected to the new endpoint — it stays queued under the old
+key until that destination is configured again. Before this binding existed, a
+flush delivered whatever was queued to whichever endpoint the current run named,
+so an event could arrive at a different team's channel or a different vendor
+entirely.
+
+The destination includes the headers, so **rotating a webhook token also
+strands the backlog** — the queued events were addressed to the old credential,
+and replaying them under a new one is a decision for you, not for Flecto. This
+is the likeliest way to meet a stranded queue in practice.
+
+Events queued by Flecto 3.x sit at the top level of `.flecto-queue/` with no
+destination recorded at all. Those are not deliverable either — where they were
+headed is not knowable.
+
+Neither kind is deleted. Flecto names both once per workspace:
+
+```
+[warn] .flecto-queue/ holds undelivered events this run will not send: 3 event(s)
+queued for a destination that is not the one configured now (rotating a webhook
+token or editing the URL does this). They are kept, not dropped.
+```
+
+Each queued file is a Flecto envelope, so re-sending one deliberately is a
+`curl` with the body of the file once you have looked at where it was going.
+
 ---
 
 ## Running a command on change
@@ -120,6 +149,14 @@ if [ -n "${FLECTO_CHANGES_FILE}" ]; then
 fi
 echo "${payload}" | jq -r '.[] | "\(.type) \(.path)"'
 ```
+
+The spill file holds the **complete, unmasked** change set — including values
+`--mask-secrets` hides on screen. It is written `0600` inside a `0700`
+`.flecto-tmp/`, and removed as soon as the command exits, so read it from within
+the command rather than expecting it to be there afterwards. Earlier versions
+left it behind with whatever the process umask gave it (`0644` on a typical
+runner), where a later build step, artifact upload, or cache action could pick
+it up.
 
 ---
 
