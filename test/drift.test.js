@@ -10,10 +10,29 @@ const driftBin = resolve(process.cwd(), 'drift.js');
 
 
 /**
- * Write an executable stub named `tool` that runs `body` under Node.
+ * Why the stub-backed cases do not run on Windows.
  *
- * On POSIX that is a `#!/bin/sh` wrapper; on Windows a `.cmd`, which is what
- * PATHEXT resolves when something spawns `kubectl` by name.
+ * These tests work by putting a fake `kubectl`/`aws` first on PATH and letting
+ * the real code spawn it. On Windows that cannot be done: Node's `spawn`
+ * resolves a bare command name through `CreateProcess`, which finds `.exe` but
+ * not `.cmd` or `.bat` unless the spawn goes through a shell — and giving
+ * `readOnly()` a shell to make a test work would hand every future argv bug a
+ * shell to be injected into, which is the entire thing `drift-sources.js` is
+ * built to avoid.
+ *
+ * Nothing platform-specific goes untested as a result. What these cases check —
+ * argv construction, the verb allowlist, path normalization, masking, shape
+ * comparison — is pure string handling with no platform behaviour in it, and it
+ * is fully exercised on Linux and macOS. The Windows-specific surface Flecto
+ * does have (path canonicalization, containment) is covered in
+ * `test/security.test.js`, which runs everywhere.
+ */
+const NEEDS_SPAWNABLE_STUB = process.platform === 'win32'
+  ? 'stub tools cannot be spawned on Windows without giving the spawn a shell'
+  : false;
+
+/**
+ * Write an executable stub named `tool` that runs `body` under Node.
  * @param {string} dir the project directory (the stub lands in `dir/bin`)
  * @param {string} tool
  * @param {string} body JavaScript run by Node
@@ -21,10 +40,6 @@ const driftBin = resolve(process.cwd(), 'drift.js');
 function writeStub(dir, tool, body) {
   const impl = join(dir, 'bin', `${tool}-impl.js`);
   writeFileSync(impl, body, 'utf8');
-  if (process.platform === 'win32') {
-    writeFileSync(join(dir, 'bin', `${tool}.cmd`), `@echo off\r\nnode "%~dp0${tool}-impl.js" %*\r\n`, 'utf8');
-    return;
-  }
   const shim = join(dir, 'bin', tool);
   writeFileSync(shim, `#!/bin/sh\nexec node "$(dirname "$0")/${tool}-impl.js" "$@"\n`, 'utf8');
   chmodSync(shim, 0o755);
@@ -72,7 +87,7 @@ function runDrift(dir, args) {
   });
 }
 
-describe('flecto drift reads live state without holding a credential (#144)', () => {
+describe('flecto drift reads live state without holding a credential (#144)', { skip: NEEDS_SPAWNABLE_STUB }, () => {
   test('it reports what the running system did to what we declared', () => {
     const dir = projectWithStubs();
     try {
@@ -139,7 +154,7 @@ describe('flecto drift reads live state without holding a credential (#144)', ()
   });
 });
 
-describe('a value from a secret store is never printed', () => {
+describe('a value from a secret store is never printed', { skip: NEEDS_SPAWNABLE_STUB }, () => {
   test('a Secret is compared by shape, and the plaintext never appears', () => {
     const dir = projectWithStubs({ secret: { data: { db_password: 'cm90YXRlZA==' } } });
     try {
@@ -185,7 +200,7 @@ describe('a value from a secret store is never printed', () => {
   });
 });
 
-describe('what the review found, kept as tests', () => {
+describe('what the review found, kept as tests', { skip: NEEDS_SPAWNABLE_STUB }, () => {
   test('a manifest compared against an identical live ConfigMap reports no drift', () => {
     // The documented headline case. The parser wraps a manifest carrying
     // apiVersion + kind + metadata.name under a synthetic document key, so the
@@ -289,7 +304,7 @@ describe('what the review found, kept as tests', () => {
   });
 });
 
-describe('the second review round, kept as tests', () => {
+describe('the second review round, kept as tests', { skip: NEEDS_SPAWNABLE_STUB }, () => {
   test('masking is decided on the value, not on the key it sits under', () => {
     // The leak: the exemption trusted `shapedKeys`, which is metadata that can
     // fall out of step with the value beside it. A declared key with no live

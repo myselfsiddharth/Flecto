@@ -136,6 +136,15 @@ Exits `1` when the declared file and the live state differ, `0` when they match.
 list, and a `comparison` field that is `"values"` or `"shape-only"` — so a
 consumer never has to guess whether a value in the report is real or a digest.
 
+## A note on Windows
+
+`flecto-drift` runs on Windows, but its test suite skips the cases that work by
+putting a fake `kubectl` on `PATH`. Node's `spawn` resolves a bare command name
+through `CreateProcess`, which finds `.exe` but not `.cmd` — and giving the
+spawn a shell to make a test pass would hand every future argv bug a shell to be
+injected into, which is the thing this design exists to prevent. The behaviour
+those tests cover is pure string handling and is exercised on Linux and macOS.
+
 ## What is deliberately not here
 
 - **No write path of any kind.** Not "apply the declared file", not "sync". The
