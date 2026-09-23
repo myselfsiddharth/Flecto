@@ -484,6 +484,17 @@ project. Replacing the *file* with a link was refused; replacing its
 *directory* was the same effort and was not. The judgement is now made on the
 path as given as well.
 
+That second judgement is deliberately **lexical** — `resolve(cwd)` against
+`resolve(file)`, neither canonicalized. The first attempt compared an as-given
+path against a *canonicalized* root, which is a no-op on POSIX and silently
+wrong on Windows: `process.cwd()` reports the 8.3 short form
+(`C:\Users\RUNNER~1\…`) while `canonical()` returns the long one, so the two
+never shared a prefix, the check decided the path was named from outside, and
+returned without checking. The Windows CI leg caught it leaking a file from
+outside the project; the POSIX legs were green. Both sides of the lexical
+comparison now derive from the same `process.cwd()` spelling, so there is
+nothing left to normalize.
+
 ### Bitbucket path segments were interpolated unencoded — hardened
 
 `BITBUCKET_WORKSPACE` and `BITBUCKET_REPO_SLUG` went into the request path raw,

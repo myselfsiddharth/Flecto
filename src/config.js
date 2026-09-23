@@ -8,7 +8,7 @@ import {
   statSync,
   writeFileSync,
 } from 'fs';
-import { basename, dirname, join, relative, resolve, sep } from 'path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'path';
 import fg from 'fast-glob';
 import yaml from 'js-yaml';
 import { isEnvFilename, parseContent } from './parser.js';
@@ -162,6 +162,22 @@ function isInside(candidate, root) {
 }
 
 /**
+ * Containment decided on the paths as written, with no symlink resolution and
+ * no canonicalization.
+ *
+ * Used for "was this named inside the project?", where following a link is
+ * exactly the thing that must not happen -- and where canonicalizing one side
+ * but not the other silently breaks on Windows.
+ * @param {string} candidate
+ * @param {string} root both already absolute, from the same base
+ * @returns {boolean}
+ */
+function isLexicallyInside(candidate, root) {
+  const rel = relative(root, candidate);
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
+
+/**
  * Refuse a path that lives inside the project but reads from outside it through
  * a symlink.
  *
@@ -220,7 +236,16 @@ export function assertTargetContained(file, cwd = process.cwd()) {
   // `repo/b/baseline.json` read straight out of the project. Replacing the
   // *file* with a link was refused; replacing its *directory* was the same
   // effort and was not.
-  if (!isInside(nominal, root) && !isInside(resolve(given), root)) return;
+  //
+  // That second judgement is deliberately **lexical** -- `resolve(cwd)` against
+  // `resolve(file)`, neither canonicalized. Comparing an as-given path against
+  // a *canonicalized* root is what made the first attempt at this fail on
+  // Windows and leak: `process.cwd()` reports the 8.3 short form
+  // (`C:\Users\RUNNER~1\...`) while `canonical()` returns the long one, so the
+  // two never shared a prefix, the check decided the path was externally named,
+  // and returned. Both sides here derive from the same `process.cwd()` spelling,
+  // so no normalization is needed and none can go wrong.
+  if (!isInside(nominal, root) && !isLexicallyInside(given, resolve(cwd))) return;
 
   const real = canonical(given);
   if (isInside(real, root)) return;
