@@ -30,15 +30,17 @@
   "type": "module",
   "main": "index.js",
   "bin": {
-    "flecto": "index.js"
+    "flecto": "index.js",
+    "flecto-drift": "drift.js"
   },
   "files": [
-    "index.js",
-    "src/**/*",
-    "schemas/**/*",
-    "README.md",
+    "CHANGELOG.md",
     "LICENSE",
-    "CHANGELOG.md"
+    "README.md",
+    "drift.js",
+    "index.js",
+    "schemas/**/*",
+    "src/**/*"
   ],
   "scripts": {
     "test": "node --test test/*.test.js",

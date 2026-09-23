@@ -117,6 +117,20 @@ The format is based on [Keep a Changelog], and this project adheres to
   are cached and shared across every file in a run, and a `g` regex carries a
   mutable `lastIndex` that `.test()` advances, so such a rule matched every
   other value it saw.
+### Added
+
+- **`flecto-drift`: compare a declared config file against what is actually
+  running** ([#144]). A **separate binary**, deliberately: every other Flecto
+  command authenticates to nothing, and reading live state cannot keep that
+  promise, so it does not share an entry point with the tool that can. `flecto
+  ci` cannot reach it and installing Flecto does not enable it.
+  It holds **no credentials** — Kubernetes and SSM are read through `kubectl`
+  and `aws`, which you have already authenticated, so Flecto inherits exactly
+  what those are entitled to. Read-only is structural: argv is built from a
+  fixed verb allowlist and nothing from the URI can reach it as a flag. Values
+  from a secret store are compared **by shape** (length and digest), never by
+  value, with no flag to change that; SSM is read without `--with-decryption`.
+  Terraform state exposes only `outputs`. See [docs/drift.md](docs/drift.md).
 
 ### Fixed
 
@@ -1277,3 +1291,4 @@ fixed — those runs were never actually gated — but the failure is new.
 [Semantic Versioning]: https://semver.org/spec/v2.0.0.html
 [GHSA-wq8m-fc3q-8m5x]: https://github.com/myselfsiddharth/Flecto/security/advisories/GHSA-wq8m-fc3q-8m5x
 [#142]: https://github.com/myselfsiddharth/Flecto/issues/142
+[#144]: https://github.com/myselfsiddharth/Flecto/issues/144
