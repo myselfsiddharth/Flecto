@@ -1223,6 +1223,7 @@ fixed — those runs were never actually gated — but the failure is new.
   continuing with no policies.
 
 [Unreleased]: https://github.com/myselfsiddharth/Flecto/compare/v3.1.0...HEAD
+[4.0.0]: https://github.com/myselfsiddharth/Flecto/compare/v3.1.0...v4.0.0
 [3.1.0]: https://github.com/myselfsiddharth/Flecto/compare/v3.0.2...v3.1.0
 [3.0.2]: https://github.com/myselfsiddharth/Flecto/compare/v3.0.1...v3.0.2
 [3.0.1]: https://github.com/myselfsiddharth/Flecto/compare/v3.0.0...v3.0.1
