@@ -1,4 +1,5 @@
 import { Buffer } from 'buffer';
+import { classifiesAsSecret } from './classify.js';
 
 /**
  * Value-based secret detection.
@@ -29,7 +30,8 @@ import { Buffer } from 'buffer';
  *   | 'jwt'
  *   | 'private-key-block'
  *   | 'url-credentials'
- *   | 'high-entropy'} SecretKind
+ *   | 'high-entropy'
+ *   | 'classified'} SecretKind
  *
  * @typedef {{ kind: SecretKind, start: number, end: number }} SecretMatch
  */
@@ -292,7 +294,11 @@ export function detectSecretKind(value) {
   if (!trimmed || PLACEHOLDER_RE.test(trimmed)) return null;
   const [first] = findSecretMatches(value);
   if (first) return first.kind;
-  return isHighEntropySecret(trimmed) ? 'high-entropy' : null;
+  if (isHighEntropySecret(trimmed)) return 'high-entropy';
+  // Union-only, and last: the optional classifier (#136) may add a detection
+  // the gates above missed, and can never remove one they made. It carries its
+  // own kind so anyone who does not trust it can see exactly what it caught.
+  return classifiesAsSecret(trimmed) ? 'classified' : null;
 }
 
 /**
@@ -318,7 +324,8 @@ export function redactSecretString(value) {
 
   const matches = findSecretMatches(value);
   if (matches.length === 0) {
-    return isHighEntropySecret(trimmed) ? REDACTED : value;
+    if (isHighEntropySecret(trimmed) || classifiesAsSecret(trimmed)) return REDACTED;
+    return value;
   }
 
   let out = '';

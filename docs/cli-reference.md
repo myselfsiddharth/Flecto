@@ -95,6 +95,7 @@ flecto ci "config/**/*.yaml" --snapshot-ref HEAD~1 --fail-on "policy,error"
 | `--no-array-id` | — | Diff arrays by index instead of identity |
 | `--array-ignore-order` | off | Treat array order as insignificant |
 | `--mask-secrets` | off | Mask secret-like values in CI output |
+| `--classify-secrets` | off | Also detect secrets with the offline classifier; adds detections only. See [secret-classifier.md](secret-classifier.md) |
 | `--show-suppressed` | off | List inline-suppressed findings instead of only counting them |
 | `--allow-empty` | off | Succeed when no files were diffed |
 | `--explain` | off | Add model-generated narration of the masked diff; advisory, never affects the exit code. See [explain.md](explain.md) |
@@ -631,6 +632,7 @@ exactly the lines that changed. A snapshot commit is meant to be reviewable.
 | `FLECTO_ALLOW_SYMLINK_TARGETS` | all commands | `1` allows a target — or a write destination — that leaves the project through a symlink |
 | `FLECTO_ALLOW_RC_WRITES` | `ci`, `report` | `1` allows `.flectorc` to point `--output` / `--baseline` outside the project |
 | `FLECTO_ALLOW_RC_PLUGINS` | all commands | `1` allows plugins declared in `.flectorc` |
+| `FLECTO_CLASSIFY_SECRETS` | `ci`, `watch`, `report` | `0` disables the secret classifier on this runner, overriding the flag and `.flectorc` |
 | `FLECTO_ALLOW_RC_ALERTS` | `watch` | `1` allows `.flectorc` to declare `command` / `webhook` / `webhookHeader` |
 | `FLECTO_EXPLAIN_PROVIDER`, `_MODEL`, `_API_KEY`, `_API_URL` | `explain`, `ci --explain` | Narration provider settings; see [explain.md](explain.md#environment-variables) |
 | `FLECTO_EXPLAIN_MAX_TOKENS`, `_MAX_INPUT_TOKENS`, `_TIMEOUT_MS`, `_CACHE_DIR` | `explain`, `ci --explain` | Narration cost, time, and cache bounds |

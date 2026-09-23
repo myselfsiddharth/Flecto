@@ -72,6 +72,7 @@ import {
   narrate,
   resolveExplainConfig,
 } from './src/explain.js';
+import { configureSecretClassifier } from './src/classify.js';
 import {
   loadRcConfig,
   resolveEffectiveOptions,
@@ -682,6 +683,7 @@ program
   .option('--no-array-id', 'Diff arrays by index instead of object identity')
   .option('--array-ignore-order', 'Treat array order as insignificant', false)
   .option('--mask-secrets', 'Mask secret-like values in human output', false)
+  .option('--classify-secrets', 'Also detect secrets with the offline classifier (opt-in, adds detections only)', false)
   .option('--mask-secrets-webhooks', 'Also mask secrets in webhook payloads', false)
   .option('--snapshot', 'Save current state as baseline instead of watching')
   .option('--diff', 'Diff current file against saved baseline and exit')
@@ -710,6 +712,11 @@ program
       const mode = String(effective.mode ?? 'compact');
       validateMode(mode);
       const maskSecrets = Boolean(effective.maskSecrets);
+      // Set once, before any diffing. `.flectorc` may enable it: unlike a
+      // plugin or an alert action it grants no capability and cannot turn a
+      // failing gate green -- it only ever masks more. FLECTO_CLASSIFY_SECRETS=0
+      // overrides both, for a runner that must not run it at all.
+      configureSecretClassifier(Boolean(effective.classifySecrets));
       const maskSecretsWebhooks = Boolean(effective.maskSecretsWebhooks);
       const webhookFormat = resolveWebhookFormat(effective.webhookFormat, effective.webhook);
       const dOpts = diffOptionsFromEffective(effective, ignorePaths);
@@ -1003,6 +1010,7 @@ program
   .option('--no-array-id', 'Diff arrays by index instead of object identity')
   .option('--array-ignore-order', 'Treat array order as insignificant', false)
   .option('--mask-secrets', 'Mask secret-like values in the report', false)
+  .option('--classify-secrets', 'Also detect secrets with the offline classifier (opt-in, adds detections only)', false)
   .action(async (files, opts, command) => {
     try {
       const { config } = loadRcConfig(process.cwd());
@@ -1018,6 +1026,11 @@ program
       const ignorePaths = parseCsv(effective.ignore);
       const dOpts = diffOptionsFromEffective(effective, ignorePaths);
       const maskSecrets = Boolean(effective.maskSecrets);
+      // Set once, before any diffing. `.flectorc` may enable it: unlike a
+      // plugin or an alert action it grants no capability and cannot turn a
+      // failing gate green -- it only ever masks more. FLECTO_CLASSIFY_SECRETS=0
+      // overrides both, for a runner that must not run it at all.
+      configureSecretClassifier(Boolean(effective.classifySecrets));
       const outputPath = resolve(String(effective.output ?? 'flecto-report.html'));
       assertWriteDestinationContained(outputPath, {
         option: '--output',
@@ -1113,6 +1126,7 @@ program
   .option('--no-array-id', 'Diff arrays by index instead of object identity')
   .option('--array-ignore-order', 'Treat array order as insignificant', false)
   .option('--mask-secrets', 'Mask secret-like values in CI output', false)
+  .option('--classify-secrets', 'Also detect secrets with the offline classifier (opt-in, adds detections only)', false)
   .option('--show-suppressed', 'List inline-suppressed findings instead of only counting them', false)
   .option('--changed-only', 'With --format json|ndjson, replace envelopes for unchanged files with one scanned manifest', false)
   .option('--allow-empty', 'Allow CI to succeed when no files were diffed', false)
@@ -1147,6 +1161,11 @@ program
         renderWarn('Ignoring --pr-comment-post: it only applies to --format pr-comment.');
       }
       const maskSecrets = Boolean(effective.maskSecrets);
+      // Set once, before any diffing. `.flectorc` may enable it: unlike a
+      // plugin or an alert action it grants no capability and cannot turn a
+      // failing gate green -- it only ever masks more. FLECTO_CLASSIFY_SECRETS=0
+      // overrides both, for a runner that must not run it at all.
+      configureSecretClassifier(Boolean(effective.classifySecrets));
       const showSuppressed = Boolean(effective.showSuppressed);
       const changedOnly = Boolean(effective.changedOnly);
       // github-annotations and pr-comment already render only what changed, so
@@ -1561,6 +1580,11 @@ program
         renderWarn('Ignoring --pr-comment-post: it only applies to --format pr-comment.');
       }
       const maskSecrets = Boolean(effective.maskSecrets);
+      // Set once, before any diffing. `.flectorc` may enable it: unlike a
+      // plugin or an alert action it grants no capability and cannot turn a
+      // failing gate green -- it only ever masks more. FLECTO_CLASSIFY_SECRETS=0
+      // overrides both, for a runner that must not run it at all.
+      configureSecretClassifier(Boolean(effective.classifySecrets));
 
       /** @type {any[]} */
       const results = [];
@@ -1655,6 +1679,11 @@ program
         throw new Error('--format must be human, json, ndjson, or github-annotations');
       }
       const maskSecrets = Boolean(effective.maskSecrets);
+      // Set once, before any diffing. `.flectorc` may enable it: unlike a
+      // plugin or an alert action it grants no capability and cannot turn a
+      // failing gate green -- it only ever masks more. FLECTO_CLASSIFY_SECRETS=0
+      // overrides both, for a runner that must not run it at all.
+      configureSecretClassifier(Boolean(effective.classifySecrets));
       const dOpts = diffOptionsFromEffective(effective, ignorePaths);
 
       const baselinePath = resolve(fileA);

@@ -47,7 +47,9 @@
     "coverage": "npm run test:coverage && node scripts/coverage-report.js",
     "bench": "node bench/run.js",
     "fuzz": "node test/fuzz/run.js",
-    "pack:check": "npm pack --dry-run"
+    "pack:check": "npm pack --dry-run",
+    "bench:classifier": "node bench/classifier.js",
+    "train:classifier": "node training/train.js"
   },
   "dependencies": {
     "@iarna/toml": "^2.2.5",

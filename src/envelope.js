@@ -1,4 +1,5 @@
 import { randomUUID } from 'crypto';
+import { CLASSIFIER_MODEL_VERSION, secretClassifierEnabled } from './classify.js';
 
 export const EVENT_SCHEMA_VERSION = '2.0';
 
@@ -16,7 +17,8 @@ export const EVENT_SCHEMA_VERSION = '2.0';
  *  file: string,
  *  changes: import('./differ.js').ChangeEvent[],
  *  policies?: import('./policy.js').PolicyFinding[],
- *  lifecycle?: { type: string, message: string }
+ *  lifecycle?: { type: string, message: string },
+ *  classifier_version?: string
  * }} FlectoEnvelope
  */
 
@@ -45,5 +47,9 @@ export function createEnvelope(input) {
     changes: input.changes ?? [],
     policies: input.policies ?? [],
     lifecycle: input.lifecycle,
+    // Present only when the classifier ran. Changing the model changes which
+    // values are masked, so a consumer must be able to tell which model
+    // produced a given event -- the same reason schema_version is here.
+    ...(secretClassifierEnabled() ? { classifier_version: CLASSIFIER_MODEL_VERSION } : {}),
   };
 }

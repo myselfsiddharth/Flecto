@@ -72,6 +72,21 @@ The format is based on [Keep a Changelog], and this project adheres to
   untrusted-PR threat model. `--plugins` must be absolute paths. See
   [docs/editor.md](docs/editor.md).
 
+### Added
+
+- **`--classify-secrets`: an opt-in, offline second-stage secret detector**
+  ([#136]). The heuristic in `src/secrets.js` buys its zero-false-positive floor
+  with recall, and misses standard-base64 secrets containing `/` **by
+  construction** — the charset gate excludes `/` so hostnames and paths can
+  never be candidates. A character 3-gram classifier now gets a vote on values
+  the entropy gate rejects. On the held-out corpus it adds **78 detections and 0
+  false positives**, taking `/`-bearing base64 from **0/189 to 76/189**. Its
+  matches carry their own kind (`classified`), the model version travels in the
+  envelope as `classifier_version`, and `FLECTO_CLASSIFY_SECRETS=0` disables it
+  outright. Off by default. 48 KB of weights, ~0.012 ms per value, no new
+  dependency, no network path, and deliberately no way to load a model from
+  disk. See [docs/secret-classifier.md](docs/secret-classifier.md).
+
 ### Fixed
 
 - **The shared snapshot store now refuses a Windows target on another drive or
