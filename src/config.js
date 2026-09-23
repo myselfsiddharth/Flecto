@@ -8,7 +8,7 @@ import {
   statSync,
   writeFileSync,
 } from 'fs';
-import { basename, dirname, join, relative, resolve, sep } from 'path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'path';
 import fg from 'fast-glob';
 import yaml from 'js-yaml';
 import { isEnvFilename, parseContent } from './parser.js';
@@ -162,6 +162,22 @@ function isInside(candidate, root) {
 }
 
 /**
+ * Containment decided on the paths as written, with no symlink resolution and
+ * no canonicalization.
+ *
+ * Used for "was this named inside the project?", where following a link is
+ * exactly the thing that must not happen -- and where canonicalizing one side
+ * but not the other silently breaks on Windows.
+ * @param {string} candidate
+ * @param {string} root both already absolute, from the same base
+ * @returns {boolean}
+ */
+function isLexicallyInside(candidate, root) {
+  const rel = relative(root, candidate);
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
+
+/**
  * Refuse a path that lives inside the project but reads from outside it through
  * a symlink.
  *
@@ -211,7 +227,25 @@ export function assertTargetContained(file, cwd = process.cwd()) {
   // there.
   const nominal = join(canonical(dirname(given)), basename(given));
   // Named from outside the project: nothing was escaped, it was never inside.
-  if (!isInside(nominal, root)) return;
+  //
+  // That judgement must also be made on the path *as given*, not only on a
+  // canonicalized parent -- the parent is a component an untrusted pull request
+  // controls. With a directory symlink (`repo/b -> /outside`),
+  // `canonical(dirname(given))` already points outside, so `nominal` looked
+  // externally-named and this returned without checking anything:
+  // `repo/b/baseline.json` read straight out of the project. Replacing the
+  // *file* with a link was refused; replacing its *directory* was the same
+  // effort and was not.
+  //
+  // That second judgement is deliberately **lexical** -- `resolve(cwd)` against
+  // `resolve(file)`, neither canonicalized. Comparing an as-given path against
+  // a *canonicalized* root is what made the first attempt at this fail on
+  // Windows and leak: `process.cwd()` reports the 8.3 short form
+  // (`C:\Users\RUNNER~1\...`) while `canonical()` returns the long one, so the
+  // two never shared a prefix, the check decided the path was externally named,
+  // and returned. Both sides here derive from the same `process.cwd()` spelling,
+  // so no normalization is needed and none can go wrong.
+  if (!isInside(nominal, root) && !isLexicallyInside(given, resolve(cwd))) return;
 
   const real = canonical(given);
   if (isInside(real, root)) return;
@@ -442,6 +476,110 @@ export function assertAlertActionsFromCli(effective, cliOverrides) {
       + 'if this config is trusted.',
     );
   }
+}
+
+/**
+ * Has the operator explicitly opted in to a baseline selected by `.flectorc`?
+ * @returns {boolean}
+ */
+function rcBaselineAllowed() {
+  const raw = process.env.FLECTO_ALLOW_RC_BASELINE;
+  return raw === '1' || String(raw).toLowerCase() === 'true';
+}
+
+/**
+ * Refuse a `snapshotRef` declared in `.flectorc` rather than on the command
+ * line.
+ *
+ * `snapshotRef` names the baseline every change is measured against, so
+ * whoever sets it decides what "changed" means. That makes it an action in the
+ * same sense `--update-baseline` is one: a pull request that controls it can
+ * turn its own failing gate green without touching a policy, a suppression, or
+ * the gate's own `--fail-on`.
+ *
+ * The cheapest exploit needs no crafted value at all. A committed `.flectorc`
+ * carrying `{"defaults": {"snapshotRef": "HEAD"}}` points the baseline at the
+ * pull request's own tip, so every file is compared against itself, every diff
+ * is empty, and `flecto ci` exits 0 no matter what the change did. Confirmed
+ * end to end: a config that disables TLS and raises a pool size 100x fails the
+ * gate against the operator's ref and passes against an rc-declared `HEAD`.
+ *
+ * A ref named on the command line is operator intent and unrestricted, so
+ * `flecto ci config.yaml --snapshot-ref origin/main` is untouched. A repository
+ * that genuinely wants its baseline in the rc file sets
+ * `FLECTO_ALLOW_RC_BASELINE=1`, which is a statement that `.flectorc` is
+ * trusted there. Refusing loudly rather than falling back to a default baseline
+ * is deliberate, for the reason every other gate here refuses loudly: a gate
+ * that quietly measured against something else would still print a clean run.
+ * @param {Record<string, unknown>} effective
+ * @param {Record<string, unknown>} cliOverrides
+ * @throws {Error} when the baseline ref came from `.flectorc`/a profile
+ */
+export function assertSnapshotRefFromCli(effective, cliOverrides) {
+  if (rcBaselineAllowed()) return;
+  // `snapshotFile` picks the baseline just as directly, so it is gated with it
+  // rather than left as the way around it.
+  for (const option of ['snapshotRef', 'snapshotFile']) {
+    if (effective[option] === undefined || cliOverrides[option] !== undefined) continue;
+    throw new Error(
+      `Refusing "${option}" declared in .flectorc: it chooses the baseline every change is`
+      + ' measured against, so a pull request that edits it decides what counts as changed --'
+      + ' pointing it at "HEAD", or at a file it committed, compares every file against itself'
+      + ' and exits 0.\n'
+      + `Declared: ${JSON.stringify(effective[option])}\n`
+      + `Pass --${option === 'snapshotRef' ? 'snapshot-ref' : 'snapshot-file'} on the command line`
+      + ' instead, or set FLECTO_ALLOW_RC_BASELINE=1 if this config is trusted.',
+    );
+  }
+}
+
+/**
+ * Refuse a baseline ref that git would read as an option rather than a
+ * revision.
+ *
+ * The ref reaches `git show <rev>:<path>` as a single argv entry. `execFile`
+ * keeps it out of a shell, so there is no command injection here, but argv is
+ * not the same boundary as a shell: a ref beginning with `-` is still parsed by
+ * git as one of *its* options. `--output=pwned` turns the baseline read into a
+ * file write, and because the read then yields nothing, the baseline parses as
+ * an empty document, every key looks newly `added`, and the default
+ * `--fail-on changed,policy,error` never fires — an arbitrary write and a
+ * silent gate bypass from one string.
+ *
+ * Callers also pass `--end-of-options` so git itself refuses to read any
+ * operand as an option. This check is the belt to that suspenders: it names the
+ * problem in a message a human can act on, and it holds on a git too old for
+ * `--end-of-options` (added in 2.24).
+ * @param {string} ref
+ * @returns {string} the ref, unchanged, when it is safe to pass to git
+ * @throws {Error} when git would read the ref as an option
+ */
+export function assertSafeGitRef(ref) {
+  if (typeof ref !== 'string') {
+    throw new Error('Refusing snapshot ref: it must be a string.');
+  }
+  if (ref.includes('..')) {
+    // `git show A..B` is a *range*: it succeeds and prints nothing, so the
+    // baseline parses empty, every key reads as `added`, and the default
+    // `--fail-on` never fires. Callers resolve refs through
+    // `rev-parse --verify <ref>^{commit}`, which already refuses a range; this
+    // refuses it by name, because "Needed a single revision" explains less. A
+    // valid ref cannot contain `..` in any case (git-check-ref-format).
+    throw new Error(
+      `Refusing snapshot ref "${ref}": ".." makes it a commit range rather than a single`
+      + ' revision, which git reads as an empty diff.',
+    );
+  }
+  if (ref.startsWith('-')) {
+    throw new Error(
+      `Refusing snapshot ref "${ref}": it starts with "-", so git would read it as an option`
+      + ' rather than a revision.',
+    );
+  }
+  if (/[\0\n\r]/.test(ref)) {
+    throw new Error('Refusing snapshot ref: it contains a newline or NUL byte.');
+  }
+  return ref;
 }
 
 /**

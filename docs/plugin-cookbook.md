@@ -36,7 +36,7 @@ It exits `0` only when the findings exactly match `flecto-policy-test.json`. The
 Use a pack for a stable declarative rule and a plugin for the context-sensitive production approval. The plugin awaits before returning findings, which is supported by `evaluate`.
 
 ```bash
-node ../../../index.js ci current.json --snapshot-ref baseline.json --profile prod --policies default,deployment-review --plugins ./plugins/async-rollout-guard.js --fail-on policy
+node ../../../index.js ci current.json --snapshot-file baseline.json --profile prod --policies default,deployment-review --plugins ./plugins/async-rollout-guard.js --fail-on policy
 ```
 
 This command intentionally exits `1` because `--fail-on policy` treats findings as CI failures. Expected findings:
@@ -69,7 +69,7 @@ if (
 To see the same plugin deliberately opt out, omit the profile:
 
 ```bash
-node ../../../index.js ci current.json --snapshot-ref baseline.json --policies default,deployment-review --plugins ./plugins/async-rollout-guard.js --fail-on policy
+node ../../../index.js ci current.json --snapshot-file baseline.json --policies default,deployment-review --plugins ./plugins/async-rollout-guard.js --fail-on policy
 ```
 
 This also exits `1`, but it produces the four pack findings only; `async-rollout-approval` is absent because `ctx.profile` is `null`.
@@ -79,7 +79,7 @@ This also exits `1`, but it produces the four pack findings only; `async-rollout
 Plugin load errors are command errors, never an empty finding set. This protects CI from silently skipping policy logic:
 
 ```bash
-node ../../../index.js ci current.json --snapshot-ref baseline.json --plugins ./plugins/does-not-exist.js --fail-on policy
+node ../../../index.js ci current.json --snapshot-file baseline.json --plugins ./plugins/does-not-exist.js --fail-on policy
 ```
 
 The command exits `1` and reports `Policy plugin not found: ./plugins/does-not-exist.js`. The same fail-closed behavior applies when a module has no `evaluate` export, throws during import or evaluation, or returns something other than an array.

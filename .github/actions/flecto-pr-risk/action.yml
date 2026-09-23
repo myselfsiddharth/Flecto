@@ -51,8 +51,11 @@ inputs:
     default: ${{ github.token }}
   snapshot-ref:
     description: >-
-      Baseline override: a git ref or a snapshot file path. Leave empty to use
-      the pull request's base commit, which is what you want on a PR.
+      Baseline override: a git revision. Leave empty to use the pull request's
+      base commit, which is what you want on a PR. Since 4.0 this is a revision
+      only -- a snapshot file goes to `flecto ci --snapshot-file`, because
+      accepting either let a pull request shadow the baseline with a committed
+      file of the same name.
     required: false
     default: ""
   flecto-version:

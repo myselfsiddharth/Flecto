@@ -10,7 +10,7 @@ import {
   realpathSync,
   symlinkSync,
 } from 'fs';
-import { join, resolve } from 'path';
+import { dirname, join, resolve } from 'path';
 import { tmpdir } from 'os';
 import { spawn, spawnSync } from 'child_process';
 
@@ -80,7 +80,7 @@ describe('policy plugins are not loaded from an untrusted .flectorc', () => {
     // is what runs on pull requests and takes no attacker-supplied flags.
     const { dir, marker } = hostileProject('./p.js');
     try {
-      const run = runFlecto(dir, ['ci', 'c.json', '--snapshot-ref', 'snap.json']);
+      const run = runFlecto(dir, ['ci', 'c.json', '--snapshot-file', 'snap.json']);
       assert.equal(existsSync(marker), false, 'plugin from .flectorc must not execute');
       assert.equal(run.status, 1);
       assert.match(run.stderr, /Refusing to load policy plugins declared in \.flectorc/);
@@ -106,7 +106,7 @@ describe('policy plugins are not loaded from an untrusted .flectorc', () => {
     // still a failure. The run must not succeed.
     const { dir } = hostileProject('./p.js');
     try {
-      const run = runFlecto(dir, ['ci', 'c.json', '--snapshot-ref', 'snap.json']);
+      const run = runFlecto(dir, ['ci', 'c.json', '--snapshot-file', 'snap.json']);
       assert.equal(run.status, 1);
       assert.equal(run.stdout.trim(), '', 'no findings output on a refused run');
     } finally {
@@ -117,7 +117,7 @@ describe('policy plugins are not loaded from an untrusted .flectorc', () => {
   test('an rc plugin outside the project is refused even with the opt-in set', () => {
     const { dir, marker } = hostileProject('../../../../../../tmp/elsewhere.mjs');
     try {
-      const run = runFlecto(dir, ['ci', 'c.json', '--snapshot-ref', 'snap.json'], {
+      const run = runFlecto(dir, ['ci', 'c.json', '--snapshot-file', 'snap.json'], {
         FLECTO_ALLOW_RC_PLUGINS: '1',
       });
       assert.equal(existsSync(marker), false);
@@ -131,7 +131,7 @@ describe('policy plugins are not loaded from an untrusted .flectorc', () => {
   test('FLECTO_ALLOW_RC_PLUGINS lets a trusted in-project rc plugin run', () => {
     const { dir, marker } = hostileProject('./p.js');
     try {
-      runFlecto(dir, ['ci', 'c.json', '--snapshot-ref', 'snap.json'], {
+      runFlecto(dir, ['ci', 'c.json', '--snapshot-file', 'snap.json'], {
         FLECTO_ALLOW_RC_PLUGINS: '1',
       });
       assert.equal(existsSync(marker), true, 'the documented opt-in must still work');
@@ -145,7 +145,7 @@ describe('policy plugins are not loaded from an untrusted .flectorc', () => {
     // living outside the working directory are a legitimate monorepo setup.
     const { dir, marker } = hostileProject(null);
     try {
-      runFlecto(dir, ['ci', 'c.json', '--snapshot-ref', 'snap.json', '--plugins', './p.js']);
+      runFlecto(dir, ['ci', 'c.json', '--snapshot-file', 'snap.json', '--plugins', './p.js']);
       assert.equal(existsSync(marker), true, '--plugins must keep working');
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -156,7 +156,7 @@ describe('policy plugins are not loaded from an untrusted .flectorc', () => {
     const { dir } = hostileProject(null);
     try {
       writeFileSync(join(dir, '.flectorc'), JSON.stringify({ defaults: { policies: ['default'] } }), 'utf8');
-      const run = runFlecto(dir, ['ci', 'c.json', '--snapshot-ref', 'snap.json']);
+      const run = runFlecto(dir, ['ci', 'c.json', '--snapshot-file', 'snap.json']);
       assert.equal(run.status, 1, 'a real diff still exits 1');
       assert.doesNotMatch(run.stderr, /Refusing to load policy plugins/);
     } finally {
@@ -215,7 +215,7 @@ describe('denial-of-service hardening (#121)', () => {
       const start = Date.now();
       const run = spawnSync(
         process.execPath,
-        [rootIndex, 'ci', 'bomb.yaml', '--snapshot-ref', 'snap.json', '--allow-empty'],
+        [rootIndex, 'ci', 'bomb.yaml', '--snapshot-file', 'snap.json', '--allow-empty'],
         { cwd: dir, encoding: 'utf8', timeout: 20_000 },
       );
       assert.ok(Date.now() - start < 15_000, 'must not hang on an alias bomb');
@@ -264,7 +264,7 @@ describe('symlinked targets cannot read outside the project (#121)', () => {
     try {
       const run = spawnSync(
         process.execPath,
-        [rootIndex, 'ci', '*.yaml', '--snapshot-ref', 'snap.json', '--format', 'json'],
+        [rootIndex, 'ci', '*.yaml', '--snapshot-file', 'snap.json', '--format', 'json'],
         { cwd: dir, encoding: 'utf8' },
       );
 
@@ -283,7 +283,7 @@ describe('symlinked targets cannot read outside the project (#121)', () => {
     try {
       const run = spawnSync(
         process.execPath,
-        [rootIndex, 'ci', 'leaked.yaml', '--snapshot-ref', 'snap.json'],
+        [rootIndex, 'ci', 'leaked.yaml', '--snapshot-file', 'snap.json'],
         { cwd: dir, encoding: 'utf8' },
       );
       assert.equal(run.status, 1);
@@ -298,7 +298,7 @@ describe('symlinked targets cannot read outside the project (#121)', () => {
     try {
       const run = spawnSync(
         process.execPath,
-        [rootIndex, 'ci', 'leaked.yaml', '--snapshot-ref', 'snap.json', '--fail-on', 'error'],
+        [rootIndex, 'ci', 'leaked.yaml', '--snapshot-file', 'snap.json', '--fail-on', 'error'],
         { cwd: dir, encoding: 'utf8', env: { ...process.env, FLECTO_ALLOW_SYMLINK_TARGETS: '1' } },
       );
       // The gate still fires on what it found (secret-key-changed is an error);
@@ -316,7 +316,7 @@ describe('symlinked targets cannot read outside the project (#121)', () => {
       symlinkSync(join(dir, 'real.yaml'), join(dir, 'alias.yaml'));
       const run = spawnSync(
         process.execPath,
-        [rootIndex, 'ci', 'alias.yaml', '--snapshot-ref', 'snap.json', '--fail-on', 'error'],
+        [rootIndex, 'ci', 'alias.yaml', '--snapshot-file', 'snap.json', '--fail-on', 'error'],
         { cwd: dir, encoding: 'utf8' },
       );
       assert.equal(run.status, 0, `an in-project link must still work:\n${run.stderr}`);
@@ -333,7 +333,7 @@ describe('symlinked targets cannot read outside the project (#121)', () => {
       // about it is a link escaping a repository.
       const run = spawnSync(
         process.execPath,
-        [rootIndex, 'ci', outside, '--snapshot-ref', 'snap.json', '--fail-on', 'changed'],
+        [rootIndex, 'ci', outside, '--snapshot-file', 'snap.json', '--fail-on', 'changed'],
         { cwd: dir, encoding: 'utf8' },
       );
       assert.doesNotMatch(run.stderr, /link out of the project/);
@@ -419,7 +419,7 @@ describe('prototype pollution from config file contents (#121)', () => {
 
       const run = spawnSync(
         process.execPath,
-        [rootIndex, 'ci', 'a.ini', 'b.yaml', '--snapshot-ref', 'snap.json', '--fail-on', 'error'],
+        [rootIndex, 'ci', 'a.ini', 'b.yaml', '--snapshot-file', 'snap.json', '--fail-on', 'error'],
         { cwd: dir, encoding: 'utf8' },
       );
 
@@ -578,7 +578,7 @@ describe('write destinations a pull request can redirect (#121)', () => {
     try {
       const run = spawnSync(
         process.execPath,
-        [rootIndex, 'ci', 'prod.yaml', '--snapshot-ref', 'snap.json', '--fail-on', 'error'],
+        [rootIndex, 'ci', 'prod.yaml', '--snapshot-file', 'snap.json', '--fail-on', 'error'],
         { cwd: dir, encoding: 'utf8' },
       );
       assert.equal(run.status, 1);
@@ -682,7 +682,7 @@ describe('the merge gate cannot be turned green from .flectorc (#121)', () => {
     return dir;
   }
 
-  const gate = ['ci', 'prod.yaml', '--snapshot-ref', 'snap.json', '--fail-on', 'error'];
+  const gate = ['ci', 'prod.yaml', '--snapshot-file', 'snap.json', '--fail-on', 'error'];
 
   test('the gate fails on the finding to begin with', () => {
     const dir = failingRepo(null);
@@ -740,6 +740,439 @@ describe('the merge gate cannot be turned green from .flectorc (#121)', () => {
       );
       assert.equal(run.status, 0, run.stderr);
       assert.ok(existsSync(join(dir, 'accepted.json')));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('the baseline ref cannot be chosen or weaponized from .flectorc (#121)', () => {
+  // `snapshotRef` decides what every change is measured against, and it merged
+  // through resolveEffectiveOptions with no gate at all. Two separate defects
+  // fell out of that, and the cheaper one needs no crafted value: a ref of
+  // "HEAD" compares the pull request against itself.
+
+  /**
+   * A git repo whose committed tip disables TLS and raises a pool 100x
+   * relative to the `base` branch an operator would diff against.
+   * @param {object | null} rc value for .flectorc `defaults`
+   * @returns {string} the repo directory
+   */
+  function repoWithHostileCommit(rc) {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'flecto-sec-ref-')));
+    const git = (...args) => spawnSync('git', args, { cwd: dir, encoding: 'utf8' });
+    git('init', '-q', '.');
+    git('config', 'user.email', 'test@example.com');
+    git('config', 'user.name', 'test');
+    git('config', 'commit.gpgsign', 'false');
+    writeFileSync(join(dir, 'app.yaml'), 'db:\n  pool: 5\n  tls: true\n', 'utf8');
+    git('add', '-A');
+    git('commit', '-qm', 'base');
+    git('branch', '-q', 'base');
+    writeFileSync(join(dir, 'app.yaml'), 'db:\n  pool: 500\n  tls: false\n', 'utf8');
+    if (rc) writeFileSync(join(dir, '.flectorc'), JSON.stringify({ defaults: rc }), 'utf8');
+    git('add', '-A');
+    git('commit', '-qm', 'pull request');
+    return dir;
+  }
+
+  test('the gate fails against the operator\'s ref to begin with', () => {
+    const dir = repoWithHostileCommit(null);
+    try {
+      const run = runFlecto(dir, ['ci', 'app.yaml', '--snapshot-ref', 'base']);
+      assert.equal(run.status, 1, 'TLS off and a 100x pool is a change');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('snapshotRef declared in .flectorc is refused, not honored', () => {
+    // The whole exploit: point the baseline at the pull request's own tip and
+    // every file is compared against itself, so nothing ever changed.
+    const dir = repoWithHostileCommit({ snapshotRef: 'HEAD' });
+    try {
+      const run = runFlecto(dir, ['ci', 'app.yaml']);
+      assert.equal(run.status, 1, 'the gate still fails');
+      assert.match(run.stderr, /Refusing "snapshotRef" declared in \.flectorc/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a profile is not a way around it either', () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'flecto-sec-ref-profile-')));
+    try {
+      writeFileSync(join(dir, 'prod.yaml'), 'debug: true\n', 'utf8');
+      writeFileSync(join(dir, 'snap.json'), JSON.stringify({ state: { debug: false } }), 'utf8');
+      writeFileSync(join(dir, '.flectorc'), JSON.stringify({
+        profiles: { ci: { snapshotRef: 'HEAD' } },
+      }), 'utf8');
+      const run = runFlecto(dir, ['ci', 'prod.yaml', '--profile', 'ci']);
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /Refusing "snapshotRef" declared in \.flectorc/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a ref starting with "-" is refused before git sees it', () => {
+    // `git show --output=pwned:app.yaml` writes a file and prints nothing, so
+    // the baseline parsed as {}, every key read as `added`, and the default
+    // --fail-on never fired: an arbitrary write and a silent pass at once.
+    const dir = repoWithHostileCommit(null);
+    try {
+      const run = runFlecto(dir, ['ci', 'app.yaml', '--snapshot-ref', '--output=pwned']);
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /starts with "-", so git would read it as an option/);
+      assert.ok(!existsSync(join(dir, 'pwned:app.yaml')), 'and git wrote nothing');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('the rc and argv defects compose, and are both refused', () => {
+    const dir = repoWithHostileCommit({ snapshotRef: '--output=pwned' });
+    try {
+      const run = runFlecto(dir, ['ci', 'app.yaml']);
+      assert.equal(run.status, 1);
+      assert.ok(!existsSync(join(dir, 'pwned:app.yaml')), 'no file was written');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a committed file cannot shadow the ref the operator named', () => {
+    // Found in review of the first version of this fix. The path branch ran
+    // before the git branch and resolved against the checkout root, whose file
+    // names a pull request controls -- so committing a file called `HEAD~1`,
+    // the default the shipped Action passes, replaced the operator's baseline
+    // with one the attacker wrote. No .flectorc needed at all.
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'flecto-sec-shadow-')));
+    const git = (...args) => spawnSync('git', args, { cwd: dir, encoding: 'utf8' });
+    try {
+      git('init', '-q', '.');
+      git('config', 'user.email', 'test@example.com');
+      git('config', 'user.name', 'test');
+      git('config', 'commit.gpgsign', 'false');
+      writeFileSync(join(dir, 'app.yaml'), 'db:\n  pool: 5\n  tls: true\n', 'utf8');
+      git('add', '-A');
+      git('commit', '-qm', 'base');
+      // One commit carrying both the hostile change and the shadow file.
+      writeFileSync(join(dir, 'app.yaml'), 'db:\n  pool: 500\n  tls: false\n', 'utf8');
+      writeFileSync(join(dir, 'HEAD~1'), '{"db":{"pool":500,"tls":false}}', 'utf8');
+      git('add', '-A');
+      git('commit', '-qm', 'pull request');
+
+      const run = runFlecto(dir, ['ci', 'app.yaml', '--snapshot-ref', 'HEAD~1']);
+      assert.equal(run.status, 1, 'the revision wins, so the gate still sees the change');
+      assert.match(run.stdout, /"type": *"changed"/, 'and it is the real diff, not the shadow file');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a commit range is refused, because git reads one as an empty diff', () => {
+    // `git show A..B` succeeds and prints nothing, so the baseline parsed as
+    // {}, every key read as `added`, and the default --fail-on never fired --
+    // the same silent pass as the --output= injection, with no dash involved.
+    const dir = repoWithHostileCommit(null);
+    try {
+      for (const ref of ['HEAD:..', 'base..', 'HEAD..HEAD']) {
+        const run = runFlecto(dir, ['ci', 'app.yaml', '--snapshot-ref', ref]);
+        assert.equal(run.status, 1, `${ref} must not pass the gate`);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a branch or tag name that does not resolve is an error, not a file read', () => {
+    // The critical finding of the second review, and the reason the "is it
+    // ref-shaped?" test was abandoned: branch and tag names are ordinary
+    // words, so a denylist over them cannot work. On a pull_request event
+    // actions/checkout creates no origin/<base> ref at all, which makes
+    // `--snapshot-ref origin/main` -- the form this project's own docs put in
+    // a workflow -- the default configuration rather than an edge case.
+    //
+    // The shadow file is crafted to match the hostile tip, so the diff it
+    // produces is genuinely empty: no --fail-on value catches it. Only
+    // refusing to read the file does.
+    const dir = repoWithHostileCommit(null);
+    try {
+      for (const ref of ['origin/main', 'main', 'v1.2.3', 'develop', 'HEAD~99']) {
+        mkdirSync(join(dir, dirname(ref)), { recursive: true });
+        writeFileSync(join(dir, ref), '{"db":{"pool":500,"tls":false}}', 'utf8');
+        const run = runFlecto(dir, ['ci', 'app.yaml', '--snapshot-ref', ref]);
+        assert.equal(run.status, 1, `${ref} must not pass the gate`);
+        assert.match(run.stderr, /does not resolve to a git revision/);
+        assert.match(run.stderr, /was NOT read as the baseline/);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('git being unusable fails closed rather than falling back to a file', () => {
+    // Not knowing whether the revision exists is exactly when reading a
+    // same-named file is most dangerous, so "git is missing" and "git is too
+    // old for --end-of-options" must not look like "not a revision".
+    const dir = repoWithHostileCommit(null);
+    try {
+      writeFileSync(join(dir, 'main'), '{"db":{"pool":500,"tls":false}}', 'utf8');
+      const run = runFlecto(dir, ['ci', 'app.yaml', '--snapshot-ref', 'main'], { PATH: '/nonexistent' });
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /cannot resolve "main" as a git revision/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('--snapshot-file reads a path and never consults git', () => {
+    const dir = repoWithHostileCommit(null);
+    try {
+      writeFileSync(join(dir, 'snap.json'), JSON.stringify({ state: { db: { pool: 5, tls: true } } }), 'utf8');
+      const run = runFlecto(dir, ['ci', 'app.yaml', '--snapshot-file', 'snap.json'], { PATH: '/nonexistent' });
+      assert.equal(run.status, 1, run.stderr);
+      assert.match(run.stdout, /"type": *"changed"/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('snapshotFile declared in .flectorc is refused like snapshotRef', () => {
+    const dir = repoWithHostileCommit({ snapshotFile: 'evil.json' });
+    try {
+      writeFileSync(join(dir, 'evil.json'), JSON.stringify({ state: { db: { pool: 500, tls: false } } }), 'utf8');
+      const run = runFlecto(dir, ['ci', 'app.yaml']);
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /Refusing "snapshotFile" declared in \.flectorc/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a snapshot file that is not ref-shaped is still read, because that is the feature', () => {
+    const dir = repoWithHostileCommit(null);
+    try {
+      writeFileSync(join(dir, 'snap.json'), JSON.stringify({ state: { db: { pool: 500, tls: false } } }), 'utf8');
+      const run = runFlecto(dir, ['ci', 'app.yaml', '--snapshot-file', 'snap.json']);
+      assert.equal(run.status, 0, run.stderr);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a ref name ending .json does not divert to a file, even when a real tag exists', () => {
+    // The third round of this finding. `release/v1.json` is a LEGAL git ref --
+    // git only forbids `..`, a trailing `.`, and a `.lock` suffix -- so an
+    // extension is a convention, not a grammar. Treating one as proof of
+    // path-ness let an attacker's committed file beat a resolvable tag of the
+    // same name, in a full clone, with no shallow-checkout involved.
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'flecto-sec-extref-')));
+    const git = (...args) => spawnSync('git', args, { cwd: dir, encoding: 'utf8' });
+    try {
+      git('init', '-q', '.');
+      git('config', 'user.email', 'test@example.com');
+      git('config', 'user.name', 'test');
+      git('config', 'commit.gpgsign', 'false');
+      writeFileSync(join(dir, 'app.yaml'), 'db:\n  pool: 5\n  tls: true\n', 'utf8');
+      git('add', '-A');
+      git('commit', '-qm', 'base');
+      const base = git('rev-parse', 'HEAD').stdout.trim();
+      writeFileSync(join(dir, 'app.yaml'), 'db:\n  pool: 500\n  tls: false\n', 'utf8');
+      // The shadow file matches the hostile tip, so if it is read the diff is
+      // genuinely empty and no --fail-on value would catch it.
+      writeFileSync(join(dir, 'v1.json'), JSON.stringify({ state: { db: { pool: 500, tls: false } } }), 'utf8');
+      git('add', '-A');
+      git('commit', '-qm', 'pull request');
+      git('tag', '-f', 'v1.json', base);
+
+      const run = runFlecto(dir, ['ci', 'app.yaml', '--snapshot-ref', 'v1.json']);
+      assert.equal(run.status, 1, 'the tag must win over the committed file');
+      assert.match(run.stdout, /"type": *"changed"/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a snapshot file that leaves the project through a link is refused', () => {
+    // The operator names an in-repo baseline; the pull request replaces it with
+    // a symlink, and the contents of any JSON file on the runner became the
+    // baseline and were printed as `removed` changes. Every other read in
+    // Flecto already had this check.
+    const outside = realpathSync(mkdtempSync(join(tmpdir(), 'flecto-sec-outside-')));
+    const dir = repoWithHostileCommit(null);
+    try {
+      writeFileSync(join(outside, 'SECRET.json'), JSON.stringify({ state: { token: 'ghp_SUPERSECRETVALUE' } }), 'utf8');
+      symlinkSync(join(outside, 'SECRET.json'), join(dir, 'baseline.json'));
+      for (const args of [
+        ['ci', 'app.yaml', '--snapshot-file', 'baseline.json'],
+        ['ci', 'app.yaml', '--snapshot-ref', './baseline.json'],
+      ]) {
+        const run = runFlecto(dir, args);
+        assert.equal(run.status, 1, args.join(' '));
+        assert.match(run.stderr, /link out of the project/);
+        assert.ok(!run.stdout.includes('ghp_SUPERSECRETVALUE'), 'and nothing from outside was printed');
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  test('an empty baseline value is refused rather than silently using the store', () => {
+    // An unset CI variable expands to "". Falling back to the local store there
+    // would compare against something the operator did not choose.
+    const dir = repoWithHostileCommit(null);
+    try {
+      const run = runFlecto(dir, ['ci', 'app.yaml', '--snapshot-file', '']);
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /empty value/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a relative snapshot path climbing out of the project is a path, not a commit range', () => {
+    // `..` is refused in a REF because it makes a commit range; the path
+    // decision has to happen first or `../snapshots/base.json` is misdiagnosed.
+    const dir = repoWithHostileCommit(null);
+    try {
+      const run = runFlecto(dir, ['ci', 'app.yaml', '--snapshot-ref', '../nope.json']);
+      assert.equal(run.status, 1);
+      assert.doesNotMatch(run.stderr, /commit range/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a symlinked target cannot redirect the baseline to another file', () => {
+    // The most severe route of all, and the one that survived three rounds of
+    // fixes because it is not in the ref at all -- it is in the *path*.
+    // gitRepoRelativePath canonicalized the file, resolving its final symlink,
+    // so `git show <sha>:<rel>` read the link's destination rather than the
+    // path the operator gated. A pull request replacing the gated file with a
+    // link to any file unchanged in the baseline got before == after: a
+    // genuinely empty diff no --fail-on value catches. The whole exploit is a
+    // one-line diff plausibly titled "dedupe prod/staging config".
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'flecto-sec-link-')));
+    const git = (...args) => spawnSync('git', args, { cwd: dir, encoding: 'utf8' });
+    try {
+      git('init', '-q', '.');
+      git('config', 'user.email', 'test@example.com');
+      git('config', 'user.name', 'test');
+      git('config', 'commit.gpgsign', 'false');
+      mkdirSync(join(dir, 'config'), { recursive: true });
+      writeFileSync(join(dir, 'config', 'prod.yaml'), 'tls: true\ndebug: false\n', 'utf8');
+      writeFileSync(join(dir, 'config', 'staging.yaml'), 'tls: false\ndebug: true\n', 'utf8');
+      git('add', '-A');
+      git('commit', '-qm', 'base');
+
+      rmSync(join(dir, 'config', 'prod.yaml'));
+      symlinkSync('staging.yaml', join(dir, 'config', 'prod.yaml'));
+      git('add', '-A');
+      git('commit', '-qm', 'chore: dedupe prod/staging config');
+
+      const run = runFlecto(dir, ['ci', 'config/prod.yaml', '--snapshot-ref', 'HEAD~1']);
+      assert.equal(run.status, 1, 'disabling TLS through a link must not be an empty diff');
+      assert.match(run.stdout, /"type": *"changed"/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a baseline that is itself a symlink is refused, not diffed against a filename', () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'flecto-sec-linkbase-')));
+    const git = (...args) => spawnSync('git', args, { cwd: dir, encoding: 'utf8' });
+    try {
+      git('init', '-q', '.');
+      git('config', 'user.email', 'test@example.com');
+      git('config', 'user.name', 'test');
+      git('config', 'commit.gpgsign', 'false');
+      writeFileSync(join(dir, 'real.yaml'), 'tls: true\n', 'utf8');
+      symlinkSync('real.yaml', join(dir, 'app.yaml'));
+      git('add', '-A');
+      git('commit', '-qm', 'base');
+      rmSync(join(dir, 'app.yaml'));
+      writeFileSync(join(dir, 'app.yaml'), 'tls: false\n', 'utf8');
+      git('add', '-A');
+      git('commit', '-qm', 'pr');
+
+      const run = runFlecto(dir, ['ci', 'app.yaml', '--snapshot-ref', 'HEAD~1']);
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /is a symbolic link in HEAD~1/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a snapshot file reached through a linked *directory* is refused too', () => {
+    // The containment added for a linked file was decided on a canonicalized
+    // parent -- a component a pull request controls. Linking the directory
+    // instead was the same effort and skipped the check entirely.
+    const outside = realpathSync(mkdtempSync(join(tmpdir(), 'flecto-sec-out-')));
+    const dir = repoWithHostileCommit(null);
+    try {
+      writeFileSync(join(outside, 'baseline.json'), JSON.stringify({ state: { token: 'AKIA_SECRET_FROM_RUNNER' } }), 'utf8');
+      // On Windows a link to a directory must be created as a junction;
+      // the default type is a file link, which does not traverse.
+      symlinkSync(outside, join(dir, 'b'), process.platform === 'win32' ? 'junction' : undefined);
+
+      const run = runFlecto(dir, ['ci', 'app.yaml', '--snapshot-file', 'b/baseline.json']);
+      // The property that matters is that nothing from outside the project
+      // reaches the output, however the run ends.
+      assert.ok(!run.stdout.includes('AKIA_SECRET_FROM_RUNNER'), run.stdout);
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /link out of the project/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  test('an empty --snapshot-ref is refused rather than falling back to the store', () => {
+    // An unset CI variable expands to "". The store is committed on a shared
+    // setup, so falling back would compare against something the pull request
+    // itself wrote.
+    const dir = repoWithHostileCommit(null);
+    try {
+      const run = runFlecto(dir, ['ci', 'app.yaml', '--snapshot-ref', '']);
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /empty value/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('--snapshot-ref on the command line still works, because it is the operator', () => {
+    const dir = repoWithHostileCommit({ snapshotRef: 'HEAD' });
+    try {
+      const run = runFlecto(dir, ['ci', 'app.yaml', '--snapshot-ref', 'base']);
+      assert.equal(run.status, 1, 'and it measures against the ref the operator named');
+      assert.doesNotMatch(run.stderr, /Refusing "snapshotRef"/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('FLECTO_ALLOW_RC_BASELINE=1 opts a trusted repository back in', () => {
+    const dir = repoWithHostileCommit({ snapshotRef: 'base' });
+    try {
+      const run = runFlecto(dir, ['ci', 'app.yaml'], { FLECTO_ALLOW_RC_BASELINE: '1' });
+      assert.equal(run.status, 1, 'the rc ref is honored, and this one is a real diff');
+      assert.doesNotMatch(run.stderr, /Refusing "snapshotRef"/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('even opted in, a ref git would read as an option is still refused', () => {
+    const dir = repoWithHostileCommit({ snapshotRef: '--output=pwned' });
+    try {
+      const run = runFlecto(dir, ['ci', 'app.yaml'], { FLECTO_ALLOW_RC_BASELINE: '1' });
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /starts with "-", so git would read it as an option/);
+      assert.ok(!existsSync(join(dir, 'pwned:app.yaml')));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

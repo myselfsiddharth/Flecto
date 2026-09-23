@@ -313,6 +313,188 @@ Regression tests in `test/alerter.test.js` cover each, and the two that are
 behavioural were first confirmed to reproduce against pre-fix `main`: a test
 that only passes after a fix proves less than one watched to fail before it.
 
+### The baseline ref could be chosen, and weaponized, from `.flectorc` — fixed
+
+Found by asking of `snapshotRef` the question the `watch --command` entry above
+should have been asked of `command`: not "what does this option do" but "where
+does its value come from". It comes from `resolveEffectiveOptions`, like every
+other option, and nothing gated it.
+
+Two defects, of quite different cost to exploit.
+
+The **cheap one needs no crafted value at all.** `snapshotRef` names the
+baseline every change is measured against, so whoever sets it defines what
+"changed" means. A committed `.flectorc` carrying `{"defaults": {"snapshotRef":
+"HEAD"}}` points the baseline at the pull request's own tip: every file is
+compared against itself, every diff is empty, and `flecto ci` exits 0 whatever
+the change did. Confirmed end to end on a repo whose tip disables TLS and
+raises a pool size 100x — exit 1 against the operator's ref, exit 0 with the rc
+file present. This is the same shape as the `updateBaseline` finding above and
+strictly cheaper: no second option, no write, one key.
+
+The **second is argv injection.** The ref is interpolated into `git show
+<rev>:<path>` and passed through `execFileSync`, so no shell is involved — but
+argv is not the same boundary as a shell, and a ref beginning with `-` is still
+parsed by *git* as one of its options. `snapshotRef: "--output=pwned"` turns
+the baseline read into a file write (`pwned:app.yaml`, attacker-chosen prefix,
+forced `:<rel>` suffix). Because the read then returns nothing, the baseline
+parses as an empty document, every key reads as `added` rather than `changed`,
+and the default `--fail-on changed,policy,error` never fires. One string, an
+arbitrary write and a silent pass.
+
+**Fixed** in the two places the review's own pattern already points at.
+`assertSnapshotRefFromCli` refuses an rc-declared or profile-declared
+`snapshotRef` unless `FLECTO_ALLOW_RC_BASELINE=1` opts in — a ref named on the
+command line is operator intent and untouched, so `flecto ci config.yaml
+--snapshot-ref origin/main` is unchanged, and every documented use of the flag
+is the CLI form. `assertSafeGitRef` refuses a leading `-`, a newline, or a NUL
+in any ref whatever its provenance, and both call sites now pass
+`--end-of-options` so git refuses to read the operand as an option on its own
+account. The guard is kept *in addition to* `--end-of-options` because the
+latter needs git 2.24, and because a refusal that names the problem beats
+`fatal: option ... must come before non-option arguments`.
+
+Review of that first fix found **two more ways to the same property**, both
+confirmed, both now closed in the same change.
+
+A ref was resolved as a *filesystem path* before it was tried as a revision,
+and the path resolved against the checkout root -- whose file names an
+untrusted pull request controls. Committing a file named `HEAD~1`, which is
+exactly what the shipped GitHub Action passes by default, replaced the
+operator's baseline with one the attacker wrote: exit 0 on a config that
+disables TLS. No `.flectorc` needed, so it worked in repositories where that
+file is CODEOWNERS-protected. Resolution is now revision-first, and a ref-shaped
+value that does not resolve -- the shallow-clone case, where `HEAD~1` is real
+but unreachable -- is an error rather than a fallback to a file of that name. A
+file that is *also* a revision is reported rather than silently preferred.
+
+A ref could also be a commit *range*. `git show A..B` succeeds and prints
+nothing, so `HEAD:..` or `base..` produced an empty baseline, every key read as
+`added`, and the default `--fail-on changed,policy,error` never fired -- the
+same silent pass as the injection, with no dash involved, and reachable even
+through the `FLECTO_ALLOW_RC_BASELINE` opt-out. Refs now resolve through
+`git rev-parse --verify --end-of-options <ref>^{commit}`, which refuses anything
+that is not exactly one commit, and `git show` is handed the resolved SHA rather
+than any string the attacker wrote. `assertSafeGitRef` refuses `..` by name too,
+because "Needed a single revision" explains less.
+
+A **third** review round found that the shadow fix was still wrong, and the
+way it was wrong is the most useful thing in this entry. It asked "does this
+value look like a revision?" and allowed the file branch when it did not --
+a denylist over a value space *identical* to the one it was excluding, because
+branch and tag names are ordinary words. `origin/main`, `main`, `v1.2.3`, and
+`develop` all fell straight through it. Reproduced in a byte-faithful
+`actions/checkout` pull-request checkout: `--snapshot-ref origin/main`, the
+form this project's own `docs/explain.md` puts in a workflow, exited 0 on a
+config disabling TLS. On a `pull_request` event no `origin/<base>` ref exists
+unless it is fetched deliberately, so that was the *default* configuration,
+not an edge case. And because the shadow file is written to match the hostile
+tip, the diff is genuinely empty -- no `--fail-on` value catches it.
+
+**Fixed by removing the ambiguity instead of enumerating it again.** The
+polarity is inverted: the *file* branch must prove itself, and everything else
+must resolve as a revision or the run fails. `--snapshot-file` is added as the
+unambiguous form and is gated from `.flectorc` exactly as `snapshotRef` is,
+since it picks the baseline just as directly. `resolveGitCommit` also stopped
+collapsing "git is missing", "not a repository", and "git is too old" into "not
+a revision" -- not knowing whether a revision exists is precisely when reading a
+same-named file is most dangerous, so those now fail closed.
+
+A **fourth** round found the first version of that inversion still wrong, in the
+same way one more time. It accepted a `.json`/`.yaml` suffix as proof of
+path-ness -- but git only forbids `..`, a trailing `.`, and a `.lock` suffix in
+a ref name, so `release/v1.json` is a perfectly legal ref. A pull request
+committing a file of that name beat a **resolvable tag** of the same name, in a
+full clone, with no shallow checkout involved. An extension is a convention; the
+ref grammar is a grammar. Only an absolute path or an explicit `./` or `../`
+now short-circuits to a file, because those are the shapes git's own ref format
+cannot produce. The suffix arm was also pure surface with no benefit:
+`readSnapshotStateFromFile` is `JSON.parse`, so a real `.yaml` snapshot never
+worked anyway.
+
+The same round found the file branch had **no containment at all**, which is a
+different bug in the same function. A baseline named as a path was `resolve`d
+and read with no `assertTargetContained` -- so where an operator names an
+in-repo baseline such as `.flecto/baseline.json`, a pull request replaces it
+with a symlink and the contents of any JSON file on the runner become the
+"baseline", printed as `removed` changes. Flecto already enforced exactly this
+rule for targets, for the snapshot store root, and in `src/mcp.js` for a ref
+naming a file; the CLI baseline read was the one surface that had been missed,
+and this change had been about to add a second flag to it. Both branches now go
+through one `readSnapshotFile` that contains, refuses an empty value, and reads.
+
+The lesson worth recording is that three rounds of this finding were all the
+same mistake: patching the syntax that was demonstrated rather than the
+property underneath. *Whoever picks the baseline picks the verdict.* Anything
+that lets the change under review choose, or emptily answer, what it is
+compared against is this vulnerability wearing different syntax.
+
+`src/lsp-analysis.js` reads a ref the same way and is hardened identically. The
+MCP server was already safe from the dash shape -- `assertSafeRef` refuses a
+leading `-` before anything spawns -- and reaches the range and path fixes
+through the CLI it spawns.
+
+This is a **breaking change**, and deliberately shipped in 4.0 rather than a
+patch: a repository that legitimately keeps `snapshotRef` in `.flectorc` must
+now either move it to the command line or set `FLECTO_ALLOW_RC_BASELINE=1`.
+That cost is real but small — the flag is what every example and every doc page
+already uses — and the alternative is a merge gate a pull request can silence
+with one line.
+
+### A symlinked target redirected the baseline itself — fixed
+
+The fourth and most severe route to the same property, and the one that
+survived three rounds of fixes because it is not in the ref at all — it is in
+the **path**.
+
+`gitRepoRelativePath` canonicalized the *file*, which resolves its final
+symlink, so the path handed to `git show <sha>:<rel>` was the link's
+destination rather than the path the operator gated. A pull request that
+replaces the gated file with a link to any other file unchanged in the baseline
+gets `before == after`: a genuinely empty diff that **no `--fail-on` value
+catches**, because there is nothing to catch.
+
+The whole exploit is a one-line diff, plausibly titled *"chore: dedupe
+prod/staging config"*:
+
+```
+rm config/prod.yaml && ln -s staging.yaml config/prod.yaml
+```
+
+`config/prod.yaml` now effectively carries staging's `tls: false`, and
+`flecto ci --snapshot-ref HEAD~1` — the shipped Action's default — reports
+`"changes": []` and exits 0. Pre-existing on `main`, not introduced by the
+baseline work, and it would have shipped under a review record claiming the
+property it breaks.
+
+**Fixed** by canonicalizing the *directory* and keeping the name as written.
+Every reason the original comment gives for canonicalizing (Windows 8.3 names
+and case, the macOS `/tmp` and `/var` links) is a property of directories, so
+nothing is lost. A baseline entry that is itself a symlink is now refused
+rather than diffed against a filename — git stores a link as mode 120000 whose
+blob is the target *path*, which is not a configuration.
+`src/lsp-analysis.js` had the identical line and the identical fix.
+
+Found alongside it: `assertTargetContained`'s escape hatch for "named from
+outside the project" was decided on `canonical(dirname(given))` — a component
+an untrusted pull request controls. With a **directory** symlink
+(`repo/b -> /outside`), that already pointed outside, so the function returned
+without checking anything and `repo/b/baseline.json` read straight out of the
+project. Replacing the *file* with a link was refused; replacing its
+*directory* was the same effort and was not. The judgement is now made on the
+path as given as well.
+
+That second judgement is deliberately **lexical** — `resolve(cwd)` against
+`resolve(file)`, neither canonicalized. The first attempt compared an as-given
+path against a *canonicalized* root, which is a no-op on POSIX and silently
+wrong on Windows: `process.cwd()` reports the 8.3 short form
+(`C:\Users\RUNNER~1\…`) while `canonical()` returns the long one, so the two
+never shared a prefix, the check decided the path was named from outside, and
+returned without checking. The Windows CI leg caught it leaking a file from
+outside the project; the POSIX legs were green. Both sides of the lexical
+comparison now derive from the same `process.cwd()` spelling, so there is
+nothing left to normalize.
+
 ### Bitbucket path segments were interpolated unencoded — hardened
 
 `BITBUCKET_WORKSPACE` and `BITBUCKET_REPO_SLUG` went into the request path raw,

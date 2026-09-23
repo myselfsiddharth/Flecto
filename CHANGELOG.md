@@ -74,6 +74,32 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ### Security
 
+- **BREAKING: `snapshotRef` declared in `.flectorc` is refused** ([#121]). The
+  baseline decides what counts as a change, so a pull request that sets it
+  decides the verdict: a committed `{"defaults": {"snapshotRef": "HEAD"}}`
+  compared every file against the pull request's own tip and exited 0 on a
+  config that disabled TLS. Pass `--snapshot-ref` on the command line — the form
+  every example and the shipped Action already use — or set
+  `FLECTO_ALLOW_RC_BASELINE=1` if the rc file is trusted.
+- **`--snapshot-file <path>` is added, and `--snapshot-ref` is a git revision**
+  ([#121]). Overloading one flag with both is what let an attacker-committed
+  file stand in for the operator's baseline. **This is breaking**: only a value
+  that is unambiguously a path — absolute, or starting `./` or `../`, shapes
+  git's ref format cannot produce — is still read as a file by
+  `--snapshot-ref`. A bare `--snapshot-ref snapshots/base.json` now fails and
+  says to use `--snapshot-file`. The bundled `flecto-ci` Action gains a
+  `snapshot-file:` input for the same reason.
+  When git is missing, too old, or not looking at a repository, Flecto refuses
+  rather than falling back to a file.
+- **A baseline ref can no longer be crafted into a file write, a shadowed
+  baseline, or an empty diff** ([#121]). Three shapes, one property:
+  `--output=pwned` was read by git as an *option* and wrote a file while the
+  emptied read made every key look `added` so the default `--fail-on` never
+  fired; a committed file named after the operator's ref (`HEAD~1`, the shipped
+  Action's default) shadowed the baseline with one the attacker wrote; and a
+  commit range such as `HEAD:..` succeeded while printing nothing, for the same
+  silent pass. Refs now resolve through `git rev-parse --verify <ref>^{commit}`,
+  revision before file, and `git show` receives the resolved SHA.
 - **BREAKING: pack-supplied regular expressions are compiled with RE2**
   ([#121]). A policy pack is attacker input on an untrusted pull request --
   `policies/*.json` is committed and `.flectorc` selects which packs run -- and

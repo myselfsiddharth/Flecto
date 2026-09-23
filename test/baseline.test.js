@@ -164,7 +164,7 @@ describe('flecto ci --baseline (end to end)', () => {
   function ci(dir, args) {
     return spawnSync(
       process.execPath,
-      [rootIndex, 'ci', 'config.yaml', '--snapshot-ref', 'snap.json', ...args],
+      [rootIndex, 'ci', 'config.yaml', '--snapshot-file', 'snap.json', ...args],
       { cwd: dir, encoding: 'utf8' },
     );
   }

@@ -236,7 +236,7 @@ describe('flecto ci inline suppressions (end to end)', () => {
   function ci(dir, file, args) {
     return spawnSync(
       process.execPath,
-      [rootIndex, 'ci', file, '--snapshot-ref', 'snap.json', ...args],
+      [rootIndex, 'ci', file, '--snapshot-file', 'snap.json', ...args],
       { cwd: dir, encoding: 'utf8' },
     );
   }

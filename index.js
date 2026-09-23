@@ -2,7 +2,7 @@
 
 import { program } from 'commander';
 import { readFileSync, writeFileSync, mkdirSync, existsSync, realpathSync } from 'fs';
-import { resolve, relative, dirname, join, isAbsolute } from 'path';
+import { resolve, relative, dirname, basename, join, isAbsolute } from 'path';
 import { fileURLToPath } from 'url';
 import { execFileSync } from 'child_process';
 import chalk from 'chalk';
@@ -82,6 +82,8 @@ import {
   assertTargetContained,
   assertWriteDestinationContained,
   assertAlertActionsFromCli,
+  assertSnapshotRefFromCli,
+  assertSafeGitRef,
 } from './src/config.js';
 
 const PKG = JSON.parse(
@@ -307,6 +309,37 @@ function restoreSnapshotDocumentKeys(state, snapshot) {
   return withDocumentKeys(state, documents.map(String));
 }
 
+/**
+ * Read a snapshot named as a path, with the containment every other read in
+ * Flecto already has.
+ *
+ * A baseline path is attacker-reachable in the shape that matters: the
+ * operator names an in-repo snapshot such as `.flecto/baseline.json`, and the
+ * pull request replaces that file with a symlink. Without this check the
+ * contents of any JSON file on the runner became the "baseline" and were
+ * printed as `removed` changes -- the same read-outside-the-repo leak that
+ * `assertTargetContained` was added for, and that `src/mcp.js` already refuses
+ * for a ref naming a file. This was the one remaining surface without the rule.
+ *
+ * `assertTargetContained` is about escape, not location, so an operator's
+ * deliberate absolute path to a snapshot outside the project still works.
+ * @param {string} given
+ * @param {string} option the flag to name in an error
+ * @returns {unknown}
+ */
+function readSnapshotFile(given, option) {
+  if (given === '') {
+    // An unset CI variable expands to this. Everything else here refuses
+    // loudly; silently falling back to the local store would be the one path
+    // that quietly compares against something the operator did not choose.
+    throw new Error(`${option} was given an empty value`);
+  }
+  const resolved = resolve(given);
+  assertTargetContained(resolved, process.cwd());
+  if (!existsSync(resolved)) throw new Error(`no snapshot file at "${given}"`);
+  return readSnapshotStateFromFile(resolved);
+}
+
 function readSnapshotStateFromFile(snapshotPath) {
   const snap = JSON.parse(readFileSync(snapshotPath, 'utf8'));
   return restoreSnapshotDocumentKeys(snap?.state ?? snap, snap);
@@ -327,7 +360,41 @@ function gitRepoRelativePath(filePath) {
   const top = execFileSync('git', ['-C', dirname(filePath), 'rev-parse', '--show-toplevel'], {
     encoding: 'utf8',
   }).trim();
-  return relative(canonicalPath(top), canonicalPath(filePath)).replaceAll('\\', '/');
+  // Canonicalize the *directory* and keep the name as written. Canonicalizing
+  // the file itself resolved its final symlink, so the path handed to
+  // `git show` was the link's destination rather than the path the operator
+  // gated -- and a pull request that replaced the gated file with a link to any
+  // other file unchanged in the baseline got `before == after`, a genuinely
+  // empty diff that no --fail-on value catches. Every reason the comment above
+  // gives for canonicalizing (Windows 8.3 and case, the macOS /tmp and /var
+  // links) is a property of directories, so none of it is lost.
+  const nominal = join(canonicalPath(dirname(filePath)), basename(filePath));
+  return relative(canonicalPath(top), nominal).replaceAll('\\', '/');
+}
+
+/**
+ * Is the entry at this path, in this commit, a symbolic link?
+ *
+ * Git stores a link as mode 120000 whose blob is the *target path*, so reading
+ * one as a config file yields the target string rather than any configuration.
+ * That is a baseline Flecto cannot honestly compare against, and saying so
+ * beats emitting a diff between a filename and a document.
+ * @param {string} commit
+ * @param {string} rel
+ * @param {string} dir
+ * @returns {boolean}
+ */
+function baselineEntryIsSymlink(commit, rel, dir) {
+  try {
+    const entry = execFileSync(
+      'git',
+      ['-C', dir, 'ls-tree', '--format=%(objectmode)', '--end-of-options', commit, '--', rel],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
+    ).trim();
+    return entry === '120000';
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -362,7 +429,109 @@ function canonicalPath(path) {
   }
 }
 
-function readSnapshotStateFromRef(filePath, snapshotRef, store) {
+function gitFailureReason(err) {
+  if (err?.code === 'ENOENT') return 'git is not installed or not on PATH';
+  if (err?.status === 128) return 'this is not a git repository';
+  // The most likely remaining cause by far: `--end-of-options` arrived in git
+  // 2.24 (2019), and an older git rejects it as an unknown option. Naming a
+  // version someone can check beats printing the raw spawn failure.
+  return 'git rejected the command -- Flecto needs git 2.24 or newer'
+    + ` (${String(err?.message ?? 'unknown error').split('\n')[0]})`;
+}
+
+/**
+ * Resolve a ref to the single commit it names, or null when it names none.
+ *
+ * `git show` accepts far more than a commit: `A..B` is a *range*, and asking
+ * it to show one succeeds while printing nothing. An empty read then parses as
+ * an empty document, every key looks `added` rather than `changed`, and the
+ * default `--fail-on changed,policy,error` never fires -- the same silent-pass
+ * chain as the `--output=` injection, reached without a single dash.
+ * `rev-parse --verify <ref>^{commit}` refuses anything that is not exactly one
+ * commit, which closes the whole shape rather than the one spelling of it.
+ *
+ * Resolving also means the value handed to `git show` afterwards is a hex SHA
+ * this function produced, not a string the attacker wrote.
+ * @param {string} ref
+ * @param {string} dir a directory inside the repository
+ * @returns {string | null} the commit SHA, or null when `ref` is not a revision
+ */
+function resolveGitCommit(ref, dir) {
+  try {
+    const out = execFileSync(
+      'git',
+      ['-C', dir, 'rev-parse', '--verify', '--quiet', '--end-of-options', `${ref}^{commit}`],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
+    ).trim();
+    return { usable: true, commit: out || null };
+  } catch (err) {
+    // Exactly one failure means "git works, that revision is not here": exit 1
+    // from `--verify --quiet`. Everything else -- git missing (ENOENT), not a
+    // repository (128), an option this git does not know (pre-2.24) -- means
+    // Flecto cannot tell whether the ref exists. Collapsing those into "not a
+    // revision" is what let a missing git turn a baseline into whatever file
+    // happened to share the ref's name.
+    if (err?.status === 1) return { usable: true, commit: null };
+    return { usable: false, commit: null, reason: gitFailureReason(err) };
+  }
+}
+
+/**
+ * Is this value written the way a *path* is written, rather than a revision?
+ *
+ * `--snapshot-ref` has always accepted either a git revision or a snapshot
+ * file, and that ambiguity is the vulnerability: the file is resolved against
+ * the checkout root, whose file names an untrusted pull request controls. A
+ * pull request that commits a file named after the operator's ref replaces the
+ * baseline with one the attacker wrote, and since they can make it match their
+ * own tip exactly, the diff is genuinely empty -- no `--fail-on` setting
+ * catches it.
+ *
+ * The first attempt at this asked "does the value look like a revision?" and
+ * refused the file branch when it did. That is a denylist over a value space
+ * identical to the one it is trying to exclude: branch and tag names are
+ * ordinary words, so `origin/main`, `main`, and `v1.2.3` all fell through it
+ * and stayed exploitable -- and `origin/main` is the form this project's own
+ * documentation puts in a workflow.
+ *
+ * So the polarity is inverted. The *file* branch must prove itself, and the
+ * proof is a shape the git ref grammar cannot produce: an absolute path, or an
+ * explicit `./` or `../`. Everything else must resolve as a revision or the run
+ * fails, pointing at `--snapshot-file`. The failure mode is now "a snapshot
+ * file named like a ref is refused, and says which flag to use" rather than
+ * "an attacker's file is read as the baseline".
+ * @param {string} value
+ * @returns {boolean}
+ */
+function isExplicitPath(value) {
+  // git-check-ref-format forbids a ref whose component begins with `.` and a
+  // ref beginning with `/`, so none of these can name a revision. An earlier
+  // version of this also accepted a `.json`/`.yaml` suffix, which was the same
+  // mistake a third time: those ARE legal in a ref name, so `release/v1.json`
+  // skipped git entirely and read an attacker's committed file in preference to
+  // a real, resolvable tag of that name. A suffix is a convention; these are a
+  // grammar.
+  return isAbsolute(value)
+    || value.startsWith('./')
+    || value.startsWith('../')
+    || value.startsWith('.\\')
+    || value.startsWith('..\\');
+}
+
+function readSnapshotStateFromRef(filePath, snapshotRef, store, snapshotFile) {
+  if (snapshotRef === '') {
+    // The same unset-CI-variable case readSnapshotFile refuses. Falling back to
+    // the store here would compare against something the operator did not
+    // choose -- and on an untrusted pull request a committed shared store is
+    // something the change under review wrote.
+    throw new Error('--snapshot-ref was given an empty value');
+  }
+  // `--snapshot-file` is the unambiguous form: a path, never a revision. It
+  // exists because overloading one flag with both is what made an
+  // attacker-committed file able to stand in for the operator's baseline.
+  if (snapshotFile !== undefined) {
+    return readSnapshotFile(String(snapshotFile), '--snapshot-file');
+  }
   if (!snapshotRef) {
     // Failing closed here is right — a diff with no baseline is not a clean
     // diff — but an ENOENT on a hashed filename explains nothing. The default
@@ -375,13 +544,54 @@ function readSnapshotStateFromRef(filePath, snapshotRef, store) {
     }
     return record.state;
   }
-  const maybePath = resolve(snapshotRef);
-  if (existsSync(maybePath)) {
-    return readSnapshotStateFromFile(maybePath);
+  // The path decision comes before assertSafeGitRef, which refuses `..` -- a
+  // legitimate `../snapshots/base.json` is a path, not a commit range.
+  if (isExplicitPath(String(snapshotRef))) {
+    return readSnapshotFile(String(snapshotRef), '--snapshot-ref');
+  }
+
+  const ref = assertSafeGitRef(snapshotRef);
+  const repoDir = dirname(resolve(filePath));
+  const { usable, commit, reason } = resolveGitCommit(ref, repoDir);
+  if (!usable) {
+    // Never fall through to a file here. Not knowing whether the revision
+    // exists is exactly when reading a same-named file is most dangerous.
+    throw new Error(
+      `cannot resolve "${ref}" as a git revision: ${reason}.`
+      + ' Pass --snapshot-file <path> if you meant a snapshot file.',
+    );
+  }
+  if (!commit) {
+    const shadow = resolve(ref);
+    throw new Error(
+      `"${ref}" does not resolve to a git revision here`
+      + ' (a shallow clone is the usual reason -- on a pull request, actions/checkout does not'
+      + ' create origin/<base> unless you fetch it; try fetch-depth: 0).'
+      + (existsSync(shadow)
+        ? ` A file named "${ref}" exists and was NOT read as the baseline: a pull request can`
+        + ' commit such a file, and reading it would let the change under review choose what it'
+        + ' is compared against. Pass --snapshot-file if you genuinely meant that file.'
+        : ' Pass --snapshot-file <path> if you meant a snapshot file.'),
+    );
   }
 
   const rel = gitRepoRelativePath(filePath);
-  const raw = execFileSync('git', ['show', `${snapshotRef}:${rel}`], { encoding: 'utf8' });
+  if (baselineEntryIsSymlink(commit, rel, repoDir)) {
+    throw new Error(
+      `"${rel}" is a symbolic link in ${ref}, so the baseline there is a path, not a configuration.`
+      + ' Point --snapshot-ref at a revision where it is a regular file, or gate the file the link'
+      + ' resolves to.',
+    );
+  }
+  // `-C repoDir` matches where the revision was resolved, and the operand is a
+  // SHA this process produced rather than any string the attacker wrote.
+  // maxBuffer matches the LSP's reader: a megabyte-scale baseline blob is
+  // ordinary, and the default 1 MB dies with a raw ENOBUFS.
+  const raw = execFileSync(
+    'git',
+    ['-C', repoDir, 'show', '--end-of-options', `${commit}:${rel}`],
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 * 1024 * 1024 },
+  );
   return parseContent(filePath, raw);
 }
 
@@ -1097,7 +1307,8 @@ program
   .command('ci [files...]')
   .description('Run semantic diff in CI mode')
   .option('-p, --profile <name>', 'Use profile from .flectorc (else FLECTO_PROFILE)')
-  .option('--snapshot-ref <ref>', 'Snapshot reference: snapshot path or git ref')
+  .option('--snapshot-ref <ref>', 'Baseline git revision (a snapshot path also works if it is path-shaped)')
+  .option('--snapshot-file <path>', 'Baseline snapshot file, never consulted as a git revision')
   .option('--snapshot-store <id>', `Snapshot store to read: ${SNAPSHOT_STORE_IDS.join(' | ')}`)
   .option('--snapshot-dir <path>', 'Directory holding the snapshot store (default: .flecto-snapshots local, .flecto/snapshots shared)')
   .option('--format <type>', 'Output format: json | ndjson | sarif | github-annotations | pr-comment', 'json')
@@ -1125,6 +1336,7 @@ program
       const cliOverrides = stripUnsetCliOverrides(opts, command);
       const effective = resolveEffectiveOptions(config, profile, cliOverrides);
       assertExplainNotFromRc(effective, cliOverrides);
+      assertSnapshotRefFromCli(effective, cliOverrides);
       const explainDryRun = Boolean(cliOverrides.explainDryRun);
       const explainRequested = Boolean(cliOverrides.explain) || explainDryRun;
       const { policies: packIds, plugins, severityRemap } = resolvePolicyOptions(effective, { pluginsFromCli: cliOverrides.plugins !== undefined });
@@ -1204,12 +1416,12 @@ program
         }
         // A `--snapshot-ref` baseline is read straight from git, so it is never
         // masked; only a store-provided baseline needs the live side aligned.
-        const after = effective.snapshotRef
+        const after = (effective.snapshotRef || effective.snapshotFile)
           ? parseFile(filepath)
           : alignStateWithStore(parseFile(filepath), snapshotStore);
         let before;
         try {
-          before = readSnapshotStateFromRef(filepath, effective.snapshotRef, snapshotStore);
+          before = readSnapshotStateFromRef(filepath, effective.snapshotRef, snapshotStore, effective.snapshotFile);
         } catch (err) {
           throw new Error(
             `Failed to resolve snapshot baseline for "${filepath}"` +
@@ -1371,7 +1583,8 @@ program
   .command('explain [files...]')
   .description('Narrate the masked semantic diff with a model you configure — advisory, opt-in, bring your own key (#143)')
   .option('-p, --profile <name>', 'Use profile from .flectorc (else FLECTO_PROFILE)')
-  .option('--snapshot-ref <ref>', 'Snapshot reference: snapshot path or git ref')
+  .option('--snapshot-ref <ref>', 'Baseline git revision (a snapshot path also works if it is path-shaped)')
+  .option('--snapshot-file <path>', 'Baseline snapshot file, never consulted as a git revision')
   .option('--snapshot-store <id>', `Snapshot store to read: ${SNAPSHOT_STORE_IDS.join(' | ')}`)
   .option('--snapshot-dir <path>', 'Directory holding the snapshot store (default: .flecto-snapshots local, .flecto/snapshots shared)')
   .option('--provider <id>', `Model provider: ${EXPLAIN_PROVIDERS.join(' | ')} (else FLECTO_EXPLAIN_PROVIDER)`)
@@ -1393,6 +1606,7 @@ program
       const cliOverrides = stripUnsetCliOverrides(opts, command);
       const effective = resolveEffectiveOptions(config, profile, cliOverrides);
       assertExplainNotFromRc(effective, cliOverrides);
+      assertSnapshotRefFromCli(effective, cliOverrides);
       // Everything that shapes the request is read from the command line, never
       // from the merged options: `.flectorc` can name a `format` or `model` for
       // other commands, and none of it may steer where the diff goes.
@@ -1402,6 +1616,7 @@ program
       }
       const dryRun = Boolean(cliOverrides.dryRun);
       const snapshotRef = cliOverrides.snapshotRef;
+      const snapshotFile = cliOverrides.snapshotFile;
       const { policies: packIds, plugins, severityRemap } = resolvePolicyOptions(effective, { pluginsFromCli: cliOverrides.plugins !== undefined });
       const targets = (await resolveTargetFiles(files, config)).map((f) => resolve(f));
       if (targets.length === 0) {
@@ -1422,12 +1637,12 @@ program
           renderWarn(`Skipping unsupported file: ${filepath}`);
           continue;
         }
-        const after = snapshotRef
+        const after = (snapshotRef || snapshotFile)
           ? parseFile(filepath)
           : alignStateWithStore(parseFile(filepath), snapshotStore);
         let before;
         try {
-          before = readSnapshotStateFromRef(filepath, snapshotRef, snapshotStore);
+          before = readSnapshotStateFromRef(filepath, snapshotRef, snapshotStore, snapshotFile);
         } catch (err) {
           throw new Error(
             `Failed to resolve snapshot baseline for "${filepath}"`

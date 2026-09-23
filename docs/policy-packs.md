@@ -6,7 +6,7 @@ Run the complete example:
 
 ```bash
 cd examples/policy-pack
-node ../../index.js ci config.yaml --snapshot-ref baseline.json --policies deployment-safety --fail-on policy
+node ../../index.js ci config.yaml --snapshot-file baseline.json --policies deployment-safety --fail-on policy
 ```
 
 The command intentionally exits with status `1`: the example change triggers policy findings.

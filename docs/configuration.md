@@ -393,6 +393,14 @@ genuinely configures a destination elsewhere in its `.flectorc`:
 FLECTO_ALLOW_RC_WRITES=1 flecto report
 ```
 
+`snapshotRef` is refused from `.flectorc` the same way, opting back in with
+`FLECTO_ALLOW_RC_BASELINE=1`. It names the baseline every change is measured
+against, so a pull request that sets it decides what counts as a change at all —
+`{"defaults": {"snapshotRef": "HEAD"}}` compares every file against the pull
+request's own tip, which is to say against itself, and exits 0. Passing
+`--snapshot-ref origin/main` on the command line is unaffected, and is the form
+every example here already uses.
+
 `--update-baseline` goes further: it is refused from `.flectorc` altogether, with
 no opt-out. It accepts every finding of the current run, so honoring it from a
 file a pull request can edit would let that pull request turn its own failing
