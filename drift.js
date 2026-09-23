@@ -148,11 +148,16 @@ program
 
       // Declared is `before`, live is `after`, so the verbs read the way the
       // question is asked: what has the running system done to what we wrote.
-      // Masked on both paths, not only the human one. A machine-readable
-      // report of live state is the likelier thing to be archived as a CI
-      // artifact, so leaving it raw would put the values somewhere they outlive
-      // the run.
-      const changes = diffTrees(before, after, {}).map(maskChangeEvent);
+      // Masked on both paths, not only the human one: a machine-readable report
+      // of live state is the likelier thing to be archived as a CI artifact, so
+      // leaving it raw would put those values somewhere they outlive the run.
+      //
+      // A key compared by shape is skipped, because a shape is already the
+      // safe form -- a keyed digest of a value this process never prints.
+      // Masking it again would replace it with `***` on both sides and throw
+      // away the one thing it exists to show: that the credential rotated.
+      const changes = diffTrees(before, after, {})
+        .map((event) => (meta.shapedKeys.has(String(event.path)) ? event : maskChangeEvent(event)));
 
       if (format === 'json') {
         process.stdout.write(`${JSON.stringify({
