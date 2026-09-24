@@ -11,9 +11,25 @@ Automated publish via GitHub Actions (OIDC trusted publishing). You do **not** n
 
 ## 2) Version bump
 
+The bump goes in a **release PR**, not a local `npm version` — it is reviewed
+like anything else, and it carries the changelog and any migration notes with
+it. `npm version` would also tag a commit that has not merged yet.
+
+In the release PR:
+
 ```bash
-npm version patch   # or minor / major
-git push origin main --follow-tags
+# edit package.json's version, then:
+npm install --package-lock-only    # keeps package-lock.json in step
+```
+
+`.github/workflows/publish.yml` runs `npm ci`, so a lockfile left at the old
+version fails the publish rather than the tests.
+
+Once it is merged, tag the merge commit:
+
+```bash
+git checkout main && git pull
+git tag vX.Y.Z && git push origin vX.Y.Z
 ```
 
 ## 3) GitHub Release (triggers npm publish)
@@ -26,6 +42,17 @@ Or create a release in the GitHub UI from the tag. Workflow: `.github/workflows/
 
 ## 4) Post-release
 
-- Confirm Actions run succeeded
+- Confirm the Actions run succeeded
 - Verify: `npm view flecto version`
-- Optional: `npm i -g flecto` and `flecto --help`
+- Install the **published** package and check the fix is really in it:
+  `npm i -g flecto && flecto --help`
+
+## 5) Only now, publish any security advisories
+
+Advisories stay in **draft** until npm serves the fixed version. Publishing one
+against an unpatched `latest` hands out a working exploit with no upgrade path.
+
+The order is: merge → tag → GitHub release (which alone triggers the publish) →
+**verify the published tarball carries the fix** → flip the advisories to
+published. Step four is the one that matters; it is not enough that the release
+workflow went green.
