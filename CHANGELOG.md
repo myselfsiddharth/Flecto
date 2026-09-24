@@ -7,6 +7,33 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ## [Unreleased]
 
+## [4.0.0] - 2026-09-23
+
+**A security release.** Every breaking change below exists because a pull
+request could otherwise make `flecto ci` report a clean run on a change that was
+not clean. If you run Flecto on untrusted pull requests, upgrading is not
+optional.
+
+See **[docs/migrating-to-4.md](docs/migrating-to-4.md)** for what to change, and
+the [security advisories](https://github.com/myselfsiddharth/Flecto/security/advisories)
+for what was wrong.
+
+### Breaking
+
+- `snapshotRef` and `snapshotFile` declared in `.flectorc` are refused
+  (`FLECTO_ALLOW_RC_BASELINE=1` opts back in).
+- `--snapshot-ref` takes a git revision. A bare snapshot filename needs
+  `--snapshot-file`, or a `./` prefix. The bundled `flecto-ci` Action gains a
+  `snapshot-file:` input.
+- Policy-pack regular expressions outside `src/packs/` are compiled with RE2:
+  lookaround, backreferences, `\uXXXX` escapes, and `v`-flag set subtraction now
+  fail at load, and a few constructs match differently.
+- `.flecto-queue/` is keyed by destination. A 3.x backlog is kept but not
+  auto-delivered.
+- The `--command` spill file is deleted when the command exits, so a script must
+  read `FLECTO_CHANGES_FILE` while the command is still running.
+- Flecto now requires git 2.24 or newer.
+
 ### Added
 
 - **`flecto explain` and `ci --explain`: opt-in, advisory narration of a diff by
@@ -1196,6 +1223,7 @@ fixed — those runs were never actually gated — but the failure is new.
   continuing with no policies.
 
 [Unreleased]: https://github.com/myselfsiddharth/Flecto/compare/v3.1.0...HEAD
+[4.0.0]: https://github.com/myselfsiddharth/Flecto/compare/v3.1.0...v4.0.0
 [3.1.0]: https://github.com/myselfsiddharth/Flecto/compare/v3.0.2...v3.1.0
 [3.0.2]: https://github.com/myselfsiddharth/Flecto/compare/v3.0.1...v3.0.2
 [3.0.1]: https://github.com/myselfsiddharth/Flecto/compare/v3.0.0...v3.0.1

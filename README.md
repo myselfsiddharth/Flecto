@@ -535,7 +535,9 @@ Explicit CLI flags win over profiles, which win over `defaults`.
 | **[Explain](docs/explain.md)** | Opt-in model narration of a diff: what is sent, what it can never do, cost |
 | **[Policy packs](docs/policy-packs.md)** | Writing declarative rules |
 | **[Plugins](docs/plugins.md)** · **[Cookbook](docs/plugin-cookbook.md)** | Rules that need real code |
+| **[Live drift](docs/drift.md)** | `flecto-drift`: comparing a declared config against what is actually running |
 | **[Troubleshooting](docs/troubleshooting.md)** | When something doesn't behave |
+| **[Migrating to 4.0](docs/migrating-to-4.md)** | The five breaking changes, and how to tell whether they affect you |
 | **[Changelog](CHANGELOG.md)** | Release history and migration notes |
 
 ---
