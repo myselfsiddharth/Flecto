@@ -453,7 +453,11 @@ describe('flecto lsp', () => {
       + '  return [];\n'
       + '}\n',
     });
-    const server = startCli(dir, ['--timeout', '400', '--plugins', join(dir, 'hang.mjs')]);
+    // 2s, not 400ms: the hang is a 60s busy-wait so it trips any timeout,
+    // while the *recovery* run has to start a fresh worker and load the
+    // plugin inside the budget. Windows is slow enough at that to time the
+    // recovery out too, which looked like the server failing to recover.
+    const server = startCli(dir, ['--timeout', '2000', '--plugins', join(dir, 'hang.mjs')]);
     try {
       const docUri = pathToFileURL(join(dir, 'prod.yaml')).href;
       server.send({ id: 1, method: 'initialize', params: { rootUri: pathToFileURL(dir).href } });
@@ -501,7 +505,9 @@ describe('flecto lsp', () => {
       + '  return [];\n'
       + '}\n',
     });
-    const executor = createWorkerExecutor({ timeoutMs: 300, log: () => {} });
+    // Same reason as above: the second run needs a fresh worker plus a plugin
+    // load inside the budget, and 300ms does not cover that on Windows.
+    const executor = createWorkerExecutor({ timeoutMs: 2000, log: () => {} });
     try {
       const path = join(dir, 'prod.yaml');
       const settings = { plugins: [join(dir, 'hang.mjs')] };
