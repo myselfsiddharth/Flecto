@@ -103,23 +103,79 @@ rather than copied from the plan document.
   and an explicit list of what the wedge must not claim), `docs/decisions.md`,
   `docs/v5-proposals.md`, `growth/metrics.md`, and this log.
 
-### Blocked, needs the maintainer
+### Maintainer decisions taken, 2026-09-28
 
-- **Dismissing secret-scanning alert 1.** The `PATCH` to
-  `/secret-scanning/alerts/1` (`resolution: used_in_tests`) was denied by the
-  sandbox as an external write. One click, or re-run with permission.
-- **Issue and PR triage.** Labelling and commenting are external writes, so the
-  six issues and PR #192 have drafted responses in [`triage.md`](triage.md)
-  rather than posted ones. All six issues are maintainer-authored,
-  so hard rule 6 (do not close issues opened by others) does not bind — but
-  posting still needs permission.
-- **Confirming the wedge** in `docs/positioning.md`. Phase 2 is gated on it, and
-  so are the `package.json` `description`/`keywords` and the repo About, which
-  are deliberately left untouched because changing the pitch needs sign-off.
-- **A moving `v4` tag**, if wanted (D-003).
+- **Wedge CONFIRMED** — the primary pitch. `docs/positioning.md` marked
+  confirmed; `package.json` `description` and `keywords` updated; repo About and
+  topics updated.
+- **`@v4.0.0` only** — no moving `v4` tag. Trade-off accepted knowingly
+  (D-003): users bump manually, which is unusual for Actions, in exchange for an
+  immutable reference. Revisit for the standalone action repo if Phase 2 creates
+  one.
+- **Ship as one PR** — [#195](https://github.com/myselfsiddharth/Flecto/pull/195).
+- **External writes granted**, plus CodeQL and the #192 merge.
+
+### Then done
+
+- **Applied the confirmed pitch.** `package.json` `description` replaced
+  ("semantic config watcher that reports meaningful changes in plain English" to
+  the wedge pitch, 138 chars). `keywords` re-cut to lead with `terraform`,
+  `terraform-plan`, `kubernetes`, `helm`, `pull-request`, `code-review`,
+  `policy-as-code`, `github-actions`. Repo About replaced. Topics: dropped
+  `cicd`, `diff`, `nodejs`, `drift-detection` (redundant or secondary-feature)
+  to make room for `pull-request`, `code-review`, `github-actions`,
+  `terraform-plan`, holding at the 20-topic cap.
+
+  Note for Phase 3: GitHub renders topics alphabetically, so "lead with" is
+  about which topics exist, not their order. Nothing to tune there.
+
+- **Enabled CodeQL** (`.github/workflows/codeql.yml`), `security-extended`,
+  least-privilege permissions, weekly schedule off the hour. Verified
+  `github/codeql-action@v4` is a real major tag before using it, and bumped the
+  one-major-behind `upload-sarif@v3` in `docs/ci.md` to `@v4` while there.
+
+- **Secret-scanning alert 1 resolved** as `used_in_tests`. The API caps
+  `resolution_comment` at 280 characters, which took two attempts to fit.
+
+- **All 6 issues labelled and answered.** Created two labels that did not exist:
+  `security` (merge-gate correctness) and `noise` (false positives). Applied
+  `security` to #186 and #188, `noise` + `good first issue` to #191,
+  `good first issue` to #185. Posted a roll-up on #121 so the security review
+  reads as worked rather than stalled, and triage notes on the rest. **#186 got
+  an explicit note that #195 does not fix it** — #195 closes a route to an empty
+  baseline, not the amplifier.
+
+  `good first issue` count went 0 to 2, against Phase 6's target of 5 to 10.
+
+- **PR #192 (dotenv 18.0.1) verified and commented, not merged.** See
+  [`triage.md`](triage.md) for the full check: the only API used is `parse()`,
+  and the line regex `src/positions.js` mirrors is byte-identical between 17.4.2
+  and 18.0.1, so LSP positions still agree with the parser.
+
+### Still open for the maintainer
+
+- **Approve and merge #192.** All 5 required status checks are green and it is
+  `MERGEABLE`, but `main` requires **1 code-owner approving review**. Not
+  self-approved: posting an approval as the maintainer is a judgment that is not
+  an agent's to fabricate. Repo-wide auto-merge is disabled
+  (`enablePullRequestAutoMerge` refused), so `--auto` could not stage it either.
+  Two clicks.
+- **Review and merge #195.**
+- **Decide whether `growth/` belongs in a public repo.** It states "estimated
+  real active users: ~0". The plan directs these files into the repo and the
+  honesty is consistent with the trust strategy, but it is a judgment call, and
+  it is flagged in #195. Phase 4's `targets.md` and `outreach.md` will name
+  specific external repos and should almost certainly be gitignored.
 
 ### Not done, deliberately
 
-- `package.json` metadata. `homepage`, `repository`, and `bugs` are all correct
-  already; `description` and `keywords` are pitch-dependent and held for
-  confirmation.
+- `package.json` `homepage`, `repository`, and `bugs` were already correct.
+- **#186's underlying fix.** Adding `added` to the bundled Action's default
+  `fail-on` changes what passes for every existing user. That is a
+  security/noise trade-off for the maintainer, not a Phase 1 packaging fix.
+- **Phase 2.** Gated on verifying GitHub's current Marketplace requirement that
+  a listed action's metadata file sit at a public repo's root. No web lookups
+  were made this session, so that claim is unverified and no repo was created.
+  See `docs/decisions.md`, "Verifications still owed".
+- **Phase 3's README restructure.** The README is 594 lines against a target of
+  ~120. Its own gate is maintainer approval of the new structure.
