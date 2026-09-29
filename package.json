@@ -5,16 +5,23 @@
     "provenance": true
   },
   "version": "4.0.0",
-  "description": "Flecto \u2014 semantic config watcher that reports meaningful changes in plain English",
+  "description": "Reads your Terraform plan and Kubernetes changes and posts a plain-English risk summary on every pull request, blocking the dangerous ones",
   "license": "MIT",
   "keywords": [
-    "flecto",
-    "cli",
-    "watcher",
-    "config",
+    "terraform",
+    "terraform-plan",
+    "kubernetes",
+    "helm",
+    "pull-request",
+    "code-review",
+    "policy-as-code",
+    "github-actions",
     "semantic-diff",
+    "config",
     "devops",
-    "ci"
+    "ci",
+    "cli",
+    "flecto"
   ],
   "homepage": "https://github.com/myselfsiddharth/Flecto#readme",
   "bugs": {

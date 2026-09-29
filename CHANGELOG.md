@@ -7,6 +7,35 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- **The bundled GitHub Actions installed the pre-4.0 CLI.** `flecto-ci`
+  hardcoded `npx --yes flecto@3` and `flecto-pr-risk` defaulted
+  `flecto-version: "3"`, so both shipped Actions ran the 3.x line after 4.0.0
+  released. Two consequences: `flecto-ci`'s advertised `snapshot-file:` input
+  passed a flag that does not exist before 4.0, and its default
+  `snapshot-ref: HEAD~1` against a 3.x CLI is the baseline-shadowing bypass 4.0
+  closed — a pull request commits a file named `HEAD~1`, it is read instead of
+  the revision, the diff comes back empty and no `--fail-on` value catches it.
+
+  Both now default to `4`. `flecto-ci` gains a `flecto-version` input so the CLI
+  can be pinned without forking, matching `flecto-pr-risk`. A test asserts the
+  floor across both Actions, including hardcoded installs that would bypass the
+  input.
+
+  **If you copied an earlier README example you are affected**: the examples
+  referenced the Actions `@main`, which resolved to a 3.x install. Re-pin to
+  `@v4.0.0` — every example in the README and [docs/ci.md](docs/ci.md) now does,
+  with SHA pinning documented for security-sensitive users.
+
+### Added
+
+- [docs/stability.md](docs/stability.md): what the public contract covers (the
+  `schema_version: "2.0"` envelope, exit codes, `.flectorc`, the CLI surface),
+  what it deliberately does not, and the deprecation sequence — one minor release
+  carrying a warning before any removal, with security fixes the stated
+  exception.
+
 ## [4.0.0] - 2026-09-23
 
 **A security release.** Every breaking change below exists because a pull

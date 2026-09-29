@@ -253,7 +253,7 @@ permissions:
   security-events: write   # required to upload SARIF
 steps:
   - run: flecto ci "config/**/*.yaml" --snapshot-ref origin/main --format sarif > flecto.sarif
-  - uses: github/codeql-action/upload-sarif@v3
+  - uses: github/codeql-action/upload-sarif@v4
     with:
       sarif_file: flecto.sarif
 ```
@@ -411,7 +411,7 @@ steps:
   - uses: actions/checkout@v7
     with:
       fetch-depth: 2
-  - uses: myselfsiddharth/Flecto/.github/actions/flecto-ci@main
+  - uses: myselfsiddharth/Flecto/.github/actions/flecto-ci@v4.0.0
     with:
       targets: config/**/*.{yaml,yml,json,toml,ini}
       format: pr-comment
@@ -467,7 +467,7 @@ flecto:
   variables:
     FLECTO_GITLAB_TOKEN: $FLECTO_REVIEW_TOKEN   # masked project variable
   script:
-    - npx --yes flecto@3 ci "config/**/*.yaml"
+    - npx --yes flecto@4 ci "config/**/*.yaml"
         --snapshot-ref "$CI_MERGE_REQUEST_DIFF_BASE_SHA"
         --format pr-comment --pr-comment-post --mask-secrets
 ```
@@ -489,7 +489,7 @@ pipelines:
           image: node:22
           script:
             - export FLECTO_BITBUCKET_TOKEN=$FLECTO_REVIEW_TOKEN
-            - npx --yes flecto@3 ci "config/**/*.yaml"
+            - npx --yes flecto@4 ci "config/**/*.yaml"
                 --snapshot-ref "origin/$BITBUCKET_PR_DESTINATION_BRANCH"
                 --format pr-comment --pr-comment-post --mask-secrets
 ```
@@ -519,7 +519,7 @@ steps:
   - uses: actions/checkout@v7
     with:
       fetch-depth: 2
-  - uses: myselfsiddharth/Flecto/.github/actions/flecto-ci@main
+  - uses: myselfsiddharth/Flecto/.github/actions/flecto-ci@v4.0.0
     with:
       targets: config/**/*.{yaml,yml,json,toml,ini}
       snapshot-ref: HEAD~1
@@ -564,7 +564,7 @@ steps:
   - uses: actions/checkout@v7
     with:
       fetch-depth: 0
-  - uses: myselfsiddharth/Flecto/.github/actions/flecto-pr-risk@main
+  - uses: myselfsiddharth/Flecto/.github/actions/flecto-pr-risk@v4.0.0
 ```
 
 | Input | Default | Description |
@@ -634,10 +634,39 @@ and the Action itself is at
 
 ### Pinning
 
-Both Actions run `npx --yes flecto@3 ci`, so compatible updates are picked up
-automatically. For fully reproducible builds, pin the Action reference to a
-commit SHA; `flecto-pr-risk` also takes an exact CLI version through
-`flecto-version`, so pinning it needs no fork.
+Every example here pins the Action to the `v4.0.0` tag. Do not use `@main`:
+it is whatever was pushed last, it is what Flecto's own `github-actions` pack
+flags in your workflows, and a tag is the least you should accept from a step
+that decides whether your build passes.
+
+Both Actions then run `npx --yes flecto@4 ci`, so compatible CLI updates are
+picked up automatically. Two tighter levels are available:
+
+```yaml
+# Exact CLI version — reproducible installs, tag still mutable in principle.
+- uses: myselfsiddharth/Flecto/.github/actions/flecto-pr-risk@v4.0.0
+  with:
+    flecto-version: "4.0.0"
+```
+
+```yaml
+# Recommended if you are security-sensitive: pin the Action to a commit SHA.
+# A tag can be moved; a SHA cannot. Add a comment, because a SHA is unreadable.
+- uses: myselfsiddharth/Flecto/.github/actions/flecto-pr-risk@<commit-sha>  # v4.0.0
+  with:
+    flecto-version: "4.0.0"
+```
+
+Resolve the SHA for a tag with
+`git ls-remote https://github.com/myselfsiddharth/Flecto refs/tags/v4.0.0`.
+Both Actions take `flecto-version`, so pinning the CLI never needs a fork.
+
+**Do not set `flecto-version` below 4.** `--snapshot-file` does not exist before
+4.0, and pre-4.0 `--snapshot-ref` would resolve against a committed file of the
+same name — the baseline-shadowing bypass that
+[4.0](../CHANGELOG.md#400---2026-09-23) closed. A pull request could commit a
+file named `HEAD~1`, match it to its own tip, and every diff came back empty
+with exit 0.
 
 ---
 
@@ -650,12 +679,12 @@ commit SHA; `flecto-pr-risk` also takes an exact CLI version through
 config-check:
   image: node:22
   script:
-    - npx --yes flecto@3 ci "config/**/*.yaml" --snapshot-ref "$CI_MERGE_REQUEST_DIFF_BASE_SHA" --fail-on "policy,error"
+    - npx --yes flecto@4 ci "config/**/*.yaml" --snapshot-ref "$CI_MERGE_REQUEST_DIFF_BASE_SHA" --fail-on "policy,error"
 ```
 
 ```bash
 # Pre-commit hook (.git/hooks/pre-commit)
-npx --yes flecto@3 ci "config/**/*.yaml" --snapshot-ref HEAD --fail-on "policy,error" || {
+npx --yes flecto@4 ci "config/**/*.yaml" --snapshot-ref HEAD --fail-on "policy,error" || {
   echo "Flecto flagged a risky config change. Review above, or commit with --no-verify."
   exit 1
 }

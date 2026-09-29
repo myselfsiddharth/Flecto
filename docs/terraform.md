@@ -200,7 +200,7 @@ engine. Override severities per profile with `severityRemap`, or drop
     terraform show -json plan.tfplan > plan.json
 
 - name: Flecto plan review
-  run: npx --yes flecto@3 plan plan.json --format pr-comment --pr-comment-post
+  run: npx --yes flecto@4 plan plan.json --format pr-comment --pr-comment-post
   env:
     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 ```

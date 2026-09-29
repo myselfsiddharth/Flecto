@@ -28,7 +28,7 @@ jobs:
           # fails with an explicit message rather than reporting "no changes".
           fetch-depth: 0
 
-      - uses: myselfsiddharth/Flecto/.github/actions/flecto-pr-risk@main
+      - uses: myselfsiddharth/Flecto/.github/actions/flecto-pr-risk@v4.0.0
         with:
           targets: config/**/*.{yaml,yml,json,toml,ini}
           # Everything below is already the default; shown so you can see the

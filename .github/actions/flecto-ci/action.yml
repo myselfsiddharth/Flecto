@@ -51,6 +51,13 @@ inputs:
       consulted as a git revision.
     required: false
     default: ""
+  flecto-version:
+    description: >-
+      npm version range for the Flecto CLI. Must be 4 or newer: this action
+      passes --snapshot-file, and treats --snapshot-ref as a revision, which
+      are 4.0 behaviours. Pin to an exact version for reproducible builds.
+    required: false
+    default: "4"
   node-version:
     description: Node.js version used to run Flecto.
     required: false
@@ -75,6 +82,7 @@ runs:
         INPUT_SNAPSHOT_REF: ${{ inputs.snapshot-ref }}
         INPUT_SNAPSHOT_FILE: ${{ inputs.snapshot-file }}
         INPUT_PR_COMMENT_POST: ${{ inputs.pr-comment-post }}
+        INPUT_FLECTO_VERSION: ${{ inputs.flecto-version }}
         # Always set explicitly: an empty value makes Flecto skip posting rather
         # than fall back to an ambient token.
         GITHUB_TOKEN: ${{ inputs.github-token }}
@@ -103,4 +111,8 @@ runs:
 
         # Pin to the compatible major line. Pin to a full version for
         # reproducible builds when consuming this action from another repo.
-        npx --yes flecto@3 "${args[@]}"
+        #
+        # This must not drop below 4: --snapshot-file does not exist before
+        # 4.0, and pre-4.0 --snapshot-ref accepts a committed file, which is
+        # the baseline-shadowing bypass 4.0 closed.
+        npx --yes "flecto@${INPUT_FLECTO_VERSION}" "${args[@]}"

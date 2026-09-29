@@ -107,7 +107,8 @@ describe('bundled GitHub Actions', () => {
     const { doc } = loadAction('flecto-ci');
     assert.deepEqual(Object.keys(doc.inputs), [
       'targets', 'fail-on', 'policies', 'profile', 'format',
-      'pr-comment-post', 'github-token', 'snapshot-ref', 'snapshot-file', 'node-version',
+      'pr-comment-post', 'github-token', 'snapshot-ref', 'snapshot-file',
+      'flecto-version', 'node-version',
     ]);
     const defaults = Object.fromEntries(
       Object.entries(doc.inputs).map(([key, spec]) => [key, spec.default]),
@@ -125,6 +126,10 @@ describe('bundled GitHub Actions', () => {
       // unaffected. It exists because --snapshot-ref no longer accepts a bare
       // snapshot filename, and without it those users would have no route.
       'snapshot-file': '',
+      // Added so the CLI can be pinned without forking the action, matching
+      // flecto-pr-risk. It is also a security floor -- see the version-floor
+      // test below for why it must never drop to 3.
+      'flecto-version': '4',
       'node-version': '20',
     });
   });
@@ -143,12 +148,53 @@ describe('bundled GitHub Actions', () => {
     // Empty, not HEAD~1: the baseline is resolved from the pull request.
     assert.equal(inputs['snapshot-ref'].default, '');
     assert.equal(inputs['node-version'].default, '20');
-    assert.equal(inputs['flecto-version'].default, '3');
+    assert.equal(inputs['flecto-version'].default, '4');
 
     for (const [name, spec] of Object.entries(inputs)) {
       assert.equal(spec.required, false, `${name}: nothing is required`);
       assert.equal(typeof spec.description, 'string', `${name}: is documented`);
       assert.notEqual(spec.default, undefined, `${name}: has a default`);
+    }
+  });
+
+  test('neither action can install a Flecto older than 4', () => {
+    // Regression guard. Both actions shipped `flecto@3` after 4.0.0 released,
+    // and that was not a compatibility slip -- it was a live bypass:
+    //
+    //   1. flecto-ci advertises `snapshot-file:` and passes --snapshot-file,
+    //      which does not exist before 4.0, so the documented input hard-failed.
+    //   2. flecto-ci's default `snapshot-ref: HEAD~1` against a 3.x CLI is the
+    //      baseline-shadowing bypass 4.0 closed: a pull request commits a file
+    //      named HEAD~1, it is read instead of the revision, it is written to
+    //      match the hostile tip, the diff is empty, and no --fail-on value
+    //      catches it.
+    //
+    // Asserted as a floor over both actions rather than as an equality on one
+    // literal, so this still fails if a 5.0 bump leaves an action behind, and
+    // still fails if a third action is added with its own version input.
+    const MIN_MAJOR = 4;
+
+    for (const name of ['flecto-ci', 'flecto-pr-risk']) {
+      const { doc, text } = loadAction(name);
+
+      const spec = doc.inputs['flecto-version'];
+      assert.ok(spec, `${name}: exposes a flecto-version input`);
+      const major = Number.parseInt(String(spec.default), 10);
+      assert.ok(Number.isInteger(major), `${name}: flecto-version default is numeric`);
+      assert.ok(major >= MIN_MAJOR,
+        `${name}: flecto-version default is ${spec.default}, below the ${MIN_MAJOR} floor`);
+
+      // The default is only a floor if nothing bypasses it with a hardcoded
+      // install. Catch `npx flecto@3`, `flecto@^3`, `flecto@3.1.0` and friends.
+      const hardcoded = [...text.matchAll(/flecto@(?!\$\{)[~^]?v?(\d+)/g)];
+      for (const [match, ver] of hardcoded) {
+        assert.ok(Number.parseInt(ver, 10) >= MIN_MAJOR,
+          `${name}: hardcoded install "${match}" is below the ${MIN_MAJOR} floor`);
+      }
+
+      // And the install must actually route through the input.
+      assert.match(text, /flecto@\$\{INPUT_FLECTO_VERSION\}/,
+        `${name}: installs the version from the flecto-version input`);
     }
   });
 

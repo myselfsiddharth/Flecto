@@ -1,0 +1,48 @@
+# Flecto is a security tool, and its Security tab was reporting "no analysis
+# found" -- which reads as "not checked", not "clean". This turns the third
+# column on, so the absence of alerts starts meaning something.
+name: CodeQL
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  schedule:
+    # Weekly, so a newly published query finds the code without waiting for a
+    # push. Monday 07:14 UTC: off the hour, because the top of the hour is when
+    # every scheduled workflow on GitHub queues at once.
+    - cron: "14 7 * * 1"
+
+concurrency:
+  group: codeql-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: analyze (javascript)
+    runs-on: ubuntu-latest
+    # Only what uploading results needs. No write access to contents: a query
+    # pack is third-party code, and it has no business changing the repository.
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: javascript-typescript
+          # security-extended over the default pack: the default set is tuned to
+          # keep noise low on an average repository. Flecto parses untrusted
+          # config from pull requests, so the extra path-traversal, injection,
+          # and regex queries are the ones most likely to say something real.
+          queries: security-extended
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:javascript-typescript"

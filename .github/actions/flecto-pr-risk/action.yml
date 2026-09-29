@@ -60,10 +60,12 @@ inputs:
     default: ""
   flecto-version:
     description: >-
-      npm version range for the Flecto CLI. Pin to an exact version for
-      reproducible builds.
+      npm version range for the Flecto CLI. Must be 4 or newer: this action
+      treats snapshot-ref as a git revision, and pre-4.0 resolved it against a
+      committed file of the same name, which is the baseline-shadowing bypass
+      4.0 closed. Pin to an exact version for reproducible builds.
     required: false
-    default: "3"
+    default: "4"
   node-version:
     description: Node.js version used to run Flecto.
     required: false

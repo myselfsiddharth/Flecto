@@ -63,7 +63,7 @@ flecto doctor
 ```
 
 Prefer not to install globally? Every example below works with
-`npx --yes flecto@3` instead of `flecto`.
+`npx --yes flecto@4` instead of `flecto`.
 
 ---
 
@@ -173,7 +173,7 @@ steps:
   - uses: actions/checkout@v7
     with:
       fetch-depth: 2
-  - uses: myselfsiddharth/Flecto/.github/actions/flecto-ci@main
+  - uses: myselfsiddharth/Flecto/.github/actions/flecto-ci@v4.0.0
     with:
       targets: config/**/*.{yaml,yml,json,toml,ini}
       snapshot-ref: HEAD~1
@@ -197,7 +197,7 @@ steps:
   - uses: actions/checkout@v7
     with:
       fetch-depth: 0
-  - uses: myselfsiddharth/Flecto/.github/actions/flecto-pr-risk@main
+  - uses: myselfsiddharth/Flecto/.github/actions/flecto-pr-risk@v4.0.0
 ```
 
 GitLab and Bitbucket work the same way — Flecto detects the host from CI
@@ -537,6 +537,7 @@ Explicit CLI flags win over profiles, which win over `defaults`.
 | **[Plugins](docs/plugins.md)** · **[Cookbook](docs/plugin-cookbook.md)** | Rules that need real code |
 | **[Live drift](docs/drift.md)** | `flecto-drift`: comparing a declared config against what is actually running |
 | **[Troubleshooting](docs/troubleshooting.md)** | When something doesn't behave |
+| **[Stability](docs/stability.md)** | What you can build against, what you cannot, and the deprecation sequence |
 | **[Migrating to 4.0](docs/migrating-to-4.md)** | The five breaking changes, and how to tell whether they affect you |
 | **[Changelog](CHANGELOG.md)** | Release history and migration notes |
 
@@ -553,6 +554,40 @@ Explicit CLI flags win over profiles, which win over `defaults`.
 
 Flecto runs entirely on your machine. Snapshots are local files, and nothing
 leaves the process unless you configure a webhook or command.
+
+---
+
+## Stability
+
+Flecto runs inside your merge path, so here is what you can build against.
+These follow [semver](https://semver.org/) and are covered by the deprecation
+sequence below:
+
+- **The JSON envelope** (`schema_version: "2.0"`) — existing fields keep their
+  name, type, and meaning; new fields are additive. Schemas in [`schemas/`](schemas).
+- **Exit codes** — `0` clean, `1` a fail trigger matched or the run could not
+  complete. That is the whole set, and Flecto fails closed.
+- **`.flectorc`** — documented keys keep their name, meaning, and default.
+- **Command and flag names**, and what a flag accepts.
+
+**No breaking change to those ships without a minor release that warns first**,
+names the replacement, and says which version removes the old form. The one
+exception is a security fix: if a surface can make `flecto ci` report a clean run
+on a change that is not clean, it gets closed in the next release with an
+advisory. 4.0 was exactly that — five breaking changes, every one a bypass.
+
+Deliberately **not** stable: terminal and `pr-comment` output (presentation —
+parse `--format json` instead), message wording, anything under `src/`, and
+snapshot file internals. Built-in packs gain rules in minor releases; rule IDs
+never change meaning.
+
+Flecto reached 4.0 in four months, which is fast. That churn was front-loaded
+into a period with no real users, and 4.0 was forced by a
+[security review](docs/security-review.md) finding real bypasses. The intent now
+is minor releases only — anything needing a 5.0 waits in
+[`docs/v5-proposals.md`](docs/v5-proposals.md).
+
+→ **[Full stability policy](docs/stability.md)**
 
 ---
 
