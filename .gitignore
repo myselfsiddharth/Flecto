@@ -18,3 +18,7 @@ coverage.lcov
 test/fuzz/findings/
 
 .claude/
+
+# Growth and outreach working notes. Deliberately local: they carry candid
+# internal assessment, and Phase 4 adds files naming specific external repos.
+growth/

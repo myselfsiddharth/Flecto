@@ -2,6 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync, statSync } from 'fs';
 import { join, resolve } from 'path';
+import { createRequire } from 'module';
 
 import { parseContent } from '../src/parser.js';
 import { buildPositionIndex, locatePath, offsetToPosition, toLspRange } from '../src/positions.js';
@@ -165,6 +166,36 @@ describe('JSON, dotenv, INI, TOML', () => {
     assert.equal(at('.env', text, 'EMPTY').text, 'EMPTY');
     const found = at('.env', text, 'A');
     assert.deepEqual(offsetToPosition(found.idx, found.location.start), { line: 2, character: 0 });
+  });
+
+  test('the mirrored dotenv line pattern still matches the installed dotenv', () => {
+    // src/positions.js copies dotenv's own line regex so LSP positions agree
+    // with what the parser actually keyed. Its comment promises that
+    // "verification catches a future dotenv that changes it" -- this is that
+    // verification. The behavioural test above would catch a gross change, but
+    // not a subtle one, and a silent divergence here means the editor
+    // underlines the wrong span.
+    //
+    // This caught nothing on the 17.4.2 -> 18.0.1 bump, which is the point: the
+    // pattern was byte-identical, so the bump was safe. A bump that changes it
+    // should fail loudly here rather than quietly misplace diagnostics.
+    const require = createRequire(import.meta.url);
+
+    // Resolve through dotenv's own entry point rather than a hardcoded path:
+    // 17.x shipped lib/main.js, 18.x ships a minified dist/index.cjs.
+    const dotenvSource = readFileSync(require.resolve('dotenv'), 'utf8');
+
+    const mirrored = readFileSync(resolve(import.meta.dirname, '../src/positions.js'), 'utf8')
+      .match(/^const DOTENV_LINE = (\/.*\/)dgm;$/m);
+    assert.ok(mirrored, 'DOTENV_LINE is declared in src/positions.js');
+
+    assert.ok(
+      dotenvSource.includes(mirrored[1]),
+      'src/positions.js DOTENV_LINE no longer appears in the installed dotenv. '
+      + 'If dotenv changed its line pattern, copy the new one across (keeping the '
+      + '`d` flag) and re-check scanDotenv; if it only moved files, this still '
+      + 'resolves through the package entry point, so the pattern genuinely differs.',
+    );
   });
 
   test('INI: sections accumulate across repeats; root keys stay at the root', () => {

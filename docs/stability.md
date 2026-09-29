@@ -134,8 +134,9 @@ promise on faith. What the history actually shows:
 | 3.0.0 | 2026-08 | Envelope to `schema_version: "2.0"` | Packs and CI became first-class |
 | 4.0.0 | 2026-09 | 5, every one a bypass | [Security review](security-review.md) ([#121]) |
 
-The churn was front-loaded into a period with no real users, and 4.0's changes
-were forced by a security review finding real bypasses, not by taste. Going
+The churn was front-loaded into the project's first months, before anyone was
+depending on it, and 4.0's changes were forced by a security review finding real
+bypasses, not by taste. Going
 forward the intent is **minor releases only**, and anything that would require a
 5.0 is collected in [`v5-proposals.md`](v5-proposals.md) rather than shipped.
 

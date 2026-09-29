@@ -655,9 +655,15 @@ function readJsonValue(state) {
 // dotenv
 
 /**
- * dotenv's own line pattern (dotenv/lib/main.js), with match indices. Reading
- * keys with the parser's exact pattern is what makes the positions agree with
- * it; verification catches a future dotenv that changes it.
+ * dotenv's own line pattern, with match indices. Reading keys with the parser's
+ * exact pattern is what makes the positions agree with it; verification catches
+ * a future dotenv that changes it.
+ *
+ * Upstream source moved in dotenv 18: it was `dotenv/lib/main.js`, and is now
+ * bundled and minified into `dotenv/dist/index.cjs`. The pattern itself is
+ * unchanged between 17.4.2 and 18.0.1 -- byte-identical apart from the `d` flag
+ * added here for match indices. To re-check it after a bump, grep the bundle for
+ * `export\s+`, which is distinctive enough to find the regex in minified code.
  */
 const DOTENV_LINE = /(?:^|^)\s*(?:export\s+)?([\w.-]+)(?:\s*=\s*?|:\s+?)(\s*'(?:\\'|[^'])*'|\s*"(?:\\"|[^"])*"|\s*`(?:\\`|[^`])*`|[^#\r\n]+)?\s*(?:#.*)?(?:$|$)/dgm;
 
