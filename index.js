@@ -1348,6 +1348,11 @@ program
       const ignorePaths = parseCsv(effective.ignore);
       const failOn = parseFailOn(effective.failOn ?? 'changed,policy,error');
       const format = String(effective.format ?? 'json');
+      if (format === 'human') {
+        throw new Error(
+          '--format human is not available for `ci`, whose output is meant to be consumed by a machine. Use pr-comment to read it yourself, or json to parse it. (human is the default for `plan` and `compare`.)',
+        );
+      }
       if (!['json', 'ndjson', 'sarif', 'github-annotations', 'pr-comment'].includes(format)) {
         throw new Error('--format must be json, ndjson, sarif, github-annotations, or pr-comment');
       }

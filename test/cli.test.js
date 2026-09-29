@@ -1304,6 +1304,18 @@ test('ci rejects an unknown format', () => {
 
     assert.equal(run.status, 1);
     assert.match(run.stderr, /--format must be json, ndjson, sarif, github-annotations, or pr-comment/);
+
+    const humanRun = spawnSync(
+      process.execPath,
+      [rootIndex, 'ci', file, '--snapshot-ref', snapshot, '--format', 'human'],
+      { cwd: dir, encoding: 'utf8' },
+    );
+
+    assert.equal(humanRun.status, 1);
+    assert.match(
+      humanRun.stderr,
+      /--format human is not available for `ci`, whose output is meant to be consumed by a machine\. Use pr-comment to read it yourself, or json to parse it\. \(human is the default for `plan` and `compare`\.\)/,
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
