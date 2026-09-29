@@ -16,23 +16,59 @@
 
 ## What lands on the pull request
 
-Real output from `flecto plan`, not a mock — a plan that quietly destroys a
-database:
+<p align="center">
+  <img src="docs/assets/flecto-pr-comment.png" alt="Flecto's comment on a pull request: check failing, six policy errors naming an IAM wildcard, a disabled S3 public-access block, and security group ingress opened to 0.0.0.0/0" width="960"/>
+</p>
 
-> ## Flecto — config change report
->
-> ❌ **Check failing** — 9 changes in 1 file — 2 changed, 0 added, 7 removed.
->
-> **Policy:** 4 errors.
->
-> | Path | Rule | Message |
-> |---|---|---|
-> | `aws_db_instance.main.#action` | `terraform-stateful-resource-destroyed` | Terraform will destroy a stateful resource. Its data does not survive. Take a final snapshot, or add a `prevent_destroy` lifecycle block, before applying. |
-> | `aws_db_instance.main.#action` | `terraform-resource-replaced` | Terraform will destroy and recreate this resource. Expect downtime, a new resource id, and the loss of anything held only on the existing instance. |
-> | `module.storage.aws_ebs_volume.data.#action` | `terraform-stateful-resource-destroyed` | Terraform will destroy a stateful resource. Its data does not survive. |
+That is a real comment on a
+**[real pull request](https://github.com/myselfsiddharth/flecto-example-terraform/pull/1)**
+you can open right now. The PR says it is about partner access and changes eight
+lines; it opens the web tier to the internet, turns off the bucket's
+public-access protection, and widens an IAM policy to `s3:*` on `*`.
 
 One sticky comment, updated in place on every push. Exit code `1`, so the build
 fails before the change ships.
+
+**[The same gate on an ordinary change](https://github.com/myselfsiddharth/flecto-example-terraform/pull/2)**
+reports *no findings* and passes. That matters as much: a check that fires on
+everything gets uninstalled in a week.
+
+<details>
+<summary>The same report as text, and what a plan with existing state adds</summary>
+
+The comment above, as `flecto plan` prints it:
+
+```
+❌ Check failing — 30 changes in 1 file — 0 changed, 30 added, 0 removed.
+Policy: 6 errors.
+
+aws_security_group.web.ingress[0].cidr_blocks[0]
+  terraform-security-group-open-ingress
+  Security group ingress will accept traffic from the whole internet
+  (0.0.0.0/0). Restrict the source to a known CIDR, a prefix list, or
+  another security group.
+
+aws_s3_bucket_public_access_block.uploads.block_public_acls        (+3 more)
+  terraform-s3-public-access-block-disabled
+  S3 public access block is being turned off or removed.
+
+aws_iam_role_policy.app.policy
+  terraform-iam-wildcard
+  IAM policy grants a wildcard action or resource ("*").
+```
+
+The example repository has no Terraform state, so every resource shows as
+`create`. With existing state, a plan that replaces a database also reports:
+
+```
+aws_db_instance.main.#action
+  terraform-stateful-resource-destroyed
+  Terraform will destroy a stateful resource. Its data does not survive.
+  Take a final snapshot, or add a prevent_destroy lifecycle block, before
+  applying.
+```
+
+</details>
 
 ---
 
