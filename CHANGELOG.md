@@ -7,6 +7,19 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ## [Unreleased]
 
+## [4.1.1] - 2026-09-29
+
+### Fixed
+
+- **The root `action.yml` description was too long to list on the Marketplace.**
+  GitHub rejects a listing whose description is 125 characters or more; 4.1.0
+  shipped 194. It is now 119, and a test pins the limit — the constraint is not
+  in GitHub's metadata-syntax documentation and the publish form only reports it
+  at publish time, by which point the release is already cut.
+
+  The rest of the pitch — that Flecto never runs `terraform`, `helm`, or `sops`,
+  and never decrypts — lives in the README, which has room for it.
+
 ### Fixed
 
 - **Documented Action pins moved from `@v4.0.0` to `@v4.1.0`.** Tags are
@@ -1309,7 +1322,8 @@ fixed — those runs were never actually gated — but the failure is new.
 - Misconfigured policy packs/plugins cause `watch` to exit non-zero instead of
   continuing with no policies.
 
-[Unreleased]: https://github.com/myselfsiddharth/Flecto/compare/v4.1.0...HEAD
+[Unreleased]: https://github.com/myselfsiddharth/Flecto/compare/v4.1.1...HEAD
+[4.1.1]: https://github.com/myselfsiddharth/Flecto/compare/v4.1.0...v4.1.1
 [4.1.0]: https://github.com/myselfsiddharth/Flecto/compare/v4.0.0...v4.1.0
 [4.0.0]: https://github.com/myselfsiddharth/Flecto/compare/v3.1.0...v4.0.0
 [3.1.0]: https://github.com/myselfsiddharth/Flecto/compare/v3.0.2...v3.1.0

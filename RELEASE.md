@@ -63,11 +63,16 @@ after step 3 and only needs doing once.
 3. Pick a **primary category**, and optionally a second. The categories are not
    listed in GitHub's docs, so read them off the form; "Code review" or
    "Security" are the expected fits.
-4. If GitHub reports the name is taken, edit `name:` in the root `action.yml`
+4. **The description must be under 125 characters.** This is not in GitHub's
+   metadata-syntax docs and the publish form only tells you once you are there.
+   A test pins it (`test/actions.test.js`), so a too-long description fails CI
+   rather than a release — but if the limit ever changes, that test is where to
+   change it.
+5. If GitHub reports the name is taken, edit `name:` in the root `action.yml`
    and re-release. `name` must be globally unique across Marketplace and cannot
    collide with a username, organization, or reserved GitHub feature name.
    Current value: `Flecto PR Risk`.
-5. Optionally move the docs to the shorter form the listing advertises, now that
+6. Optionally move the docs to the shorter form the listing advertises, now that
    a root `action.yml` exists at the tag:
 
    ```yaml

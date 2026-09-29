@@ -4,7 +4,7 @@
     "access": "public",
     "provenance": true
   },
-  "version": "4.1.0",
+  "version": "4.1.1",
   "description": "Reads your Terraform plan and Kubernetes changes and posts a plain-English risk summary on every pull request, blocking the dangerous ones",
   "license": "MIT",
   "keywords": [

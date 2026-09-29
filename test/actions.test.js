@@ -252,6 +252,18 @@ describe('bundled GitHub Actions', () => {
     assert.ok(doc.name.trim().length > 0, 'has a name');
     assert.ok(doc.description && doc.description.trim().length > 0, 'has a description');
 
+    // The Marketplace rejects a listing whose description is 125 characters or
+    // more. This was found the hard way: v4.1.0 shipped a 194-character one and
+    // the publish form refused it, which cost a patch release. The limit is not
+    // in the metadata-syntax docs and nothing else checks it, so it is pinned
+    // here -- the failure is otherwise invisible until someone tries to publish.
+    const MAX_DESCRIPTION = 125;
+    const description = doc.description.trim();
+    assert.ok(description.length < MAX_DESCRIPTION,
+      `action.yml description is ${description.length} characters; the Marketplace `
+      + `limit is under ${MAX_DESCRIPTION}. Shorten it, and keep the longer pitch `
+      + 'in the README, which has room for it.');
+
     // Branding is optional for publishing, but if present it must be a real
     // Feather icon name and one of the nine supported colours -- an invalid
     // value is rejected at publish time, not at parse time.

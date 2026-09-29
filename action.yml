@@ -16,10 +16,13 @@
 # resolution, which is the part that decides whether a risky change is caught,
 # and that does not belong in the same change as a Marketplace listing.
 name: Flecto PR Risk
+# The Marketplace rejects a listing whose description is 125 characters or more,
+# so this is deliberately shorter than the npm/README pitch. A test pins the
+# length, because the failure only shows up on the publish form. The "never runs
+# terraform, helm, or sops" half of the pitch moved to the README, which has room.
 description: >-
-  Reads your Terraform plan and Kubernetes changes and posts a plain-English risk
-  summary on the pull request, blocking the dangerous ones. Never runs terraform,
-  helm, or sops, and never decrypts.
+  Plain-English risk summary on every pull request for Terraform plans and
+  Kubernetes changes. Blocks the dangerous ones.
 author: myselfsiddharth
 
 branding:

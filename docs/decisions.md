@@ -200,6 +200,23 @@ publishing requirement and nothing is blocked on choosing one. Valid colours are
 `white`, `black`, `yellow`, `blue`, `green`, `orange`, `red`, `purple`,
 `gray-dark`; the icon must be a Feather icon (v4.28.0 set).
 
+### Found at publish time: the description has a 125-character limit
+
+**Not in the metadata-syntax docs**, and nothing in the repo checked it. v4.1.0
+shipped a 194-character description and the Marketplace publish form refused the
+listing, which cost a patch release.
+
+The limit is **under 125 characters**. The description is now 119, and a test
+pins it — the failure is otherwise invisible until someone tries to publish, and
+by then the release is already cut.
+
+The longer half of the pitch ("never runs terraform, helm, or sops, and never
+decrypts") moved to the README, which has room for it.
+
+This is a third instance of the pattern this project keeps meeting: a constraint
+that only bites at the boundary, with nothing in CI standing in for the boundary.
+The fix is the same each time — encode the constraint as a test.
+
 **Still open: which repository hosts the root `action.yml`.** Two viable shapes,
 and this needs the maintainer because creating a repository is hard rule 6.
 Recorded in the growth log; not decided here.
