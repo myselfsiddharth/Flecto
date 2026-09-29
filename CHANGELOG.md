@@ -7,6 +7,8 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ## [Unreleased]
 
+## [4.1.0] - 2026-09-29
+
 ### Added
 
 - **A root [`action.yml`](action.yml), so the Action can be listed on the GitHub
@@ -48,6 +50,12 @@ The format is based on [Keep a Changelog], and this project adheres to
   can be resolved. A complete workflow is in
   [`examples/github-action/flecto-terraform-plan.yml`](examples/github-action/flecto-terraform-plan.yml).
 
+- [docs/stability.md](docs/stability.md): what the public contract covers (the
+  `schema_version: "2.0"` envelope, exit codes, `.flectorc`, the CLI surface),
+  what it deliberately does not, and the deprecation sequence — one minor release
+  carrying a warning before any removal, with security fixes the stated
+  exception.
+
 ### Fixed
 
 - **The bundled GitHub Actions installed the pre-4.0 CLI.** `flecto-ci`
@@ -68,14 +76,6 @@ The format is based on [Keep a Changelog], and this project adheres to
   referenced the Actions `@main`, which resolved to a 3.x install. Re-pin to
   `@v4.0.0` — every example in the README and [docs/ci.md](docs/ci.md) now does,
   with SHA pinning documented for security-sensitive users.
-
-### Added
-
-- [docs/stability.md](docs/stability.md): what the public contract covers (the
-  `schema_version: "2.0"` envelope, exit codes, `.flectorc`, the CLI surface),
-  what it deliberately does not, and the deprecation sequence — one minor release
-  carrying a warning before any removal, with security fixes the stated
-  exception.
 
 ## [4.0.0] - 2026-09-23
 
@@ -1292,7 +1292,8 @@ fixed — those runs were never actually gated — but the failure is new.
 - Misconfigured policy packs/plugins cause `watch` to exit non-zero instead of
   continuing with no policies.
 
-[Unreleased]: https://github.com/myselfsiddharth/Flecto/compare/v3.1.0...HEAD
+[Unreleased]: https://github.com/myselfsiddharth/Flecto/compare/v4.1.0...HEAD
+[4.1.0]: https://github.com/myselfsiddharth/Flecto/compare/v4.0.0...v4.1.0
 [4.0.0]: https://github.com/myselfsiddharth/Flecto/compare/v3.1.0...v4.0.0
 [3.1.0]: https://github.com/myselfsiddharth/Flecto/compare/v3.0.2...v3.1.0
 [3.0.2]: https://github.com/myselfsiddharth/Flecto/compare/v3.0.1...v3.0.2
