@@ -227,6 +227,60 @@ the CLI's `plan` default of `error`.
 
 ---
 
+## D-009 — The root `action.yml` lives in the Flecto repo, not a new one
+
+**Date:** 2026-09-28 · **Status:** DECIDED by the maintainer — Flecto repo root
+
+The plan specified a separate `myselfsiddharth/flecto-action` repository. D-007
+verified the actual requirement, which is narrower: the metadata file must be at
+**a** public repository's root. Flecto's own repository satisfies that, so the
+new repo is unnecessary.
+
+Why this is the better shape:
+
+- **Marketplace traffic lands on the main repository** rather than a satellite.
+  For a project with 7 stars, splitting discovery across two repos is a real
+  cost and there is nothing to gain from it.
+- **`README.md` and `LICENSE` already exist**, which the plan listed as work.
+- **The `uses:` line gets shorter** — `myselfsiddharth/Flecto@vX.Y.Z` instead of
+  `myselfsiddharth/Flecto/.github/actions/flecto-pr-risk@vX.Y.Z`.
+- One repository, one release process, one set of tags.
+
+**The cost, stated plainly:** only one action per repository can be listed, so
+`flecto-ci` will not appear on Marketplace. That is the right trade — `pr-risk`
+is the wedge, and `flecto-ci` is the lower-level tool for people who have already
+decided to adopt.
+
+### Why the logic is duplicated rather than shared
+
+`.github/actions/flecto-pr-risk/action.yml` stays, so nobody referencing that
+path breaks (hard rule 4). Its `runs:` block is byte-identical to the root one,
+enforced by a test, so a fix applied to one file and not the other is a CI
+failure rather than a silent divergence between the listed action and the
+documented one.
+
+Three ways to avoid the duplication were considered and rejected:
+
+1. **`uses: ./.github/actions/flecto-pr-risk`** — a relative `uses:` inside a
+   composite action resolves against the *consumer's* workspace, not the action's
+   repository, so this does not work.
+2. **`uses: $/.github/actions/flecto-pr-risk`** — the self-repository syntax.
+   It is real and documented, but **"The `$/` syntax is not available in GitHub
+   Enterprise Server"**, and the docs do not confirm it inside composite actions.
+   Not a bet worth taking on a step whose job is deciding whether a merge is
+   safe.
+3. **Self-reference by pinned tag** (`myselfsiddharth/Flecto@vX.Y.Z`) — works for
+   released tags but not on `main` before the tag exists, and adds a bump ritual
+   at every release.
+
+**The follow-up worth doing later:** move the shell into a script invoked through
+`$GITHUB_ACTION_PATH`, which both files can share and which works on GHES. It
+was not done here because it restructures baseline resolution — the part that
+decides whether a risky change is caught — and that does not belong in the same
+change as a Marketplace listing.
+
+---
+
 ## Verifications still owed
 
 - **Marketplace category list** — read off the listing form when creating it.

@@ -47,7 +47,45 @@ Or create a release in the GitHub UI from the tag. Workflow: `.github/workflows/
 - Install the **published** package and check the fix is really in it:
   `npm i -g flecto && flecto --help`
 
-## 5) Only now, publish any security advisories
+## 5) First release only: list the Action on the Marketplace
+
+The root [`action.yml`](action.yml) exists so the Action can be listed —
+GitHub only lists an action whose metadata file is at a public repository's
+root. **The listing cannot be created before a release carrying that file
+exists**, because Marketplace publishes from a release, so this step comes
+after step 3 and only needs doing once.
+
+1. Open the release created in step 3. GitHub shows a **"Publish this Action to
+   the GitHub Marketplace"** banner on it, because the repo now has a root
+   `action.yml`.
+2. Accept the Marketplace terms if prompted, and confirm the account has
+   **two-factor authentication** enabled — publishing requires it.
+3. Pick a **primary category**, and optionally a second. The categories are not
+   listed in GitHub's docs, so read them off the form; "Code review" or
+   "Security" are the expected fits.
+4. If GitHub reports the name is taken, edit `name:` in the root `action.yml`
+   and re-release. `name` must be globally unique across Marketplace and cannot
+   collide with a username, organization, or reserved GitHub feature name.
+   Current value: `Flecto PR Risk`.
+5. After publishing, update the docs to the shorter form the listing advertises:
+
+   ```yaml
+   - uses: myselfsiddharth/Flecto@vX.Y.Z
+     with:
+       terraform-plan: plan.json
+   ```
+
+   Until then the docs deliberately keep pointing at
+   `myselfsiddharth/Flecto/.github/actions/flecto-pr-risk@v4.0.0`, which is a
+   tag that actually exists. Shipping an example pinned to an unreleased tag is
+   how the README ended up recommending `@main` in the first place.
+
+`.github/actions/flecto-pr-risk/action.yml` stays where it is for everyone
+already referencing that path. Its `runs:` block must stay byte-identical to the
+root one; a test enforces that, so a fix to one is a CI failure until it lands in
+both.
+
+## 6) Only now, publish any security advisories
 
 Advisories stay in **draft** until npm serves the fixed version. Publishing one
 against an unpatched `latest` hands out a working exploit with no upgrade path.

@@ -11,6 +11,7 @@ import yaml from 'js-yaml';
 
 const ACTIONS_DIR = fileURLToPath(new URL('../.github/actions', import.meta.url));
 const EXAMPLES_DIR = fileURLToPath(new URL('../examples/github-action', import.meta.url));
+const ROOT_ACTION = fileURLToPath(new URL('../action.yml', import.meta.url));
 
 const EXPRESSION = /\$\{\{([^}]*)\}\}/gu;
 
@@ -202,6 +203,60 @@ describe('bundled GitHub Actions', () => {
     // The skip is guarded on the plan input alone -- not on the event, and not
     // on whether a baseline happened to resolve.
     assert.match(baseline.run, /fail "Pull request base commit .* is missing from the checkout/);
+  });
+
+  test('the root Marketplace action.yml has not drifted from flecto-pr-risk', () => {
+    // GitHub only lists an action whose metadata file is at the repository root,
+    // so the listing points at /action.yml while everyone already referencing
+    // .github/actions/flecto-pr-risk/ keeps working. That means two copies of
+    // the same gate logic, and a fix applied to one and not the other is the
+    // worst outcome: the listed action would silently behave differently from
+    // the documented one.
+    //
+    // So the `runs:` block must be byte-identical. If this fails, the fix is to
+    // copy the change across, not to relax the test.
+    const root = loadYaml(ROOT_ACTION);
+    const sub = loadYaml(join(ACTIONS_DIR, 'flecto-pr-risk', 'action.yml'));
+
+    const runsBlock = (text) => {
+      const at = text.indexOf('\nruns:\n');
+      assert.notEqual(at, -1, 'a runs: block exists');
+      return text.slice(at);
+    };
+
+    assert.equal(runsBlock(root.text), runsBlock(sub.text),
+      'action.yml and .github/actions/flecto-pr-risk/action.yml have different '
+      + 'runs: blocks. Copy the change into both.');
+
+    // Inputs are the contract consumers write against, so they must match too --
+    // names, defaults and all. Only the listing metadata may differ.
+    assert.deepEqual(Object.keys(root.doc.inputs), Object.keys(sub.doc.inputs));
+    for (const [name, spec] of Object.entries(root.doc.inputs)) {
+      assert.equal(spec.default, sub.doc.inputs[name].default, `${name}: same default`);
+    }
+    assert.deepEqual(root.doc.outputs, sub.doc.outputs);
+  });
+
+  test('the root action.yml satisfies the Marketplace listing requirements', () => {
+    // Verified against GitHub's docs, recorded in docs/decisions.md D-007.
+    // These are cheap to assert and expensive to discover on a failed publish.
+    const { doc } = loadYaml(ROOT_ACTION);
+
+    // A listing needs a name and description; the name must be globally unique
+    // across Marketplace, which only the publish form can confirm.
+    assert.equal(typeof doc.name, 'string');
+    assert.ok(doc.name.trim().length > 0, 'has a name');
+    assert.ok(doc.description && doc.description.trim().length > 0, 'has a description');
+
+    // Branding is optional for publishing, but if present it must be a real
+    // Feather icon name and one of the nine supported colours -- an invalid
+    // value is rejected at publish time, not at parse time.
+    if (doc.branding) {
+      const COLORS = ['white', 'black', 'yellow', 'blue', 'green', 'orange', 'red', 'purple', 'gray-dark'];
+      assert.ok(COLORS.includes(doc.branding.color),
+        `branding.color ${doc.branding.color} is not one of ${COLORS.join(', ')}`);
+      assert.match(doc.branding.icon, /^[a-z0-9-]+$/u, 'branding.icon looks like a Feather icon name');
+    }
   });
 
   test('neither action can install a Flecto older than 4', () => {

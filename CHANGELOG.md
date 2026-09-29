@@ -9,6 +9,22 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ### Added
 
+- **A root [`action.yml`](action.yml), so the Action can be listed on the GitHub
+  Marketplace.** GitHub only lists an action whose metadata file sits at a public
+  repository's root; Flecto's Actions live in `.github/actions/`, which is why
+  they were never listable. The listed action is `flecto-pr-risk` — the pull
+  request risk comment — with branding and the wedge description.
+
+  `.github/actions/flecto-pr-risk/action.yml` **stays exactly where it is**, so
+  nothing referencing that path changes. The two files' `runs:` blocks are
+  byte-identical and a test enforces it, so a fix to one is a CI failure until it
+  lands in both.
+
+  Docs continue to reference
+  `myselfsiddharth/Flecto/.github/actions/flecto-pr-risk@v4.0.0` until a release
+  carrying the root file exists. The shorter `myselfsiddharth/Flecto@vX.Y.Z` form
+  becomes correct at that point; see [RELEASE.md](RELEASE.md) step 5.
+
 - **`flecto-pr-risk` takes a Terraform plan directly.** A new `terraform-plan`
   input points at `terraform show -json` output and switches the Action to
   `flecto plan`, so reviewing a plan on every pull request is two steps:
