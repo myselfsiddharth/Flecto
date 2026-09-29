@@ -133,6 +133,8 @@ rather than copied from the plan document.
   least-privilege permissions, weekly schedule off the hour. Verified
   `github/codeql-action@v4` is a real major tag before using it, and bumped the
   one-major-behind `upload-sarif@v3` in `docs/ci.md` to `@v4` while there.
+  **First run found 0 alerts** in 56s. The Security tab's third column now
+  reports a measured zero instead of nothing at all.
 
 - **Secret-scanning alert 1 resolved** as `used_in_tests`. The API caps
   `resolution_comment` at 280 characters, which took two attempts to fit.

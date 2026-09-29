@@ -127,9 +127,19 @@ is clean, and for a security tool the distinction is the whole point. Enabling
 CodeQL for JavaScript is a few lines of workflow and turns the Security tab into
 a trust signal instead of an empty room.
 
-Not done here: adding a workflow that runs on every push is a change to CI
-behaviour and belongs in its own PR with the maintainer's agreement, and the
-plan's Phase 1 scope is fixing trust signals rather than adding pipelines.
+**Done**, in #195: `.github/workflows/codeql.yml`, `security-extended` rather
+than the default pack (Flecto parses untrusted config from pull requests, so the
+extra path-traversal, injection, and regex queries are the ones most likely to
+say something real), least-privilege permissions — `security-events: write`,
+`contents: read`, no write to contents, because a query pack is third-party code
+— and a weekly schedule set off the hour.
+
+Verified `github/codeql-action@v4` is a real major tag before using it
+(`git ls-remote --tags` shows v1 through v4), and bumped the one-major-behind
+`upload-sarif@v3` in `ci.md` to `@v4` while there.
+
+**First run: 0 alerts**, in 56s on the #195 merge ref. That is now a meaningful
+zero rather than an absent one, which was the entire point.
 
 ---
 
