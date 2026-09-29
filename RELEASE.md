@@ -67,7 +67,8 @@ after step 3 and only needs doing once.
    and re-release. `name` must be globally unique across Marketplace and cannot
    collide with a username, organization, or reserved GitHub feature name.
    Current value: `Flecto PR Risk`.
-5. After publishing, update the docs to the shorter form the listing advertises:
+5. Optionally move the docs to the shorter form the listing advertises, now that
+   a root `action.yml` exists at the tag:
 
    ```yaml
    - uses: myselfsiddharth/Flecto@vX.Y.Z
@@ -75,17 +76,36 @@ after step 3 and only needs doing once.
        terraform-plan: plan.json
    ```
 
-   Until then the docs deliberately keep pointing at
-   `myselfsiddharth/Flecto/.github/actions/flecto-pr-risk@v4.0.0`, which is a
-   tag that actually exists. Shipping an example pinned to an unreleased tag is
-   how the README ended up recommending `@main` in the first place.
+   Never pin an example to a tag that does not exist yet. Shipping an example
+   pinned to an unreleased tag is how the README ended up on `@main`.
 
 `.github/actions/flecto-pr-risk/action.yml` stays where it is for everyone
 already referencing that path. Its `runs:` block must stay byte-identical to the
 root one; a test enforces that, so a fix to one is a CI failure until it lands in
 both.
 
-## 6) Only now, publish any security advisories
+## 6) Repin the documented Actions to the new tag
+
+**Every release.** Grep for the previous tag and bump it:
+
+```bash
+grep -rn "actions/flecto-[a-z-]*@v" README.md docs/ examples/
+```
+
+Every `uses: myselfsiddharth/Flecto/.github/actions/...@vX.Y.Z` in `README.md`,
+`docs/`, and `examples/` must name the tag just released. This is not cosmetic.
+
+Tags are immutable, so a documented pin keeps resolving to whatever the Actions
+looked like at that tag **forever**. 4.1.0 is the cautionary case: the fix that
+stopped the bundled Actions installing the pre-4.0 CLI shipped *in* 4.1.0, so
+while the docs still said `@v4.0.0` they were telling people to run the Actions
+that had the bug — a fix that landed in the code but not in what users were told
+to run.
+
+If the released version also changes Action behaviour, add a warning against the
+old tag, as [docs/ci.md](docs/ci.md#pinning) does for `@v4.0.0`.
+
+## 7) Only now, publish any security advisories
 
 Advisories stay in **draft** until npm serves the fixed version. Publishing one
 against an unpatched `latest` hands out a working exploit with no upgrade path.

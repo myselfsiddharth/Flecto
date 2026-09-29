@@ -52,6 +52,23 @@ consistent with the SHA-pinning advice the docs now give.
 If Phase 2 creates a standalone action repo, moving tags become the norm there
 and this should be revisited for that repo specifically.
 
+### Consequence found after 4.1.0 shipped
+
+Pinning the docs to `@v4.0.0` was right at the time — it was the only tag, and it
+beat `@main`. But **the Action fix shipped in 4.1.0, after that tag**, so between
+#195 merging and 4.1.0 releasing, every documented example pointed at a tag whose
+bundled Actions install `flecto@3`. Tags are immutable, so `@v4.0.0` carries the
+vulnerable Action metadata permanently.
+
+Docs now pin `@v4.1.0`, `ci.md` carries a warning against `@v4.0.0`, and
+`RELEASE.md` gained a step that bumps the documented Action pins as part of every
+release. That step is the actual fix: the bug was not the pin, it was that
+nothing tied the documented pin to the release that fixed what it pointed at.
+
+The general shape is the one this project keeps meeting — a fix that lands in the
+code but not in what users are told to run. It is the same failure as D-004
+itself, one level up.
+
 ---
 
 ## D-004 — Both bundled Actions must install Flecto 4 or newer

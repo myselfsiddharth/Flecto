@@ -411,7 +411,7 @@ steps:
   - uses: actions/checkout@v7
     with:
       fetch-depth: 2
-  - uses: myselfsiddharth/Flecto/.github/actions/flecto-ci@v4.0.0
+  - uses: myselfsiddharth/Flecto/.github/actions/flecto-ci@v4.1.0
     with:
       targets: config/**/*.{yaml,yml,json,toml,ini}
       format: pr-comment
@@ -519,7 +519,7 @@ steps:
   - uses: actions/checkout@v7
     with:
       fetch-depth: 2
-  - uses: myselfsiddharth/Flecto/.github/actions/flecto-ci@v4.0.0
+  - uses: myselfsiddharth/Flecto/.github/actions/flecto-ci@v4.1.0
     with:
       targets: config/**/*.{yaml,yml,json,toml,ini}
       snapshot-ref: HEAD~1
@@ -564,7 +564,7 @@ steps:
   - uses: actions/checkout@v7
     with:
       fetch-depth: 0
-  - uses: myselfsiddharth/Flecto/.github/actions/flecto-pr-risk@v4.0.0
+  - uses: myselfsiddharth/Flecto/.github/actions/flecto-pr-risk@v4.1.0
 ```
 
 | Input | Default | Description |
@@ -644,7 +644,7 @@ picked up automatically. Two tighter levels are available:
 
 ```yaml
 # Exact CLI version — reproducible installs, tag still mutable in principle.
-- uses: myselfsiddharth/Flecto/.github/actions/flecto-pr-risk@v4.0.0
+- uses: myselfsiddharth/Flecto/.github/actions/flecto-pr-risk@v4.1.0
   with:
     flecto-version: "4.0.0"
 ```
@@ -660,6 +660,14 @@ picked up automatically. Two tighter levels are available:
 Resolve the SHA for a tag with
 `git ls-remote https://github.com/myselfsiddharth/Flecto refs/tags/v4.0.0`.
 Both Actions take `flecto-version`, so pinning the CLI never needs a fork.
+
+> [!WARNING]
+> **Do not reference the bundled Actions at `@v4.0.0`.** That tag's copies of
+> `flecto-ci` and `flecto-pr-risk` install `flecto@3` — the pre-4.0 line, which is
+> exposed to the baseline-shadowing bypass 4.0 closed. The fix shipped in
+> **4.1.0**, so pin `@v4.1.0` or newer. Tags are immutable, so `@v4.0.0` will
+> always carry the old Actions; the CLI at `flecto@4.0.0` is fine, it is only the
+> bundled Action metadata at that tag that is not.
 
 **Do not set `flecto-version` below 4.** `--snapshot-file` does not exist before
 4.0, and pre-4.0 `--snapshot-ref` would resolve against a committed file of the

@@ -173,7 +173,7 @@ steps:
   - uses: actions/checkout@v7
     with:
       fetch-depth: 2
-  - uses: myselfsiddharth/Flecto/.github/actions/flecto-ci@v4.0.0
+  - uses: myselfsiddharth/Flecto/.github/actions/flecto-ci@v4.1.0
     with:
       targets: config/**/*.{yaml,yml,json,toml,ini}
       snapshot-ref: HEAD~1
@@ -197,7 +197,7 @@ steps:
   - uses: actions/checkout@v7
     with:
       fetch-depth: 0
-  - uses: myselfsiddharth/Flecto/.github/actions/flecto-pr-risk@v4.0.0
+  - uses: myselfsiddharth/Flecto/.github/actions/flecto-pr-risk@v4.1.0
 ```
 
 GitLab and Bitbucket work the same way — Flecto detects the host from CI

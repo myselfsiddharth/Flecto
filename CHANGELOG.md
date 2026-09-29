@@ -7,6 +7,23 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- **Documented Action pins moved from `@v4.0.0` to `@v4.1.0`.** Tags are
+  immutable, and the fix that stopped the bundled Actions installing the pre-4.0
+  CLI shipped *in* 4.1.0 — so while the examples said `@v4.0.0` they pointed at a
+  tag whose `flecto-ci` and `flecto-pr-risk` still run `flecto@3`, the line
+  exposed to the baseline-shadowing bypass 4.0 closed.
+
+  **If you pinned `@v4.0.0` following an earlier example, repin to `@v4.1.0`.**
+  The CLI at `flecto@4.0.0` is fine; it is only the bundled Action metadata at
+  that tag that is not. [docs/ci.md](docs/ci.md#pinning) now warns against it.
+
+  [RELEASE.md](RELEASE.md) gained a step that repins the documented Actions as
+  part of every release. That step is the real fix — the bug was not the pin, it
+  was that nothing tied the documented pin to the release that fixed what it
+  pointed at.
+
 ## [4.1.0] - 2026-09-29
 
 ### Added
