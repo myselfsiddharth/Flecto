@@ -49,9 +49,18 @@ inputs:
       skipped, with a warning, when this is empty.
     required: false
     default: ${{ github.token }}
+  terraform-plan:
+    description: >-
+      Path to `terraform show -json` output. Set this to review a Terraform plan
+      instead of config files: Flecto runs `flecto plan`, which reads the
+      before/after already inside the plan JSON, so no baseline and no git
+      history are needed. `targets` is ignored in this mode. Flecto never invokes
+      terraform itself.
+    required: false
+    default: ""
   snapshot-ref:
     description: >-
-      Baseline override: a git revision. Leave empty to use the pull request's
+      Baseline override: a git revision. Ignored when terraform-plan is set. Leave empty to use the pull request's
       base commit, which is what you want on a PR. Since 4.0 this is a revision
       only -- a snapshot file goes to `flecto ci --snapshot-file`, because
       accepting either let a pull request shadow the baseline with a committed
@@ -91,6 +100,7 @@ runs:
       shell: bash
       env:
         INPUT_SNAPSHOT_REF: ${{ inputs.snapshot-ref }}
+        INPUT_TERRAFORM_PLAN: ${{ inputs.terraform-plan }}
         EVENT_NAME: ${{ github.event_name }}
         PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
         PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
@@ -102,6 +112,17 @@ runs:
           echo "::error title=Flecto PR risk::$1"
           exit 1
         }
+
+        if [[ -n "$INPUT_TERRAFORM_PLAN" ]]; then
+          # `flecto plan` diffs the before/after inside the plan JSON, so there
+          # is no baseline to resolve and no git history to require. Emitting an
+          # empty snapshot-ref is deliberate: the run step treats a non-empty
+          # value as the config path, so this cannot silently skip a gate.
+          echo "Terraform plan mode: reading before/after from $INPUT_TERRAFORM_PLAN."
+          echo "No baseline needed -- the plan carries its own."
+          echo "snapshot-ref=" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
 
         if [[ -n "$INPUT_SNAPSHOT_REF" ]]; then
           # An explicit baseline is taken as given — it may be a snapshot file
@@ -229,6 +250,7 @@ runs:
         INPUT_FORMAT: ${{ inputs.format }}
         INPUT_MASK_SECRETS: ${{ inputs.mask-secrets }}
         INPUT_SNAPSHOT_REF: ${{ steps.baseline.outputs.snapshot-ref }}
+        INPUT_TERRAFORM_PLAN: ${{ inputs.terraform-plan }}
         INPUT_PR_COMMENT_POST: ${{ steps.posting.outputs.posting-enabled }}
         INPUT_FLECTO_VERSION: ${{ inputs.flecto-version }}
         # Always set explicitly: an empty value makes Flecto skip posting rather
@@ -237,11 +259,34 @@ runs:
       run: |
         set -euo pipefail
 
-        # `read` consumes a single line; flatten newlines so multiline workflow
-        # inputs (common YAML `|` / `>` blocks) still expand every pattern.
-        read -r -a targets <<< "${INPUT_TARGETS//$'\n'/ }"
-        args=(ci "${targets[@]}" --format "$INPUT_FORMAT" --fail-on "$INPUT_FAIL_ON")
-        args+=(--snapshot-ref "$INPUT_SNAPSHOT_REF")
+        if [[ -n "$INPUT_TERRAFORM_PLAN" ]]; then
+          # Fail before installing anything: a missing plan file is a workflow
+          # mistake, and `flecto plan` reporting "no changes" on one would be a
+          # gate that passes because it read nothing.
+          if [[ ! -f "$INPUT_TERRAFORM_PLAN" ]]; then
+            echo "::error title=Flecto PR risk::Terraform plan file not found: $INPUT_TERRAFORM_PLAN"
+            echo "Generate it before this step, e.g."
+            echo "  terraform plan -out=tf.plan"
+            echo "  terraform show -json tf.plan > plan.json"
+            exit 1
+          fi
+
+          if [[ -n "${INPUT_TARGETS:-}" && "$INPUT_TARGETS" != "config/**/*.{yaml,yml,json,toml,ini}" ]]; then
+            echo "::warning title=Flecto PR risk::terraform-plan is set, so the targets input is ignored. Run a second step without terraform-plan to also check config files."
+          fi
+
+          # `plan` takes the file directly and reads before/after from it, so it
+          # gets no --snapshot-ref. Its own --policies default is the terraform
+          # pack; --fail-on comes from this action, whose default (policy,error)
+          # is stricter than the CLI's (error).
+          args=(plan "$INPUT_TERRAFORM_PLAN" --format "$INPUT_FORMAT" --fail-on "$INPUT_FAIL_ON")
+        else
+          # `read` consumes a single line; flatten newlines so multiline workflow
+          # inputs (common YAML `|` / `>` blocks) still expand every pattern.
+          read -r -a targets <<< "${INPUT_TARGETS//$'\n'/ }"
+          args=(ci "${targets[@]}" --format "$INPUT_FORMAT" --fail-on "$INPUT_FAIL_ON")
+          args+=(--snapshot-ref "$INPUT_SNAPSHOT_REF")
+        fi
 
         if [[ -n "$INPUT_POLICIES" ]]; then
           args+=(--policies "$INPUT_POLICIES")

@@ -193,6 +193,38 @@ engine. Override severities per profile with `severityRemap`, or drop
 
 ## In CI
 
+The bundled `flecto-pr-risk` Action takes a plan JSON directly, which is the
+shortest route — no baseline wiring, no `fetch-depth`, and the sticky comment and
+token handling are already set up:
+
+```yaml
+permissions:
+  contents: read
+  pull-requests: write
+
+steps:
+  - uses: actions/checkout@v7
+
+  - run: |
+      terraform plan -out=tf.plan
+      terraform show -json tf.plan > plan.json
+
+  - uses: myselfsiddharth/Flecto/.github/actions/flecto-pr-risk@v4.0.0
+    with:
+      terraform-plan: plan.json
+      fail-on: error
+```
+
+`terraform-plan` switches the Action to `flecto plan`. Because a plan JSON
+already carries its own before and after, **no baseline is resolved and no git
+history is needed** — the `fetch-depth: 0` that config mode wants does not apply,
+and the Action can run on events that have no pull request base commit. The
+`targets` input is ignored in this mode; add a second step without
+`terraform-plan` to also check config files. A missing plan file fails the step
+rather than letting Flecto report nothing.
+
+Or call the CLI directly, if you would rather wire it yourself:
+
 ```yaml
 - name: Terraform plan
   run: |

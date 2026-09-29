@@ -7,6 +7,31 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- **`flecto-pr-risk` takes a Terraform plan directly.** A new `terraform-plan`
+  input points at `terraform show -json` output and switches the Action to
+  `flecto plan`, so reviewing a plan on every pull request is two steps:
+
+  ```yaml
+  - run: terraform plan -out=tf.plan && terraform show -json tf.plan > plan.json
+  - uses: myselfsiddharth/Flecto/.github/actions/flecto-pr-risk@v4.0.0
+    with:
+      terraform-plan: plan.json
+      fail-on: error
+  ```
+
+  Because a plan JSON carries its own before and after, **no baseline is resolved
+  and no git history is needed** in this mode — the `fetch-depth: 0` that config
+  mode wants does not apply, and the Action runs on events with no pull request
+  base commit. A missing plan file fails the step rather than letting Flecto
+  report nothing. `targets` is ignored; add a second step without
+  `terraform-plan` to also check config files.
+
+  Config mode is unchanged, including its fail-closed behaviour when no baseline
+  can be resolved. A complete workflow is in
+  [`examples/github-action/flecto-terraform-plan.yml`](examples/github-action/flecto-terraform-plan.yml).
+
 ### Fixed
 
 - **The bundled GitHub Actions installed the pre-4.0 CLI.** `flecto-ci`

@@ -143,18 +143,96 @@ zero rather than an absent one, which was the entire point.
 
 ---
 
+## D-007 — Marketplace requirements, verified
+
+**Date:** 2026-09-28 · **Status:** verified against GitHub's current docs
+
+Hard rule 5. Source:
+[Publishing actions in GitHub Marketplace](https://docs.github.com/en/actions/how-tos/create-and-publish-actions/publish-in-github-marketplace)
+and
+[Metadata syntax for GitHub Actions](https://docs.github.com/en/actions/reference/workflows-and-actions/metadata-syntax).
+
+**The plan's core assumption is correct.** Quoting the docs:
+
+> Each repository must contain a single action metadata file (`action.yml` or
+> `action.yaml`) at the root. Repositories may include other actions metadata
+> files in sub-folders, but **they will not be automatically listed in the
+> marketplace**.
+
+So Flecto's Actions, living at `.github/actions/flecto-ci/` and
+`.github/actions/flecto-pr-risk/`, **cannot be listed as they are**. That
+confirms the diagnosis in the plan's section 0 and means a root-level
+`action.yml` is genuinely required. Also confirmed:
+
+- The action must be in a **public** repository.
+- Publishing requires **two-factor authentication** on the account.
+- The `name` in the metadata file must be **globally unique** across
+  Marketplace, and cannot collide with a username, organization, or reserved
+  GitHub feature name. `Flecto PR risk` and `Flecto CI` both need checking
+  against live Marketplace before a listing attempt.
+- A listing takes a **primary category** and an optional second one. The docs
+  do not enumerate the categories, so the actual list has to be read off the
+  listing form rather than promised in advance.
+
+**One plan claim is wrong.** The plan says a branding icon and colour are
+"required for Marketplace". They are not — `branding` is documented as
+**Optional**: "You can use a color and Feather icon to create a badge to
+personalize and distinguish your action." Badges show next to the action name in
+Marketplace, so branding is worth adding for presentation, but it is not a
+publishing requirement and nothing is blocked on choosing one. Valid colours are
+`white`, `black`, `yellow`, `blue`, `green`, `orange`, `red`, `purple`,
+`gray-dark`; the icon must be a Feather icon (v4.28.0 set).
+
+**Still open: which repository hosts the root `action.yml`.** Two viable shapes,
+and this needs the maintainer because creating a repository is hard rule 6.
+Recorded in the growth log; not decided here.
+
+---
+
+## D-008 — `terraform-plan` is an input on the existing Action, not a new one
+
+**Date:** 2026-09-28 · **Status:** done
+
+Phase 2 asks for Terraform to be a first-class input so the setup fits in about
+ten lines. Implemented on `flecto-pr-risk` rather than as a separate Action,
+because the posting, masking, token, and fork-detection logic is already there
+and worth reusing rather than duplicating.
+
+The wiring is not a thin pass-through, for two reasons found by reading the CLI:
+
+1. **`flecto plan` is a different subcommand from `flecto ci`**, and takes the
+   plan file directly. It has no `--snapshot-ref` at all: a plan JSON already
+   contains before and after, so there is nothing to diff against.
+2. **The baseline step fails hard when there is no pull request base commit** —
+   deliberately, because an unresolvable baseline would report "no changes" and
+   pass. That requirement does not apply in plan mode, so the step short-circuits
+   when `terraform-plan` is set.
+
+That second point is the risk in this change: a skip that is slightly too broad
+silently disables the gate for config mode. Mitigations, both tested:
+
+- The early exit is guarded on `terraform-plan` alone, and a test asserts it sits
+  *before* the base-commit check while that check still exists. Verified by
+  making the skip unconditional and watching the test fail.
+- A missing plan file fails the step rather than letting `flecto plan` read
+  nothing, because a gate that passes because it read no input is not a gate.
+
+Verified end to end against `test/fixtures/terraform/destructive.json`: the
+Action's own script, with the real CLI substituted for the `npx` install, exits 1
+and reports the destroyed `aws_db_instance.main`. Config mode's argv is
+byte-for-byte what it was, and config mode with no PR context still exits 1.
+
+`fail-on` keeps this Action's default of `policy,error`, which is stricter than
+the CLI's `plan` default of `error`.
+
+---
+
 ## Verifications still owed
 
-Recorded so Phase 2 does not proceed on assumption. Hard rule 5 applies to each.
-
-- **Marketplace metadata location.** Phase 2 assumes a listed action needs
-  `action.yml` at the root of a public repo, which is why a standalone
-  `flecto-action` repo is proposed. **Not yet verified against GitHub's current
-  docs** — this session did no web lookups. Verify before creating any repo,
-  because if subfolder actions can now be listed, the whole standalone-repo step
-  is unnecessary and the Actions stay where they are.
-- **Marketplace category list.** The plan proposes "Code review" or "Security".
-  Confirm both exist as categories before writing the listing.
+- **Marketplace category list** — read off the listing form when creating it.
+  The docs do not enumerate them.
+- **`name` uniqueness** — check `Flecto PR risk` / `Flecto CI` against live
+  Marketplace before attempting a listing.
 - **Competitor claims** for `comparison.md` (Phase 3): every statement about
   Checkov, Trivy/tfsec, conftest/OPA, tf-summarize, and dyff gets checked against
   that tool's current docs, with the source recorded here.

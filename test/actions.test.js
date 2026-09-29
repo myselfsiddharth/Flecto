@@ -147,6 +147,9 @@ describe('bundled GitHub Actions', () => {
     assert.equal(inputs['github-token'].default, '${{ github.token }}');
     // Empty, not HEAD~1: the baseline is resolved from the pull request.
     assert.equal(inputs['snapshot-ref'].default, '');
+    // Empty by default: config mode stays the default mode, so adding this
+    // input changes nothing for existing consumers.
+    assert.equal(inputs['terraform-plan'].default, '');
     assert.equal(inputs['node-version'].default, '20');
     assert.equal(inputs['flecto-version'].default, '4');
 
@@ -155,6 +158,50 @@ describe('bundled GitHub Actions', () => {
       assert.equal(typeof spec.description, 'string', `${name}: is documented`);
       assert.notEqual(spec.default, undefined, `${name}: has a default`);
     }
+  });
+
+  test('terraform-plan switches to `flecto plan` and drops the baseline', () => {
+    // A Terraform plan JSON already contains before/after, so `flecto plan`
+    // needs no baseline and no git history. The risk in wiring that up is
+    // weakening the config path's fail-closed behaviour by accident, so both
+    // modes are asserted here rather than just the new one.
+    const { doc } = loadAction('flecto-pr-risk');
+    const run = doc.runs.steps.find((s) => s.name && s.name.includes('Run Flecto'));
+
+    // The plan subcommand, taking the file directly and no --snapshot-ref.
+    assert.match(run.run, /args=\(plan "\$INPUT_TERRAFORM_PLAN"/);
+    // The config path keeps its baseline.
+    assert.match(run.run, /args=\(ci "\$\{targets\[@\]\}"/);
+    assert.match(run.run, /args\+=\(--snapshot-ref "\$INPUT_SNAPSHOT_REF"\)/);
+
+    // A missing plan file must fail rather than let `flecto plan` report
+    // nothing: a gate that passes because it read no input is not a gate.
+    assert.match(run.run, /if \[\[ ! -f "\$INPUT_TERRAFORM_PLAN" \]\]; then/);
+
+    // The input must reach both steps that branch on it.
+    const baseline = doc.runs.steps.find((s) => s.id === 'baseline');
+    assert.equal(baseline.env.INPUT_TERRAFORM_PLAN, '${{ inputs.terraform-plan }}');
+    assert.equal(run.env.INPUT_TERRAFORM_PLAN, '${{ inputs.terraform-plan }}');
+  });
+
+  test('the baseline step fails closed for config mode and only skips for a plan', () => {
+    // Regression guard for the skip added with terraform-plan. The baseline step
+    // is what stops an unresolvable baseline reporting "no changes" and letting
+    // a risky edit through, so the plan-mode early exit must be reachable only
+    // when a plan file was actually requested.
+    const { doc } = loadAction('flecto-pr-risk');
+    const baseline = doc.runs.steps.find((s) => s.id === 'baseline');
+
+    const planSkip = baseline.run.indexOf('if [[ -n "$INPUT_TERRAFORM_PLAN" ]]; then');
+    const baseShaCheck = baseline.run.indexOf('if [[ -z "$PR_BASE_SHA" ]]; then');
+    assert.ok(planSkip > -1, 'plan mode short-circuits the baseline');
+    assert.ok(baseShaCheck > -1, 'the missing-base-commit check still exists');
+    assert.ok(planSkip < baseShaCheck,
+      'the plan skip must precede the base-commit check, or plan mode still requires a PR');
+
+    // The skip is guarded on the plan input alone -- not on the event, and not
+    // on whether a baseline happened to resolve.
+    assert.match(baseline.run, /fail "Pull request base commit .* is missing from the checkout/);
   });
 
   test('neither action can install a Flecto older than 4', () => {
