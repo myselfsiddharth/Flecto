@@ -213,15 +213,19 @@ describe('bundled GitHub Actions', () => {
     // worst outcome: the listed action would silently behave differently from
     // the documented one.
     //
-    // So the `runs:` block must be byte-identical. If this fails, the fix is to
-    // copy the change across, not to relax the test.
+    // So the `runs:` block must be identical. If this fails, the fix is to copy
+    // the change across, not to relax the test.
     const root = loadYaml(ROOT_ACTION);
     const sub = loadYaml(join(ACTIONS_DIR, 'flecto-pr-risk', 'action.yml'));
 
+    // Normalize line endings first. A Windows checkout can carry CRLF, and the
+    // invariant is that the two files declare the same steps -- not that they
+    // were checked out with the same newlines.
     const runsBlock = (text) => {
-      const at = text.indexOf('\nruns:\n');
+      const normalized = text.replace(/\r\n/gu, '\n');
+      const at = normalized.indexOf('\nruns:\n');
       assert.notEqual(at, -1, 'a runs: block exists');
-      return text.slice(at);
+      return normalized.slice(at);
     };
 
     assert.equal(runsBlock(root.text), runsBlock(sub.text),
