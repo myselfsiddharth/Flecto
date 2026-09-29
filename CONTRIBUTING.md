@@ -86,6 +86,21 @@ the numbers.
 - At least **one approving review** from a maintainer / CODEOWNER.
 - Conversations should be resolved before merge.
 
+## Project decisions and process
+
+Not required reading to contribute, but useful for understanding why things are
+the way they are:
+
+- **[docs/decisions.md](docs/decisions.md)** — decisions taken and the evidence
+  behind each, including claims about GitHub Marketplace rules and competing
+  tools that were verified against current documentation rather than assumed
+- **[docs/positioning.md](docs/positioning.md)** — what Flecto leads with, and
+  what it deliberately does not claim
+- **[docs/integration-verification.md](docs/integration-verification.md)** — how
+  integrations are verified end to end
+- **[docs/v5-proposals.md](docs/v5-proposals.md)** — anything that would need a
+  major version goes here rather than into a release
+
 ## Security
 
 Do **not** open public issues for vulnerabilities. See [SECURITY.md](SECURITY.md).
