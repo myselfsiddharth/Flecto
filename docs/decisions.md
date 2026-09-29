@@ -321,6 +321,46 @@ change as a Marketplace listing.
   The docs do not enumerate them.
 - **`name` uniqueness** — check `Flecto PR risk` / `Flecto CI` against live
   Marketplace before attempting a listing.
-- **Competitor claims** for `comparison.md` (Phase 3): every statement about
-  Checkov, Trivy/tfsec, conftest/OPA, tf-summarize, and dyff gets checked against
-  that tool's current docs, with the source recorded here.
+## D-010 — Competitor claims in `comparison.md`, verified
+
+**Date:** 2026-09-29 · **Status:** verified; sources listed in the page itself
+
+Hard rule 5 discharged for Phase 3's comparison page. Each tool was read at its
+own current documentation, not from memory, and
+[`comparison.md`](comparison.md) carries the source links inline.
+
+What the reading changed about the page:
+
+- **Checkov ships "more than 750 predefined policies."** Flecto's `terraform` and
+  `kubernetes` packs have **10 each** — confirmed with `flecto policies list`.
+  That is roughly two orders of magnitude, and the page says so in those words
+  rather than hedging. Flecto must never be marketed as a policy library.
+- **tfsec is *not* deprecated or archived**, which is the common assumption and
+  would have been wrong to write. Aqua's notice says efforts are consolidating
+  into Trivy and tfsec "will continue to remain available", with a migration
+  guide and **no sunset date**. The page says to compare against Trivy instead,
+  without claiming tfsec is dead.
+- **Trivy does support plan JSON** (HCL, plan snapshot, and plan JSON), so
+  "Flecto reads plans and Trivy doesn't" would have been false. The distinction
+  is state versus change, not format support.
+- **conftest ships no policies** — Rego is unlimited but you write it. That is
+  the honest axis: expressiveness versus working out of the box.
+- **tf-summarize has *better* plan presentation** than Flecto (tree, 2D-tree,
+  HTML; Flecto has one table) and makes no risk judgement. Both halves are in
+  the page.
+- **dyff is purely a diff** with no policy, gating, or PR comment, and its
+  `kubectl diff` integration is a user-configured workflow rather than a feature.
+
+The page opens by saying Flecto is **not** a replacement for Checkov or Trivy and
+recommends running both, because that is true and because a comparison page that
+only flatters its subject does not get believed. It also lists where Flecto is
+weakest, including that a diff reporter is blind to pre-existing problems.
+
+`bridgecrewio/checkov-action@v12` in the recommended-setup snippet was checked
+against the action's tags rather than guessed.
+
+---
+
+## Verifications still owed
+
+- Nothing outstanding for Phase 3's comparison page.

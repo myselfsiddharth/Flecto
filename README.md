@@ -537,6 +537,7 @@ Explicit CLI flags win over profiles, which win over `defaults`.
 | **[Plugins](docs/plugins.md)** · **[Cookbook](docs/plugin-cookbook.md)** | Rules that need real code |
 | **[Live drift](docs/drift.md)** | `flecto-drift`: comparing a declared config against what is actually running |
 | **[Troubleshooting](docs/troubleshooting.md)** | When something doesn't behave |
+| **[Comparison](docs/comparison.md)** | Honest comparison with Checkov, Trivy/tfsec, conftest/OPA, tf-summarize, and dyff |
 | **[Stability](docs/stability.md)** | What you can build against, what you cannot, and the deprecation sequence |
 | **[Migrating to 4.0](docs/migrating-to-4.md)** | The five breaking changes, and how to tell whether they affect you |
 | **[Changelog](CHANGELOG.md)** | Release history and migration notes |
