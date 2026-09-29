@@ -7,6 +7,22 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- **Pointing Flecto at a Helm chart says so, instead of reporting broken YAML**
+  ([#210]). `flecto ci "helm/**/*.yaml"` is the first thing a Helm user tries,
+  and it failed with a syntax error pointing inside a chart template that is
+  perfectly valid — sending them to debug their chart rather than their command.
+
+  A YAML file that **fails to parse** and carries Go template delimiters now
+  reports what it is and the two ways to read it: render the chart, or point at
+  `values.yaml`. The check runs only after a parse failure, so valid YAML
+  holding `{{ ... }}` in a string — a Prometheus alert rule, say — is untouched.
+
+  Found by running Flecto against real repositories instead of our own fixtures.
+
+[#210]: https://github.com/myselfsiddharth/Flecto/issues/210
+
 ## [4.1.1] - 2026-09-29
 
 ### Fixed
