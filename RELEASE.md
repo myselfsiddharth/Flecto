@@ -61,8 +61,10 @@ after step 3 and only needs doing once.
 2. Accept the Marketplace terms if prompted, and confirm the account has
    **two-factor authentication** enabled — publishing requires it.
 3. Pick a **primary category**, and optionally a second. The categories are not
-   listed in GitHub's docs, so read them off the form; "Code review" or
-   "Security" are the expected fits.
+   in GitHub's docs; they were read off the live Marketplace and recorded in
+   [docs/decisions.md](docs/decisions.md) D-011. Use **`Code review`** as the
+   primary and **`Security`** as the secondary — `Security` first invites a
+   comparison against Checkov's 750+ rules that Flecto's 10 would lose.
 4. **The description must be under 125 characters.** This is not in GitHub's
    metadata-syntax docs and the publish form only tells you once you are there.
    A test pins it (`test/actions.test.js`), so a too-long description fails CI

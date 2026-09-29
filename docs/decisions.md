@@ -315,12 +315,6 @@ change as a Marketplace listing.
 
 ---
 
-## Verifications still owed
-
-- **Marketplace category list** — read off the listing form when creating it.
-  The docs do not enumerate them.
-- **`name` uniqueness** — check `Flecto PR risk` / `Flecto CI` against live
-  Marketplace before attempting a listing.
 ## D-010 — Competitor claims in `comparison.md`, verified
 
 **Date:** 2026-09-29 · **Status:** verified; sources listed in the page itself
@@ -361,6 +355,55 @@ against the action's tags rather than guessed.
 
 ---
 
+## D-011 — Marketplace category and name, verified
+
+**Date:** 2026-09-29 · **Status:** verified; the listing itself is the
+maintainer's to publish
+
+**Category list.** GitHub's docs do not enumerate the categories, so they were
+read off the live Marketplace filter. The Actions categories include
+`Code review`, `Security`, `Code quality`, `Continuous integration`, `Testing`,
+`Deployment`, `Monitoring`, `Dependency management`, `Utilities`, and
+`Code Scanning Ready`.
+
+**Recommended: primary `Code review`, secondary `Security`.** The wedge is the
+pull request comment, and `Code review` is where someone looking for that
+browses. `Security` is the honest second, not the first: Flecto has 10 Terraform
+rules against Checkov's 750+ (see [comparison.md](comparison.md)), so leading
+with `Security` invites a comparison it loses. `Continuous integration` was
+considered and rejected as too generic to differentiate.
+
+**Name availability: `Flecto PR Risk` is free.** Both
+`github.com/marketplace/actions/flecto-pr-risk` and `.../flecto` return 404, so
+neither slug is taken. The name must be globally unique across Marketplace and
+must not collide with a username, organization, or reserved GitHub feature name.
+
+### Publishing cannot be automated
+
+Checked rather than assumed, because it decides who has to do the work.
+**There is no REST or CLI endpoint for publishing an Action listing.** The
+`marketplace_listing/*` REST endpoints are the GitHub Apps billing API and
+require an app JWT; they have nothing to do with Action listings.
+`GET /repos/{owner}/{repo}/marketplace` does not exist.
+
+The documented flow is entirely web UI: a banner on `action.yml` → **Draft a
+release** → tick **Publish this Action to the GitHub Marketplace** → pick a
+primary category → **Publish release**.
+
+Two of its requirements are account-level and tied to a person, not a token:
+
+- **The GitHub Marketplace Developer Agreement** must be accepted by the account
+  owner; the publish checkbox stays disabled until it is. Accepting a legal
+  agreement on someone's behalf is not something an agent should do, even where
+  a browser could reach the button.
+- **Two-factor authentication** is required to publish.
+
+Everything up to the form is automatable and has been done: the release exists,
+the description fits, the name is free, the category is chosen. The form itself
+is the maintainer's.
+
+---
+
 ## Verifications still owed
 
-- Nothing outstanding for Phase 3's comparison page.
+- Nothing outstanding.
