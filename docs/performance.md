@@ -449,3 +449,18 @@ Being explicit about the limits of a synthetic harness:
 - **Only `--format json` was measured.** `pr-comment` and `github-annotations`
   do more per-change formatting work, which the 0.3% serialize figure does not
   cover.
+
+---
+
+## The pipeline
+
+1. **Parse** — format detected by extension or dotenv naming → structured values
+2. **Diff** — semantic tree comparison with ignore rules and array identity
+3. **Evaluate** — policy packs and plugins → severity-tagged findings
+4. **Emit** — a versioned envelope (`schema_version: "2.0"`)
+5. **Deliver** — PR comment, CI annotations, terminal output, webhook, or command
+
+Flecto runs entirely on your machine or your runner. Snapshots are local files,
+and nothing leaves the process unless you configure a webhook or command.
+
+---
