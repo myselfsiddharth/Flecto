@@ -435,6 +435,30 @@ export function yamlDocumentKeys(docs) {
  * @returns {unknown}
  * @throws {Error} on unsupported format or parse failure
  */
+/**
+ * Whether a file that failed to parse as YAML looks like a Helm chart template.
+ *
+ * Only ever consulted **after** a parse failure, which is what keeps it from
+ * firing on valid YAML that happens to contain braces -- a Prometheus rule
+ * holding `{{ $labels.instance }}` in a string parses fine and never reaches
+ * here. Go template delimiters in a file that did not parse are close to
+ * conclusive, and `{{-`, `nindent`, `include "` and a `templates/` path are the
+ * shapes that only a chart has.
+ *
+ * @param {string} raw
+ * @param {string} filepath
+ * @returns {boolean}
+ */
+function looksLikeHelmTemplate(raw, filepath) {
+  if (!/\{\{/u.test(raw) || !/\}\}/u.test(raw)) return false;
+  const path = filepath.replace(/\\/gu, '/');
+  return /\/templates\//u.test(path)
+    || /\{\{-/u.test(raw)
+    || /\|\s*nindent\b/u.test(raw)
+    || /\{\{[^}]*\binclude\s+"/u.test(raw)
+    || /\{\{[^}]*\.Values\./u.test(raw);
+}
+
 export function parseContent(filepath, raw) {
   const ext = extname(filepath).toLowerCase();
   const envLike = isEnvFilename(filepath);
@@ -469,6 +493,19 @@ export function parseContent(filepath, raw) {
       parsed = TOML.parse(raw);
     }
   } catch (err) {
+    // A chart template is not YAML, and saying so beats a column number. Without
+    // this, `flecto ci "helm/**/*.yaml"` -- the first thing a Helm user tries --
+    // reports a syntax error inside a file that is perfectly valid, and sends
+    // them to debug their chart instead of their command.
+    if ((ext === '.yaml' || ext === '.yml') && looksLikeHelmTemplate(raw, filepath)) {
+      throw new Error(
+        `"${filepath}" looks like a Helm template, not YAML.\n` +
+        'Flecto reads rendered manifests, so render the chart first:\n' +
+        '  helm template ./chart > rendered.yaml && flecto ci rendered.yaml\n' +
+        'Or point Flecto at the values file, which is plain YAML:\n' +
+        '  flecto ci chart/values.yaml'
+      );
+    }
     const lineMatch = err.message?.match(/line (\d+)/i);
     const lineInfo = lineMatch ? ` (line ${lineMatch[1]})` : '';
     throw new Error(
