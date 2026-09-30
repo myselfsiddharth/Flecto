@@ -6,6 +6,7 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/marketplace/actions/flecto-pr-risk"><img alt="GitHub Marketplace" src="https://img.shields.io/badge/marketplace-Flecto%20PR%20Risk-34d399?style=flat-square&logo=github&labelColor=0b1220"/></a>
   <a href="https://www.npmjs.com/package/flecto"><img alt="npm" src="https://img.shields.io/npm/v/flecto?style=flat-square&color=34d399&labelColor=0b1220"/></a>
   <a href="https://github.com/myselfsiddharth/Flecto/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/myselfsiddharth/Flecto/ci.yml?branch=main&style=flat-square&label=CI&labelColor=0b1220"/></a>
   <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-8fa3bf?style=flat-square&labelColor=0b1220"/></a>
@@ -74,6 +75,10 @@ aws_db_instance.main.#action
 
 ## Add it in 60 seconds
 
+Flecto PR Risk is on the
+[GitHub Marketplace](https://github.com/marketplace/actions/flecto-pr-risk), so
+`myselfsiddharth/Flecto@v4.1.2` is the whole reference.
+
 **Terraform** — point it at the plan JSON:
 
 ```yaml
@@ -86,7 +91,7 @@ steps:
   - run: |
       terraform plan -out=tf.plan
       terraform show -json tf.plan > plan.json
-  - uses: myselfsiddharth/Flecto/.github/actions/flecto-pr-risk@v4.1.0
+  - uses: myselfsiddharth/Flecto@v4.1.2
     with:
       terraform-plan: plan.json
       fail-on: error
@@ -104,7 +109,7 @@ steps:
     with:
       fetch-depth: 0
   - run: helm template ./chart > rendered.yaml
-  - uses: myselfsiddharth/Flecto/.github/actions/flecto-pr-risk@v4.1.0
+  - uses: myselfsiddharth/Flecto@v4.1.2
     with:
       targets: rendered.yaml
       policies: kubernetes
