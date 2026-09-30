@@ -337,6 +337,25 @@ test('an oversized change set is spilled 0600 and removed once the command exits
   }
 });
 
+test('a command killed by a signal is treated as failure', async () => {
+  if (process.platform === 'win32') return;
+  const envelope = createEnvelope({
+    file: 'sig.yaml',
+    changes: [{ type: 'changed', path: 'a', before: '1', after: '2' }],
+    source: 'watch',
+  });
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (...args) => { warnings.push(args.map(String).join(' ')); };
+  try {
+    const ok = await runCommand('kill -9 $$', envelope);
+    assert.equal(ok, false);
+  } finally {
+    console.warn = originalWarn;
+  }
+  assert.match(warnings.join('\n'), /signal SIGKILL/i);
+});
+
 test('a failed delivery does not leak the URL through the error message either', async () => {
   // Found in review: redactWebhookUrl handled the URL Flecto interpolates, but
   // fetch puts the whole URL into err.message -- and does so exactly in the two

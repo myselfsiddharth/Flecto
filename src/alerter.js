@@ -204,7 +204,12 @@ export function runCommand(command, envelope) {
         renderWarn(`Command failed to start: ${err.message}`);
         settle(false);
       });
-      child.on('close', (code) => {
+      child.on('close', (code, signal) => {
+        if (signal) {
+          renderWarn(`Command failed (signal ${signal}): ${command}`);
+          settle(false);
+          return;
+        }
         if (code && code !== 0) {
           renderWarn(`Command failed (exit ${code}): ${command}`);
           settle(false);
