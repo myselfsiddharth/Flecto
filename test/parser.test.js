@@ -623,3 +623,77 @@ describe('JSON with comments (JSONC)', () => {
     }
   });
 });
+
+describe('a Helm template is named as one, not reported as broken YAML', () => {
+  // Found by running Flecto against real repositories rather than fixtures:
+  // `flecto ci "helm/**/*.yaml"` is the first thing a Helm user tries, and it
+  // reported a syntax error inside a chart file that is perfectly valid, which
+  // sends them to debug their chart instead of their command. See #210.
+  const TEMPLATE = `apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "chart.fullname" . }}
+  labels:
+  {{- include "chart.labels" . | nindent 4 }}
+spec:
+  ports:
+    - port: {{ .Values.service.port }}
+`;
+
+  test('it says what the file is and how to read it instead', () => {
+    assert.throws(
+      () => parseContent('helm/templates/service.yaml', TEMPLATE),
+      (err) => {
+        assert.match(err.message, /looks like a Helm template, not YAML/u);
+        // The two ways out, both of which have to be in the message: the error
+        // is useless if it only says what is wrong.
+        assert.match(err.message, /helm template/u);
+        assert.match(err.message, /values\.yaml/u);
+        // And it must not read as a defect in their file.
+        assert.doesNotMatch(err.message, /Parse error/u);
+        return true;
+      },
+    );
+  });
+
+  test('a template outside templates/ is still recognised by its delimiters', () => {
+    assert.throws(
+      () => parseContent('chart/svc.yml', TEMPLATE),
+      /looks like a Helm template/u,
+    );
+  });
+
+  test('valid YAML holding Go-template braces in strings still parses', () => {
+    // A Prometheus alert rule is the case that must not regress: it is valid
+    // YAML, it is full of `{{ $labels.x }}`, and it never reaches the branch
+    // because it parses. The guard only runs after a parse failure.
+    const rule = 'groups:\n'
+      + '  - name: example\n'
+      + '    rules:\n'
+      + '      - alert: InstanceDown\n'
+      + '        annotations:\n'
+      + '          summary: "Instance {{ $labels.instance }} is down"\n'
+      + '          description: "{{ $labels.job }} down for {{ $value }}m"\n';
+    const parsed = parseContent('rules.yaml', rule);
+    assert.equal(parsed.groups[0].rules[0].alert, 'InstanceDown');
+    assert.match(parsed.groups[0].rules[0].annotations.summary, /\{\{ \$labels\.instance \}\}/u);
+  });
+
+  test('broken YAML that is not a template keeps the parse error', () => {
+    assert.throws(
+      () => parseContent('config.yaml', 'a: [1, 2\nb: {c:\n'),
+      (err) => {
+        assert.match(err.message, /Parse error in "config\.yaml"/u);
+        assert.doesNotMatch(err.message, /Helm/u);
+        return true;
+      },
+    );
+  });
+
+  test('a file with braces that parses is untouched even under templates/', () => {
+    // Path alone must not be enough: a chart directory can hold a plain YAML
+    // file, and renaming a valid file must not change how it is read.
+    const parsed = parseContent('helm/templates/notes.yaml', 'a: "{{ literal }}"\n');
+    assert.equal(parsed.a, '{{ literal }}');
+  });
+});
