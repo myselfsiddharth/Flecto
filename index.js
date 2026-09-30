@@ -1353,8 +1353,13 @@ program
           '--format human is not available for `ci`, whose output is meant to be consumed by a machine. Use pr-comment to read it yourself, or json to parse it. (human is the default for `plan` and `compare`.)',
         );
       }
-      if (!['json', 'ndjson', 'sarif', 'github-annotations', 'pr-comment'].includes(format)) {
-        throw new Error('--format must be json, ndjson, sarif, github-annotations, or pr-comment');
+      // Listed once: the check and the message drift apart otherwise, and the
+      // message is the only place a user finds out what is allowed. The wording
+      // is unchanged -- this is a dedup, not a rewording.
+      const CI_FORMATS = ['json', 'ndjson', 'sarif', 'github-annotations', 'pr-comment'];
+      if (!CI_FORMATS.includes(format)) {
+        const listed = `${CI_FORMATS.slice(0, -1).join(', ')}, or ${CI_FORMATS.at(-1)}`;
+        throw new Error(`--format must be ${listed}`);
       }
       const prCommentPost = Boolean(effective.prCommentPost);
       if (effective.prProvider && !PR_PROVIDER_IDS.includes(String(effective.prProvider))) {
