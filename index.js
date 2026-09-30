@@ -1348,8 +1348,23 @@ program
       const ignorePaths = parseCsv(effective.ignore);
       const failOn = parseFailOn(effective.failOn ?? 'changed,policy,error');
       const format = String(effective.format ?? 'json');
-      if (!['json', 'ndjson', 'sarif', 'github-annotations', 'pr-comment'].includes(format)) {
-        throw new Error('--format must be json, ndjson, sarif, github-annotations, or pr-comment');
+      const CI_FORMATS = ['json', 'ndjson', 'sarif', 'github-annotations', 'pr-comment'];
+      if (!CI_FORMATS.includes(format)) {
+        // `human` is the default for `plan` and `compare` and what `watch`
+        // prints, so reaching for it here is the natural mistake -- especially
+        // when running `ci` locally to see what the gate will say. Listing the
+        // valid values does not explain that, so it reads as a typo or as an
+        // inconsistency rather than as deliberate.
+        if (format === 'human') {
+          throw new Error(
+            '--format human is not available for `ci`, whose output is meant to be read by\n' +
+            'a machine: a gate a script has to pattern-match on is not a gate.\n' +
+            'To read a run yourself, use --format pr-comment, which renders the same report\n' +
+            'as markdown. To parse it, use --format json.\n' +
+            '(`human` is the default for `plan` and `compare`, and what `watch` prints.)'
+          );
+        }
+        throw new Error(`--format must be one of: ${CI_FORMATS.join(', ')}`);
       }
       const prCommentPost = Boolean(effective.prCommentPost);
       if (effective.prProvider && !PR_PROVIDER_IDS.includes(String(effective.prProvider))) {

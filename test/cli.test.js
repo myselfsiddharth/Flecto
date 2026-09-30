@@ -1303,7 +1303,34 @@ test('ci rejects an unknown format', () => {
     );
 
     assert.equal(run.status, 1);
-    assert.match(run.stderr, /--format must be json, ndjson, sarif, github-annotations, or pr-comment/);
+    assert.match(run.stderr, /--format must be one of: json, ndjson, sarif, github-annotations, pr-comment/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('ci rejects --format human by explaining, not by listing (#211)', () => {
+  // `human` is the default for `plan` and `compare` and what `watch` prints, so
+  // reaching for it on `ci` is the natural mistake. A bare list of valid values
+  // reads as a typo or an inconsistency; it has to say the choice is deliberate.
+  const rootIndex = resolve(process.cwd(), 'index.js');
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-format-human-'));
+  try {
+    const file = join(dir, 'config.yaml');
+    writeFileSync(file, 'a: 1\n');
+    const run = spawnSync(
+      process.execPath,
+      [rootIndex, 'ci', file, '--format', 'human'],
+      { cwd: dir, encoding: 'utf8' },
+    );
+
+    assert.equal(run.status, 1);
+    assert.match(run.stderr, /--format human is not available for `ci`/u);
+    // Both ways out, or the error is only a complaint.
+    assert.match(run.stderr, /--format pr-comment/u);
+    assert.match(run.stderr, /--format json/u);
+    // And where `human` does live, so it does not read as an inconsistency.
+    assert.match(run.stderr, /default for `plan` and `compare`/u);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
