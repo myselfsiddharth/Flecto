@@ -7,6 +7,19 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- **`flecto ci --format human` now explains itself** ([#211]). `human` is the
+  default for `plan` and `compare` and what `watch` prints, so reaching for it on
+  `ci` is the natural mistake — especially when running `ci` locally to see what
+  the gate will say. The old error listed the valid values without saying that
+  `human` was deliberately excluded, so it read as a typo or an inconsistency. It
+  now names the reason and both ways out: `pr-comment` to read a run, `json` to
+  parse it. An actual typo still gets the plain list.
+
+[#211]: https://github.com/myselfsiddharth/Flecto/issues/211
+
+
 ## [4.1.1] - 2026-09-29
 
 ### Fixed
@@ -19,8 +32,6 @@ The format is based on [Keep a Changelog], and this project adheres to
 
   The rest of the pitch — that Flecto never runs `terraform`, `helm`, or `sops`,
   and never decrypts — lives in the README, which has room for it.
-
-### Fixed
 
 - **Documented Action pins moved from `@v4.0.0` to `@v4.1.0`.** Tags are
   immutable, and the fix that stopped the bundled Actions installing the pre-4.0
