@@ -7,6 +7,12 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ## [Unreleased]
 
+## [4.2.0] - 2026-10-05
+
+The first npm release since 4.1.1. The `v4.1.2` tag moved the documented Action
+pins but its npm publish failed (the version was never bumped), so the fixes
+below reach npm for the first time here.
+
 ### Added
 
 - **`--new-files added`: a pull request that adds a config file no longer has to
@@ -78,9 +84,18 @@ The format is based on [Keep a Changelog], and this project adheres to
   now names the reason and both ways out: `pr-comment` to read a run, `json` to
   parse it. An actual typo still gets the list.
 
+- **A command killed by a signal is a failed delivery, not a success**
+  ([#185], fixed by [@nova-loop](https://github.com/nova-loop) in [#214]).
+  `watch --command` checked only the exit code, which is `null` when a signal
+  ends the process, so an OOM-killed or timed-out hook counted as delivered:
+  `--on-alert-failure` never fired and at-least-once deliveries were marked done.
+  The warning now names the signal.
+
 [#210]: https://github.com/myselfsiddharth/Flecto/issues/210
+[#185]: https://github.com/myselfsiddharth/Flecto/issues/185
 [#211]: https://github.com/myselfsiddharth/Flecto/issues/211
 [#212]: https://github.com/myselfsiddharth/Flecto/pull/212
+[#214]: https://github.com/myselfsiddharth/Flecto/pull/214
 [#225]: https://github.com/myselfsiddharth/Flecto/issues/225
 
 ## [4.1.1] - 2026-09-29
@@ -1396,7 +1411,8 @@ fixed — those runs were never actually gated — but the failure is new.
 - Misconfigured policy packs/plugins cause `watch` to exit non-zero instead of
   continuing with no policies.
 
-[Unreleased]: https://github.com/myselfsiddharth/Flecto/compare/v4.1.1...HEAD
+[Unreleased]: https://github.com/myselfsiddharth/Flecto/compare/v4.2.0...HEAD
+[4.2.0]: https://github.com/myselfsiddharth/Flecto/compare/v4.1.1...v4.2.0
 [4.1.1]: https://github.com/myselfsiddharth/Flecto/compare/v4.1.0...v4.1.1
 [4.1.0]: https://github.com/myselfsiddharth/Flecto/compare/v4.0.0...v4.1.0
 [4.0.0]: https://github.com/myselfsiddharth/Flecto/compare/v3.1.0...v4.0.0
