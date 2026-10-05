@@ -364,24 +364,43 @@ function identityMap(items, idKey) {
 // `KEY=VALUE`, or a bare `KEY` (Compose's pass-through from the host).
 export const ASSIGNMENT_RE = /^([A-Za-z_][A-Za-z0-9_.-]*)(?:=|$)/;
 
+// `-x`, `--name`, or `--name=value`: a command-line flag, keyed by its name.
+export const FLAG_RE = /^(-{1,2}[A-Za-z0-9][A-Za-z0-9_.-]*)(?:=|$)/;
+
 /**
- * Key a list of `KEY=VALUE` strings by KEY, or return null when it is not one.
+ * String-list shapes that are really maps, and how each is keyed.
  *
  * Compose writes `environment`, `labels` and `build.args` either as a map or as
- * a list of assignments, and means the same thing by both. Diffed by position,
+ * a list of `KEY=VALUE`, and means the same thing by both. Diffed by position,
  * one inserted variable turned every later line into a `changed` pairing two
- * unrelated variables (#226). At least one item must carry an `=`, so a plain
- * word list such as `command: [python, app.py]` keeps its order-sensitive diff.
+ * unrelated variables (#226); one removed container arg did the same to every
+ * later flag (#238). A list counts only when every item has the shape and keys
+ * are unique, so a repeated `--set` falls back to position.
+ *
+ * Assignments also need at least one `=`, so a plain word list such as
+ * `command: [python, app.py]` keeps its order-sensitive diff. A flag list does
+ * not: `[-v, --debug]` is already unambiguous, and `["--port", "8080"]` or
+ * `["-c", "echo hi"]` fail the shape and keep position.
+ * @type {Array<{ re: RegExp, needsValue: boolean }>}
+ */
+const KEYED_STRING_SHAPES = [
+  { re: ASSIGNMENT_RE, needsValue: true },
+  { re: FLAG_RE, needsValue: false },
+];
+
+/**
+ * Key a list of strings by the given shape, or return null when it is not one.
  * @param {unknown[]} items
+ * @param {RegExp} re
  * @returns {Map<string, { value: unknown, index: number }> | null}
  */
-function assignmentMap(items) {
+function keyedStringMap(items, re) {
   /** @type {Map<string, { value: unknown, index: number }>} */
   const map = new Map();
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
     if (typeof item !== 'string') return null;
-    const match = ASSIGNMENT_RE.exec(item);
+    const match = re.exec(item);
     if (!match || map.has(match[1])) return null;
     map.set(match[1], { value: item, index: i });
   }
@@ -389,18 +408,22 @@ function assignmentMap(items) {
 }
 
 /**
- * Both sides are assignment lists and at least one item assigns a value.
+ * Both sides have the same keyed shape (see KEYED_STRING_SHAPES).
  * @param {unknown[]} before
  * @param {unknown[]} after
  * @returns {{ beforeMap: Map<string, { value: unknown, index: number }>, afterMap: Map<string, { value: unknown, index: number }> } | null}
  */
 function assignmentMaps(before, after) {
-  const beforeMap = assignmentMap(before);
-  const afterMap = beforeMap && assignmentMap(after);
-  if (!beforeMap || !afterMap) return null;
   const assigns = (item) => typeof item === 'string' && item.includes('=');
-  if (!before.some(assigns) && !after.some(assigns)) return null;
-  return { beforeMap, afterMap };
+  for (const { re, needsValue } of KEYED_STRING_SHAPES) {
+    const beforeMap = keyedStringMap(before, re);
+    const afterMap = beforeMap && keyedStringMap(after, re);
+    if (!beforeMap || !afterMap) continue;
+    if (beforeMap.size === 0 && afterMap.size === 0) continue;
+    if (needsValue && !before.some(assigns) && !after.some(assigns)) continue;
+    return { beforeMap, afterMap };
+  }
+  return null;
 }
 
 /**

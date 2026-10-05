@@ -462,9 +462,29 @@ describe('KEY=VALUE lists are keyed by KEY (#226)', () => {
     assert.deepEqual(paths(events), ['changed command[0]', 'changed command[1]']);
   });
 
-  test('flag-style and duplicate items fall back to the index diff', () => {
-    assert.deepEqual(paths(diffTrees({ args: ['--a=1'] }, { args: ['--a=2'] })), ['changed args[0]']);
+  test('duplicate keys fall back to the index diff', () => {
     assert.deepEqual(paths(diffTrees({ e: ['A=1', 'A=2'] }, { e: ['A=1', 'A=3'] })), ['changed e[1]']);
+    assert.deepEqual(
+      paths(diffTrees({ args: ['--set', 'a=1', '--set'] }, { args: ['--set', 'a=2', '--set'] })),
+      ['changed args[1]'],
+    );
+  });
+
+  test('a removed flag is one removal, not every later flag changed (#238)', () => {
+    // From a real PR: ForgeRock/secret-agent#306 dropped the first arg.
+    const before = { args: ['--keytoolPath=/opt/jdk/bin/keytool', '--opensslPath=/usr/bin/openssl', '--webhook-ns=$(NS)', '-v'] };
+    const after = { args: ['--opensslPath=/usr/bin/openssl', '--webhook-ns=$(NS)', '-v'] };
+    assert.deepEqual(paths(diffTrees(before, after)), ['removed args["--keytoolPath"]']);
+  });
+
+  test('a changed flag value is reported under its flag name', () => {
+    const events = diffTrees({ args: ['--port=80', '--debug'] }, { args: ['--debug', '--port=8080'] });
+    assert.deepEqual(events.map((e) => [e.type, e.path]), [['changed', 'args["--port"]']]);
+  });
+
+  test('flags with separate values or mixed items keep the index diff', () => {
+    assert.deepEqual(paths(diffTrees({ args: ['--port', '80'] }, { args: ['--port', '8080'] })), ['changed args[1]']);
+    assert.deepEqual(paths(diffTrees({ args: ['-c', 'echo a'] }, { args: ['-c', 'echo b'] })), ['changed args[1]']);
   });
 
   test('--no-array-id turns it off', () => {

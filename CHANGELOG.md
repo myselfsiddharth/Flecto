@@ -7,6 +7,20 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- **Flag lists diff by flag name, so removing one arg is one removal**
+  ([#238]). A real pull request that removed the first of eight container
+  `args` read as 7 `changed` and 1 `removed`, each pairing two unrelated flags.
+  It now reads as `removed args["--keytoolPath"]`. A list counts when every item
+  is `-x`, `--name` or `--name=value` with unique names; a repeated `--set`,
+  `["--port", "8080"]`, and `["-c", "echo hi"]` keep the position diff, and
+  `--no-array-id` turns it off. Paths change from `args[0]` to
+  `args["--name"]` for these lists. No built-in pack rule matches an `args`
+  index.
+
+[#238]: https://github.com/myselfsiddharth/Flecto/issues/238
+
 ## [4.3.0] - 2026-10-05
 
 ### Fixed

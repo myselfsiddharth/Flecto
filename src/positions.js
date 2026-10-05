@@ -3,7 +3,7 @@ import yaml from 'js-yaml';
 
 import { isArmoredAgeFile } from './encrypted.js';
 import { isEnvFilename, isIniFilename, stripJsonComments, yamlDocumentKeys } from './parser.js';
-import { ASSIGNMENT_RE } from './differ.js';
+import { ASSIGNMENT_RE, FLAG_RE } from './differ.js';
 
 /**
  * Where a config path lives in the source text (#142).
@@ -248,10 +248,13 @@ function itemByIdentity(items, quoted, arrayIdKey) {
       if (String(id) === target) matches.add(item);
     }
   }
-  // A `KEY=VALUE` list (Compose `environment`, `labels`) is keyed by KEY.
+  // A `KEY=VALUE` list (Compose `environment`, `labels`) is keyed by KEY, and
+  // a flag list (container `args`) by flag name.
   if (matches.size === 0 && !arrayIdKey) {
     for (const item of items) {
-      if (typeof item.value === 'string' && ASSIGNMENT_RE.exec(item.value)?.[1] === target) matches.add(item);
+      if (typeof item.value !== 'string') continue;
+      const key = ASSIGNMENT_RE.exec(item.value)?.[1] ?? FLAG_RE.exec(item.value)?.[1];
+      if (key === target) matches.add(item);
     }
   }
   return matches.size === 1 ? [...matches][0] : null;

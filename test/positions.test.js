@@ -68,6 +68,11 @@ describe('YAML', () => {
     assert.equal(hit.precision, 'exact');
   });
 
+  test('a flag list element resolves by its flag name (#238)', () => {
+    const manifest = 'spec:\n  args:\n    - --keytool=/x\n    - --openssl=/usr/bin/openssl\n';
+    assert.equal(at('a.yaml', manifest, 'spec.args["--openssl"]').text, '--openssl=/usr/bin/openssl');
+  });
+
   test('a merged-in key anchors at the merge, an alias at its own key', () => {
     const merged = at('a.yaml', doc, 'use.k');
     assert.equal(merged.precision, 'merge');
