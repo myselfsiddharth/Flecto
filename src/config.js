@@ -519,7 +519,11 @@ export function assertSnapshotRefFromCli(effective, cliOverrides) {
   if (rcBaselineAllowed()) return;
   // `snapshotFile` picks the baseline just as directly, so it is gated with it
   // rather than left as the way around it.
-  for (const option of ['snapshotRef', 'snapshotFile']) {
+  // `newFiles` decides what a file missing from the baseline is compared
+  // against, and a rename is a missing file: from .flectorc it would let a pull
+  // request move prod.yaml and have every `changed` reported as `added`.
+  const flags = { snapshotRef: 'snapshot-ref', snapshotFile: 'snapshot-file', newFiles: 'new-files' };
+  for (const [option, flag] of Object.entries(flags)) {
     if (effective[option] === undefined || cliOverrides[option] !== undefined) continue;
     throw new Error(
       `Refusing "${option}" declared in .flectorc: it chooses the baseline every change is`
@@ -527,7 +531,7 @@ export function assertSnapshotRefFromCli(effective, cliOverrides) {
       + ' pointing it at "HEAD", or at a file it committed, compares every file against itself'
       + ' and exits 0.\n'
       + `Declared: ${JSON.stringify(effective[option])}\n`
-      + `Pass --${option === 'snapshotRef' ? 'snapshot-ref' : 'snapshot-file'} on the command line`
+      + `Pass --${flag} on the command line`
       + ' instead, or set FLECTO_ALLOW_RC_BASELINE=1 if this config is trusted.',
     );
   }

@@ -578,7 +578,8 @@ steps:
 | `mask-secrets` | `true` | Redact secret-like values before rendering |
 | `github-token` | `${{ github.token }}` | Token used to post the comment |
 | `snapshot-ref` | _(empty)_ | Baseline override; empty means "the pull request's base commit" |
-| `flecto-version` | `2` | npm version range for the CLI |
+| `new-files` | _(empty)_ | `added` reports a file the base commit does not have as all-added, instead of failing the run. See [`--new-files`](cli-reference.md#flecto-ci-files) |
+| `flecto-version` | `4` | npm version range for the CLI |
 | `node-version` | `20` | Node.js version used to run Flecto |
 
 Outputs: `snapshot-ref` (the baseline actually used) and `posting-enabled`.

@@ -7,7 +7,31 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- **`--new-files added`: a pull request that adds a config file no longer has to
+  fail the gate.** `flecto ci --snapshot-ref` stopped with "Failed to resolve
+  snapshot baseline" whenever a target was not in the base commit, so any PR
+  that added a values file or a manifest matched by the gate's glob went red,
+  whatever `--fail-on` said. With `--new-files added` (Action input
+  `new-files: added`), such a file is reported as new, every key `added`, and
+  policies still run on it.
+
+  The default is unchanged and still fails closed, and the error now names the
+  flag. A renamed file looks exactly like a new one, and would turn every
+  `changed` into an `added`, which the Action's `policy,error` does not gate,
+  so this is opt-in and refused from `.flectorc`, as `snapshotRef` is.
+
+  Found by replaying Flecto over a real repository's infra history, where one
+  commit in twelve added a values file.
+
 ### Fixed
+
+- **The symlinked-baseline check never fired below the repository root.** It
+  asked `git ls-tree` for a root-relative path from inside the file's own
+  directory, so for `config/app.yaml` it looked up `config/config/app.yaml`,
+  found nothing, and let the baseline through as the link's target path. Only
+  files at the root were protected.
 
 - **Pointing Flecto at a Helm chart says so, instead of reporting broken YAML**
   ([#210]). `flecto ci "helm/**/*.yaml"` is the first thing a Helm user tries,

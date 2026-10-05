@@ -49,6 +49,15 @@ inputs:
       skipped, with a warning, when this is empty.
     required: false
     default: ${{ github.token }}
+  new-files:
+    description: >-
+      What to do with a target that the pull request's base commit does not
+      have. Empty keeps Flecto's default, which fails the run. Set "added" to
+      report every key in a newly added file as added; policies still run on
+      it. Not the default because a renamed file looks the same, and would
+      turn each `changed` into an `added`, which policy,error does not gate.
+    required: false
+    default: ""
   terraform-plan:
     description: >-
       Path to `terraform show -json` output. Set this to review a Terraform plan
@@ -251,6 +260,7 @@ runs:
         INPUT_MASK_SECRETS: ${{ inputs.mask-secrets }}
         INPUT_SNAPSHOT_REF: ${{ steps.baseline.outputs.snapshot-ref }}
         INPUT_TERRAFORM_PLAN: ${{ inputs.terraform-plan }}
+        INPUT_NEW_FILES: ${{ inputs.new-files }}
         INPUT_PR_COMMENT_POST: ${{ steps.posting.outputs.posting-enabled }}
         INPUT_FLECTO_VERSION: ${{ inputs.flecto-version }}
         # Always set explicitly: an empty value makes Flecto skip posting rather
@@ -286,6 +296,10 @@ runs:
           read -r -a targets <<< "${INPUT_TARGETS//$'\n'/ }"
           args=(ci "${targets[@]}" --format "$INPUT_FORMAT" --fail-on "$INPUT_FAIL_ON")
           args+=(--snapshot-ref "$INPUT_SNAPSHOT_REF")
+          # Only when set, so a flecto-version that predates the flag keeps working.
+          if [[ -n "$INPUT_NEW_FILES" ]]; then
+            args+=(--new-files "$INPUT_NEW_FILES")
+          fi
         fi
 
         if [[ -n "$INPUT_POLICIES" ]]; then

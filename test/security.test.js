@@ -1106,6 +1106,35 @@ describe('the baseline ref cannot be chosen or weaponized from .flectorc (#121)'
     }
   });
 
+  test('a symlinked baseline below the repository root is refused too', () => {
+    // The check asked ls-tree for a root-relative path from inside the file's
+    // own directory, so it looked up config/config/app.yaml and only ever
+    // fired for files at the root.
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'flecto-sec-linksub-')));
+    const git = (...args) => spawnSync('git', args, { cwd: dir, encoding: 'utf8' });
+    try {
+      git('init', '-q', '.');
+      git('config', 'user.email', 'test@example.com');
+      git('config', 'user.name', 'test');
+      git('config', 'commit.gpgsign', 'false');
+      mkdirSync(join(dir, 'config'));
+      writeFileSync(join(dir, 'config', 'real.yaml'), 'tls: true\n', 'utf8');
+      symlinkSync('real.yaml', join(dir, 'config', 'app.yaml'));
+      git('add', '-A');
+      git('commit', '-qm', 'base');
+      rmSync(join(dir, 'config', 'app.yaml'));
+      writeFileSync(join(dir, 'config', 'app.yaml'), 'tls: false\n', 'utf8');
+      git('add', '-A');
+      git('commit', '-qm', 'pr');
+
+      const run = runFlecto(dir, ['ci', 'config/app.yaml', '--snapshot-ref', 'HEAD~1']);
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /is a symbolic link in HEAD~1/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('a snapshot file reached through a linked *directory* is refused too', () => {
     // The containment added for a linked file was decided on a canonicalized
     // parent -- a component a pull request controls. Linking the directory
@@ -1510,6 +1539,115 @@ describe('the shared snapshot store trusts nothing a pull request commits (#121,
       assert.equal(run.signal, null, 'must not be killed by the timeout — a hang is a DoS');
       assert.equal(run.status, 1, `${run.stdout}\n${run.stderr}`);
       assert.match(run.stderr, /not valid JSON|malformed/i);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('a file the baseline commit does not have (--new-files)', () => {
+  /**
+   * A repo whose PR commit adds config/new.yaml beside an existing
+   * config/old.yaml, so both the new-file and existing-file paths are covered
+   * below the repository root.
+   * @param {string} newContent
+   * @param {object | null} rc value for .flectorc `defaults`
+   * @returns {string}
+   */
+  function repoAddingAFile(newContent, rc = null) {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'flecto-sec-newfile-')));
+    const git = (...args) => spawnSync('git', args, { cwd: dir, encoding: 'utf8' });
+    git('init', '-q', '.');
+    git('config', 'user.email', 'test@example.com');
+    git('config', 'user.name', 'test');
+    git('config', 'commit.gpgsign', 'false');
+    mkdirSync(join(dir, 'config'));
+    writeFileSync(join(dir, 'config', 'old.yaml'), 'db:\n  pool: 5\n', 'utf8');
+    git('add', '-A');
+    git('commit', '-qm', 'base');
+    writeFileSync(join(dir, 'config', 'old.yaml'), 'db:\n  pool: 500\n', 'utf8');
+    writeFileSync(join(dir, 'config', 'new.yaml'), newContent, 'utf8');
+    if (rc) writeFileSync(join(dir, '.flectorc'), JSON.stringify({ defaults: rc }), 'utf8');
+    git('add', '-A');
+    git('commit', '-qm', 'pr');
+    return dir;
+  }
+
+  test('fails closed by default, and names the flag', () => {
+    const dir = repoAddingAFile('replicas: 2\n');
+    try {
+      const run = runFlecto(dir, ['ci', 'config/new.yaml', '--snapshot-ref', 'HEAD~1', '--fail-on', 'policy,error']);
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /"config\/new\.yaml" is not in HEAD~1/);
+      assert.match(run.stderr, /--new-files added/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('--new-files added reports every key as added and passes a benign file', () => {
+    const dir = repoAddingAFile('replicas: 2\nimage: app:1.4.0\n');
+    try {
+      const run = runFlecto(dir, [
+        'ci', 'config/new.yaml', '--snapshot-ref', 'HEAD~1', '--new-files', 'added', '--fail-on', 'policy,error',
+      ]);
+      assert.equal(run.status, 0, run.stderr);
+      const [entry] = JSON.parse(run.stdout);
+      assert.deepEqual(entry.envelope.changes.map((c) => `${c.type} ${c.path}`).sort(), ['added image', 'added replicas']);
+      assert.match(run.stderr, /config\/new\.yaml is not in HEAD~1: reporting it as a new file/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('--new-files added still runs policies on the new file', () => {
+    // Top-level on purpose: the default pack does not yet look inside a key
+    // that is added whole, so a nested password here would pass for reasons
+    // that have nothing to do with --new-files.
+    const dir = repoAddingAFile('password: hunter2hunter2\nreplicas: 2\n');
+    try {
+      const run = runFlecto(dir, [
+        'ci', 'config/new.yaml', '--snapshot-ref', 'HEAD~1', '--new-files', 'added', '--fail-on', 'policy,error',
+      ]);
+      assert.equal(run.status, 1, 'a secret in a new file is still a finding');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('--new-files added does not treat an existing file below the root as new', () => {
+    const dir = repoAddingAFile('replicas: 2\n');
+    try {
+      const run = runFlecto(dir, [
+        'ci', 'config/old.yaml', '--snapshot-ref', 'HEAD~1', '--new-files', 'added', '--fail-on', 'changed',
+      ]);
+      assert.equal(run.status, 1, 'pool 5 -> 500 is a change, not an addition');
+      assert.match(run.stdout, /"type": *"changed"/);
+      assert.doesNotMatch(run.stderr, /reporting it as a new file/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('newFiles declared in .flectorc is refused, not honored', () => {
+    // A rename reads as a new file, so from .flectorc this would let a pull
+    // request move a file and have every `changed` reported as `added`.
+    const dir = repoAddingAFile('replicas: 2\n', { newFiles: 'added' });
+    try {
+      const run = runFlecto(dir, ['ci', 'config/new.yaml', '--snapshot-ref', 'HEAD~1']);
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /Refusing "newFiles" declared in \.flectorc/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('rejects an unknown mode', () => {
+    const dir = repoAddingAFile('replicas: 2\n');
+    try {
+      const run = runFlecto(dir, ['ci', 'config/new.yaml', '--snapshot-ref', 'HEAD~1', '--new-files', 'maybe']);
+      assert.equal(run.status, 1);
+      assert.match(run.stderr, /--new-files must be fail or added/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

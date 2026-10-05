@@ -385,16 +385,49 @@ function gitRepoRelativePath(filePath) {
  * @returns {boolean}
  */
 function baselineEntryIsSymlink(commit, rel, dir) {
+  return baselineEntryMode(commit, rel, dir) === '120000';
+}
+
+/**
+ * The git mode of the entry at this path in this commit: '' when the commit
+ * has no such path, null when git could not answer.
+ * @param {string} commit
+ * @param {string} rel
+ * @param {string} dir
+ * @returns {string | null}
+ */
+function baselineEntryMode(commit, rel, dir) {
   try {
-    const entry = execFileSync(
+    // `rel` is relative to the repository root, and without --full-tree
+    // ls-tree resolves it against `dir`: for any file below the root it looked
+    // up `sub/sub/file`, found nothing, and the symlink check never fired.
+    return execFileSync(
       'git',
-      ['-C', dir, 'ls-tree', '--format=%(objectmode)', '--end-of-options', commit, '--', rel],
+      ['-C', dir, 'ls-tree', '--full-tree', '--format=%(objectmode)', '--end-of-options', commit, '--', rel],
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
     ).trim();
-    return entry === '120000';
   } catch {
-    return false;
+    return null;
   }
+}
+
+/**
+ * Returned in place of a baseline state when `--new-files added` is set and the
+ * baseline commit does not contain the file. A distinct value rather than an
+ * empty document, so the caller cannot mistake "this file is new" for "this
+ * file was empty" (#186), and has to say which one it is reporting.
+ */
+const NEW_FILE = Symbol('new file');
+
+/**
+ * An empty baseline of the same shape as the head document, so every key
+ * diffs as `added`. Not `parseContent(path, '')`: JSON has no empty document.
+ * @param {unknown} after
+ */
+function emptyBaselineLike(after) {
+  if (Array.isArray(after)) return [];
+  if (after !== null && typeof after === 'object') return {};
+  return null;
 }
 
 /**
@@ -518,7 +551,7 @@ function isExplicitPath(value) {
     || value.startsWith('..\\');
 }
 
-function readSnapshotStateFromRef(filePath, snapshotRef, store, snapshotFile) {
+function readSnapshotStateFromRef(filePath, snapshotRef, store, snapshotFile, { newFiles = 'fail' } = {}) {
   if (snapshotRef === '') {
     // The same unset-CI-variable case readSnapshotFile refuses. Falling back to
     // the store here would compare against something the operator did not
@@ -576,6 +609,19 @@ function readSnapshotStateFromRef(filePath, snapshotRef, store, snapshotFile) {
   }
 
   const rel = gitRepoRelativePath(filePath);
+  // A file the baseline commit does not have is a file this change adds. The
+  // default is still to fail closed: a rename reads as a new file too, and
+  // turns every `changed` into an `added` that the Action's default --fail-on
+  // does not gate. `--new-files added` is the explicit, CLI-only opt-in. The
+  // commit is the operator's, so the change under review cannot fake absence.
+  if (baselineEntryMode(commit, rel, repoDir) === '') {
+    if (newFiles === 'added') return NEW_FILE;
+    throw new Error(
+      `"${rel}" is not in ${ref}, so there is no baseline to diff it against.`
+      + ' If this change adds the file, pass --new-files added to report every key as added'
+      + ' (policies still run); the default fails closed because a rename looks the same.',
+    );
+  }
   if (baselineEntryIsSymlink(commit, rel, repoDir)) {
     throw new Error(
       `"${rel}" is a symbolic link in ${ref}, so the baseline there is a path, not a configuration.`
@@ -1309,6 +1355,7 @@ program
   .option('-p, --profile <name>', 'Use profile from .flectorc (else FLECTO_PROFILE)')
   .option('--snapshot-ref <ref>', 'Baseline git revision (a snapshot path also works if it is path-shaped)')
   .option('--snapshot-file <path>', 'Baseline snapshot file, never consulted as a git revision')
+  .option('--new-files <mode>', 'A file not in the --snapshot-ref commit: fail (default) | added (every key reported as added)')
   .option('--snapshot-store <id>', `Snapshot store to read: ${SNAPSHOT_STORE_IDS.join(' | ')}`)
   .option('--snapshot-dir <path>', 'Directory holding the snapshot store (default: .flecto-snapshots local, .flecto/snapshots shared)')
   .option('--format <type>', 'Output format: json | ndjson | sarif | github-annotations | pr-comment', 'json')
@@ -1347,6 +1394,10 @@ program
 
       const ignorePaths = parseCsv(effective.ignore);
       const failOn = parseFailOn(effective.failOn ?? 'changed,policy,error');
+      const newFiles = String(effective.newFiles ?? 'fail');
+      if (newFiles !== 'fail' && newFiles !== 'added') {
+        throw new Error(`--new-files must be fail or added (got ${newFiles})`);
+      }
       const format = String(effective.format ?? 'json');
       if (format === 'human') {
         throw new Error(
@@ -1431,12 +1482,21 @@ program
           : alignStateWithStore(parseFile(filepath), snapshotStore);
         let before;
         try {
-          before = readSnapshotStateFromRef(filepath, effective.snapshotRef, snapshotStore, effective.snapshotFile);
+          before = readSnapshotStateFromRef(
+            filepath, effective.snapshotRef, snapshotStore, effective.snapshotFile, { newFiles },
+          );
         } catch (err) {
           throw new Error(
             `Failed to resolve snapshot baseline for "${filepath}"` +
             `${effective.snapshotRef ? ` (ref: ${effective.snapshotRef})` : ''}: ${err.message}`
           );
+        }
+        if (before === NEW_FILE) {
+          renderWarn(
+            `${relative(cwd, filepath)} is not in ${effective.snapshotRef}: reporting it as a new file,`
+            + ' every key added (--new-files added).',
+          );
+          before = emptyBaselineLike(after);
         }
         const events = diffTrees(before, after, dOpts);
         const rawFindings = await evaluatePolicies(events, {
