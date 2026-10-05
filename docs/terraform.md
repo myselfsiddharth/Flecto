@@ -209,7 +209,7 @@ steps:
       terraform plan -out=tf.plan
       terraform show -json tf.plan > plan.json
 
-  - uses: myselfsiddharth/Flecto/.github/actions/flecto-pr-risk@v4.2.0
+  - uses: myselfsiddharth/Flecto/.github/actions/flecto-pr-risk@v4.3.0
     with:
       terraform-plan: plan.json
       fail-on: error

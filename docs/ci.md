@@ -411,7 +411,7 @@ steps:
   - uses: actions/checkout@v7
     with:
       fetch-depth: 2
-  - uses: myselfsiddharth/Flecto/.github/actions/flecto-ci@v4.2.0
+  - uses: myselfsiddharth/Flecto/.github/actions/flecto-ci@v4.3.0
     with:
       targets: config/**/*.{yaml,yml,json,toml,ini}
       format: pr-comment
@@ -519,7 +519,7 @@ steps:
   - uses: actions/checkout@v7
     with:
       fetch-depth: 2
-  - uses: myselfsiddharth/Flecto/.github/actions/flecto-ci@v4.2.0
+  - uses: myselfsiddharth/Flecto/.github/actions/flecto-ci@v4.3.0
     with:
       targets: config/**/*.{yaml,yml,json,toml,ini}
       snapshot-ref: HEAD~1
@@ -564,7 +564,7 @@ steps:
   - uses: actions/checkout@v7
     with:
       fetch-depth: 0
-  - uses: myselfsiddharth/Flecto/.github/actions/flecto-pr-risk@v4.2.0
+  - uses: myselfsiddharth/Flecto/.github/actions/flecto-pr-risk@v4.3.0
 ```
 
 | Input | Default | Description |
@@ -645,7 +645,7 @@ picked up automatically. Two tighter levels are available:
 
 ```yaml
 # Exact CLI version — reproducible installs, tag still mutable in principle.
-- uses: myselfsiddharth/Flecto/.github/actions/flecto-pr-risk@v4.2.0
+- uses: myselfsiddharth/Flecto/.github/actions/flecto-pr-risk@v4.3.0
   with:
     flecto-version: "4.0.0"
 ```
