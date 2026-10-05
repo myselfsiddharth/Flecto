@@ -93,6 +93,7 @@ Each rule produces one finding for every change that satisfies all specified con
 | `afterMatches` | Optional regular expression matched against a **string** post-change value. Compiled with [RE2](#regular-expressions-in-packs). |
 | `afterAnyMatches` | The same expression applied to the elements of an **array** post-change value; matches when any string element matches. |
 | `beforeLooksSecret` / `afterLooksSecret` | `true` when the value — or any string nested inside it — looks like a credential. |
+| `afterSecretCandidate` | `true` when the new value could be a credential at all: not a boolean, `null`, an empty string, a reference-only placeholder (`${NAME}`, `$(NAME)`, `{{ ... }}`), or a Secret reference under a key such as `existingSecret` or `adminPasswordKey`. Pair it with a secret-sounding `match.path` so the rule fires on `password: hunter2` and not on `secretCreatePolicy: { enabled: true }`. |
 | `numericJump.minMultiple` | Optional numeric increase threshold. |
 | `message` | Static finding text. |
 | `messageTemplate` | Finding text with `{before}`, `{after}`, and `{path}` placeholders. Takes precedence over `message`. |

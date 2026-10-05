@@ -1,5 +1,5 @@
 import chalk from 'chalk';
-import { looksLikeSecretPath, redactSecretString } from './secrets.js';
+import { isSecretCandidate, looksLikeSecretPath, redactSecretString } from './secrets.js';
 import { ENCRYPTED_DISPLAY, displayEncrypted, isEncryptedSentinel } from './encrypted.js';
 import { secretMatchPath } from './differ.js';
 
@@ -16,13 +16,12 @@ function fmt(v, opts = {}) {
   if (isEncryptedSentinel(v)) return chalk.dim(ENCRYPTED_DISPLAY);
   let value = displayEncrypted(v);
   if (opts.maskSecrets) {
-    if (opts.path && looksLikeSecretPath(opts.path)) {
-      return chalk.dim('"***"');
-    }
     // The changed path itself can look benign while the value carries secrets,
-    // e.g. "database" holding { password }. Redact those the same way the
-    // webhook/CI payloads do.
+    // e.g. "database" holding { password }; or look secret while holding none,
+    // e.g. `secretCreatePolicy: { enabled: true }`. Both are judged leaf by leaf,
+    // the same way the webhook/CI payloads are.
     value = maskSensitiveValue(value, opts.path ?? '');
+    if (value === '***') return chalk.dim('"***"');
   }
   if (typeof value === 'string') return JSON.stringify(value);
   if (typeof value === 'object' && value !== null) return JSON.stringify(value);
@@ -190,7 +189,18 @@ export function renderPolicyFindings(findings) {
  * @returns {unknown}
  */
 export function maskSensitiveValue(value, path = '') {
-  if (looksLikeSecretPath(path)) return '***';
+  // A secret-sounding key masks its scalars, not its whole subtree: under
+  // `secretCreatePolicy`, `enabled: true` is the line a reviewer needs (#224).
+  // Each leaf is judged at its own path, which still carries the key.
+  // Plain containers only: YAML reads `password: 2024-01-01` as a Date, and a
+  // Date falls through to the scalar branch below, where it is masked.
+  const isContainer = Array.isArray(value)
+    || (value !== null && typeof value === 'object'
+      && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null));
+  if (looksLikeSecretPath(path) && !isContainer) {
+    if (isSecretCandidate(value, path)) return '***';
+    return typeof value === 'string' ? redactSecretString(value) : value;
+  }
   if (Array.isArray(value)) {
     return value.map((v, i) => maskSensitiveValue(v, `${path}[${i}]`));
   }

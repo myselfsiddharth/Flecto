@@ -9,6 +9,7 @@
         "path": "(secret|token|password|api[_-]?key|private[_-]?key)",
         "pathFlags": "i"
       },
+      "afterSecretCandidate": true,
       "message": "Sensitive-looking key added or changed. Confirm secret storage, rotation, and access controls."
     },
     {

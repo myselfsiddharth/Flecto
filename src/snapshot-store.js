@@ -11,7 +11,7 @@ import { createHash } from 'crypto';
 import { execFileSync } from 'child_process';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'path';
 
-import { containsSecret, looksLikeSecretPath } from './secrets.js';
+import { containsSecret, isSecretCandidate, looksLikeSecretPath } from './secrets.js';
 import { documentKeysOf, withDocumentKeys } from './documents.js';
 
 /**
@@ -666,7 +666,11 @@ export function maskState(state, path = '') {
   if (isMaskedDigest(state)) return state;
   // `String(state)` because a credential is not always a string — `password:
   // 12345` parses as a number, and it is still the password.
-  if (looksLikeSecretPath(path)) return maskedDigest(String(state));
+  // The same leaf rule as the renderer (#224): a boolean, an empty string, a
+  // placeholder, or a Secret reference under a secret-sounding key is not the
+  // secret. The store must never be more permissive than the display, and this
+  // is the one predicate both use.
+  if (looksLikeSecretPath(path) && isSecretCandidate(state, path)) return maskedDigest(String(state));
   if (typeof state === 'string') return containsSecret(state) ? maskedDigest(state) : state;
   return state;
 }

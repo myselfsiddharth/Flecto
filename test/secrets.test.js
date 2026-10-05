@@ -2,8 +2,10 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  containsSecret, detectSecretKind, looksLikeSecret, redactSecretString,
+  containsSecret, detectSecretKind, holdsSecretCandidate, isSecretCandidate, looksLikeSecret, redactSecretString,
 } from '../src/secrets.js';
+import { maskSensitiveValue } from '../src/renderer.js';
+import { maskState } from '../src/snapshot-store.js';
 
 // Every credential below is synthetic: vendor-documented placeholders or
 // values generated for this test file. None of them are live.
@@ -191,5 +193,87 @@ describe('containsSecret', () => {
 
   test('ignores non-plain objects', () => {
     assert.equal(containsSecret(new Date('2026-07-24T00:00:00.000Z')), false);
+  });
+});
+
+describe('a secret-sounding key whose value cannot be the secret (#224)', () => {
+  // Each from a real repository during outreach.
+  test('booleans, null, and empty strings are not secrets', () => {
+    assert.equal(isSecretCandidate(true, 'metalRelay.secretCreatePolicy.enabled'), false);
+    assert.equal(isSecretCandidate(null, 'db.password'), false);
+    assert.equal(isSecretCandidate('', 'sharedSecret.value'), false);
+    assert.equal(isSecretCandidate('   ', 'sso.clientSecret'), false);
+  });
+
+  test('a Secret reference under a reference-shaped key is not the secret', () => {
+    for (const [path, value] of [
+      ['keycloak.adminPasswordKey', 'keycloak-admin-password'],
+      ['sharedSecret.existingSecretKey', 'OPENSOHO_SHARED_SECRET'],
+      ['postgresql.auth.existingSecret', 'db-credentials'],
+      ['ingress.tlsSecretName', 'app-tls'],
+      ['env[0].valueFrom.secretKeyRef.name', 'api-secrets'],
+      ['env[0].valueFrom.secretKeyRef.key', 'token'],
+    ]) {
+      assert.equal(isSecretCandidate(value, path), false, `${path}: ${value}`);
+    }
+  });
+
+  test('reference-only placeholders are not the secret', () => {
+    for (const value of [
+      '${OIDC_CLIENT_SECRET}', '${DB_PASSWORD:-}', '${DB_PASSWORD:?set it}', '$(DB_PASSWORD)',
+      '{{ .Values.db.password }}', 'OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET}', '***',
+    ]) {
+      assert.equal(isSecretCandidate(value, 'x.password'), false, value);
+    }
+  });
+
+  test('anything that could be the credential stays a candidate', () => {
+    for (const [path, value] of [
+      ['db.password', 'hunter2'],
+      ['db.password', 12345], // a numeric password is still the password
+      ['db.password', '$uperSecret1'], // looks like $NAME, is a password
+      ['db.password', '${DB_PASSWORD:-postgres}'], // the default is a credential
+      ['db.password', '{{ .Values.p | default "hunter2" }}'],
+      ['db.password', '<hunter2>'],
+      ['db.password', 'c2VjcmV0='], // base64 padding, not KEY=
+      ['env["DB_PASSWORD"]', 'DB_PASSWORD=hunter2'],
+      ['minio.secretKey', 'minioadmin'], // *SecretKey is the credential
+      ['postgresql.auth.existingSecret', 'gT4kQ9wZ2mB7xL5nR8vC3jH6pY1sD0fA'], // flagged by value
+      ['postgresql.auth.existingSecret', 'not a k8s name!'],
+    ]) {
+      assert.equal(isSecretCandidate(value, path), true, `${path}: ${value}`);
+    }
+    assert.equal(isSecretCandidate(new Date(0), 'db.password'), true);
+  });
+
+  test('a container is judged leaf by leaf', () => {
+    const sharedSecret = { value: '', existingSecret: '', existingSecretKey: 'OPENSOHO_SHARED_SECRET' };
+    assert.equal(holdsSecretCandidate(sharedSecret, 'sharedSecret'), false);
+    assert.equal(holdsSecretCandidate({ ...sharedSecret, value: 'hunter2' }, 'sharedSecret'), true);
+    assert.equal(holdsSecretCandidate({ enabled: true }, 'metalRelay.secretCreatePolicy'), false);
+  });
+
+  test('display masking keeps what is not a secret and masks what could be', () => {
+    assert.deepEqual(maskSensitiveValue({ enabled: true }, 'metalRelay.secretCreatePolicy'), { enabled: true });
+    assert.deepEqual(
+      maskSensitiveValue({ value: 'hunter2', existingSecret: 'db-creds', port: 5432 }, 'sharedSecret'),
+      { value: '***', existingSecret: 'db-creds', port: '***' },
+    );
+    assert.equal(maskSensitiveValue('keycloak-admin-password', 'keycloak.adminPasswordKey'), 'keycloak-admin-password');
+    assert.equal(maskSensitiveValue('hunter2', 'db.password'), '***');
+  });
+
+  test('the committed store hides exactly what the display hides', () => {
+    const state = {
+      metalRelay: { secretCreatePolicy: { enabled: true } },
+      keycloak: { adminPasswordKey: 'keycloak-admin-password' },
+      db: { password: 'hunter2' },
+      cache: { password: 12345 },
+    };
+    const stored = maskState(state);
+    assert.equal(stored.metalRelay.secretCreatePolicy.enabled, true);
+    assert.equal(stored.keycloak.adminPasswordKey, 'keycloak-admin-password');
+    assert.notEqual(stored.db.password, 'hunter2');
+    assert.notEqual(stored.cache.password, 12345);
   });
 });

@@ -44,6 +44,7 @@
         "afterTruthy": { "const": true },
         "beforeLooksSecret": { "const": true },
         "afterLooksSecret": { "const": true },
+        "afterSecretCandidate": { "const": true },
         "afterMatches": { "type": "string" },
         "afterAnyMatches": { "type": "string" },
         "numericJump": {
@@ -95,6 +96,7 @@
         "afterTruthy": { "const": true },
         "beforeLooksSecret": { "const": true },
         "afterLooksSecret": { "const": true },
+        "afterSecretCandidate": { "const": true },
         "afterMatches": { "type": "string" },
         "afterAnyMatches": { "type": "string" },
         "numericJump": { "$ref": "#/$defs/numericJump" },

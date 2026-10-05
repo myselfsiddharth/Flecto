@@ -9,6 +9,7 @@
         "path": "(secret|token|password|api[_-]?key|private[_-]?key|credential)",
         "pathFlags": "i"
       },
+      "afterSecretCandidate": true,
       "message": "Sensitive-looking key changed in production profile. Confirm rotation and access controls."
     },
     {

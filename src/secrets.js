@@ -363,6 +363,100 @@ export function looksLikeSecretPath(path) {
 }
 
 /**
+ * Keys that hold the *name* of a secret, not the secret: `existingSecret`,
+ * `existingSecretPasswordKey`, `tlsSecretName`, `envSecretRef`,
+ * `adminPasswordKey`. The Helm convention for "the credential lives in a
+ * Kubernetes Secret, and this is where". Deliberately not `*SecretKey`:
+ * `minio.secretKey` is the credential itself.
+ */
+const REFERENCE_KEY_RE = /^(?:existingSecret\w*|\w*Secret(?:Name|Ref)|\w*PasswordKey)$/i;
+const SECRET_KEY_REF_RE = /secretKeyRef\.(?:name|key)$/i;
+// A Kubernetes object name or a Secret key, which is what a reference holds.
+const REFERENCE_VALUE_RE = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,251}[A-Za-z0-9])?$/;
+// `KEY=VALUE`, as Compose writes an environment list entry.
+const ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_.-]*=(.+)$/s;
+/**
+ * Placeholders that can only be references, for values under a key that names
+ * a credential. Stricter than PLACEHOLDER_RE, which serves value-shape
+ * detection: there, `$uperSecret1` reading as `$NAME` costs a missed entropy
+ * hit; here it would print a password. So `${NAME}`, `${NAME:-}` and
+ * `${NAME:?message}` but not `${NAME:-literal}` (the literal is a default
+ * credential), `$(NAME)`, `{{ ... }}` with no quoted literal inside, and an
+ * already-masked `***`.
+ */
+const KEY_PLACEHOLDER_RE = /^(?:\$\{[A-Za-z_][A-Za-z0-9_]*(?::?\?[^}]*|:-)?\}|\$\([A-Za-z_][A-Za-z0-9_]*\)|\{\{[^}"'`]*\}\}|\*{3})$/;
+
+/**
+ * The last key of a diff path: `a.b.c` -> `c`, `env["X_TOKEN"]` -> `X_TOKEN`.
+ * @param {string} path
+ * @returns {string}
+ */
+function lastPathSegment(path) {
+  const quoted = /\[("(?:[^"\\]|\\.)*")\]$/.exec(path);
+  if (quoted) {
+    try {
+      return JSON.parse(quoted[1]);
+    } catch {
+      return quoted[1];
+    }
+  }
+  return path.slice(path.lastIndexOf('.') + 1);
+}
+
+/**
+ * Could this scalar, sitting under a secret-sounding key, be the secret?
+ *
+ * Key-name masking used to answer yes for anything, which hid the values a
+ * reviewer most needed (#224): `secretCreatePolicy: { enabled: true }` printed
+ * as `***`, and `adminPasswordKey: keycloak-admin-password` — the name of a key
+ * inside a Secret — raised an error. No, then, for:
+ *
+ * - booleans, null, and an empty string: nothing to hide
+ * - a placeholder (`${X}`, `$(X)`, `{{ ... }}`), alone or as `KEY=<placeholder>`
+ * - a reference: a key that names a Secret, holding a plain identifier that the
+ *   value detector does not flag
+ *
+ * Numbers stay yes (`pin: 12345` is the pin). So does `KEY=` with an empty
+ * right side: base64 padding (`c2VjcmV0=`) has exactly that shape.
+ *
+ * Shared by display masking, the committed snapshot store, and the
+ * `secret-key-changed` rule, so the three cannot disagree.
+ * @param {unknown} value
+ * @param {string} [path] the configuration path, document prefix stripped
+ * @returns {boolean}
+ */
+export function isSecretCandidate(value, path = '') {
+  if (value === null || value === undefined || typeof value === 'boolean') return false;
+  if (typeof value !== 'string') return true;
+  const trimmed = value.trim();
+  if (!trimmed || KEY_PLACEHOLDER_RE.test(trimmed)) return false;
+  const assignment = ASSIGNMENT_RE.exec(trimmed);
+  if (assignment && KEY_PLACEHOLDER_RE.test(assignment[1].trim())) return false;
+  const isReference = REFERENCE_KEY_RE.test(lastPathSegment(path)) || SECRET_KEY_REF_RE.test(path);
+  if (isReference && REFERENCE_VALUE_RE.test(trimmed) && !looksLikeSecret(trimmed)) return false;
+  return true;
+}
+
+/**
+ * True when any scalar inside `value` could be a secret (see
+ * `isSecretCandidate`), each judged at its own path.
+ * @param {unknown} value
+ * @param {string} [path]
+ * @returns {boolean}
+ */
+export function holdsSecretCandidate(value, path = '') {
+  if (Array.isArray(value)) return value.some((entry, index) => holdsSecretCandidate(entry, `${path}[${index}]`));
+  if (
+    value
+    && typeof value === 'object'
+    && (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null)
+  ) {
+    return Object.entries(value).some(([key, entry]) => holdsSecretCandidate(entry, path ? `${path}.${key}` : key));
+  }
+  return isSecretCandidate(value, path);
+}
+
+/**
  * True when a value — or any string nested inside a plain object or array —
  * looks like a secret.
  * @param {unknown} value

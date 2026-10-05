@@ -38,6 +38,32 @@ describe('policy engine', () => {
     assert.equal(findings[0].severity, 'error');
   });
 
+  test('a secret-sounding key whose new value cannot be the secret does not fire (#224)', async () => {
+    for (const change of [
+      { type: 'added', path: 'metalRelay.secretCreatePolicy', after: { enabled: true } },
+      { type: 'added', path: 'keycloak.adminPasswordKey', after: 'keycloak-admin-password' },
+      { type: 'added', path: 'sharedSecret', after: { value: '', existingSecret: '', existingSecretKey: 'OPENSOHO_SHARED_SECRET' } },
+      { type: 'added', path: 'services.api.environment["OIDC_CLIENT_SECRET"]', after: 'OIDC_CLIENT_SECRET=${OIDC_CLIENT_SECRET}' },
+      { type: 'changed', path: 'db.password', before: 'hunter2', after: '${DB_PASSWORD}' },
+    ]) {
+      const findings = await evaluatePolicies([change]);
+      assert.deepEqual(findings.map((f) => f.id), [], change.path);
+    }
+  });
+
+  test('a real credential under the same keys still fires', async () => {
+    for (const change of [
+      { type: 'added', path: 'sharedSecret', after: { value: 'hunter2', existingSecret: '' } },
+      { type: 'changed', path: 'db.password', before: '${DB_PASSWORD}', after: 'hunter2' },
+      { type: 'added', path: 'db.password', after: 12345 },
+      { type: 'added', path: 'services.api.environment["DB_PASSWORD"]', after: 'DB_PASSWORD=hunter2' },
+      { type: 'added', path: 'db.password', after: '${DB_PASSWORD:-postgres}' },
+    ]) {
+      const findings = await evaluatePolicies([change]);
+      assert.ok(findings.some((f) => f.id === 'secret-key-changed'), change.path);
+    }
+  });
+
   test('flags a secret-shaped value stored under an innocuous key', async () => {
     const findings = await evaluatePolicies([
       {

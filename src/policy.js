@@ -4,7 +4,8 @@ import { createRequire } from 'module';
 import { fileURLToPath, pathToFileURL } from 'url';
 import yaml from 'js-yaml';
 import { checkPattern, compilePattern, explainPatternFailure } from './regex-engine.js';
-import { containsSecret } from './secrets.js';
+import { containsSecret, holdsSecretCandidate } from './secrets.js';
+import { secretMatchPath } from './differ.js';
 
 /**
  * @typedef {'info' | 'warn' | 'error'} PolicySeverity
@@ -29,6 +30,7 @@ import { containsSecret } from './secrets.js';
  *   afterTruthy?: true,
  *   beforeLooksSecret?: true,
  *   afterLooksSecret?: true,
+ *   afterSecretCandidate?: true,
  *   afterMatches?: string,
  *   afterAnyMatches?: string,
  *   numericJump?: { minMultiple: number },
@@ -49,6 +51,7 @@ import { containsSecret } from './secrets.js';
  *   afterTruthy?: true,
  *   beforeLooksSecret?: true,
  *   afterLooksSecret?: true,
+ *   afterSecretCandidate?: true,
  *   afterMatches?: string,
  *   afterAnyMatches?: string,
  *   numericJump?: { minMultiple: number },
@@ -102,12 +105,12 @@ const CHANGE_TYPES = new Set(['added', 'removed', 'changed']);
 const RULE_FIELDS = new Set([
   'id', 'severity', 'when', 'match', 'beforeEquals', 'afterEquals',
   'beforeIn', 'afterIn', 'beforeTruthy', 'afterTruthy', 'numericJump',
-  'beforeLooksSecret', 'afterLooksSecret',
+  'beforeLooksSecret', 'afterLooksSecret', 'afterSecretCandidate',
   'afterMatches', 'afterAnyMatches', 'numericDelta', 'allOf', 'anyOf', 'message', 'messageTemplate',
 ]);
 const CLAUSE_FIELDS = new Set([
   'match', 'beforeEquals', 'afterEquals', 'beforeIn', 'afterIn',
-  'beforeTruthy', 'afterTruthy', 'beforeLooksSecret', 'afterLooksSecret',
+  'beforeTruthy', 'afterTruthy', 'beforeLooksSecret', 'afterLooksSecret', 'afterSecretCandidate',
   'afterMatches', 'afterAnyMatches', 'numericJump', 'numericDelta',
 ]);
 const MATCH_FIELDS = new Set(['path', 'pathFlags', 'pathEquals', 'pathPrefix']);
@@ -277,6 +280,7 @@ function validateRule(candidate, location, isClause = false, trusted = false) {
   validateTruthyPredicate(rule.afterTruthy, 'afterTruthy', location);
   validateTruthyPredicate(rule.beforeLooksSecret, 'beforeLooksSecret', location);
   validateTruthyPredicate(rule.afterLooksSecret, 'afterLooksSecret', location);
+  validateTruthyPredicate(rule.afterSecretCandidate, 'afterSecretCandidate', location);
   validateRegexPredicate(rule.afterMatches, 'afterMatches', location, trusted);
   validateRegexPredicate(rule.afterAnyMatches, 'afterAnyMatches', location, trusted);
   validateNumericPredicate(rule.numericJump, 'numericJump', 'minMultiple', location, true);
@@ -878,6 +882,9 @@ function matchClause(clause, change) {
   // the redaction it triggers never disagree.
   if (clause.beforeLooksSecret && !containsSecret(change.before)) return false;
   if (clause.afterLooksSecret && !containsSecret(change.after)) return false;
+  // A secret-sounding key whose new value cannot be the secret: a boolean, an
+  // empty string, a placeholder, or a Secret reference (#224).
+  if (clause.afterSecretCandidate && !holdsSecretCandidate(change.after, secretMatchPath(change))) return false;
   if (clause.afterMatches && (typeof change.after !== 'string' || !afterMatchesRegexFor(clause).test(change.after))) return false;
   // The list counterpart, for the change that turns a scalar into a list in
   // one edit -- reported as a single `changed` event whose `after` is an array,

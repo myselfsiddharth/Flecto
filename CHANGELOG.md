@@ -7,6 +7,31 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- **A secret-sounding key no longer hides, or raises an error over, a value
+  that cannot be a secret** ([#224]). Masking and `secret-key-changed` decided
+  on the key name alone, so on real Helm charts `secretCreatePolicy: { enabled:
+  true }` printed as `***` (hiding the one line the PR was about), and
+  `adminPasswordKey: keycloak-admin-password` (the *name* of a key inside a
+  Kubernetes Secret) failed as an error. Four of six repositories checked
+  during outreach hit it.
+
+  Under such a key a value is now judged leaf by leaf, and is not treated as a
+  secret when it is a boolean, `null`, an empty string, a reference-only
+  placeholder (`${NAME}`, `${NAME:-}`, `$(NAME)`, `{{ ... }}`, or `KEY=` one of
+  those), or a plain identifier under a key that names a Secret
+  (`existingSecret*`, `*SecretName`, `*SecretRef`, `*PasswordKey`,
+  `secretKeyRef.name`/`.key`). Numbers, `${NAME:-literal}`, and anything the
+  value detector flags are still masked and still fire. Display masking, the
+  committed snapshot store, and the rule share one predicate, so they cannot
+  disagree. It is exposed to packs as `afterSecretCandidate`.
+
+  A shared snapshot store that recorded one of these values as a digest will
+  report it as changed once, when it is first written in plain text.
+
+[#224]: https://github.com/myselfsiddharth/Flecto/issues/224
+
 ## [4.2.0] - 2026-10-05
 
 The first npm release since 4.1.1. The `v4.1.2` tag moved the documented Action
