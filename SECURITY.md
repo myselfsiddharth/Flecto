@@ -55,8 +55,16 @@ is available (unless we agree otherwise).
   and `--update-baseline` is refused from the rc file entirely. Ordinary settings
   — `failOn`, `policies`, `ignore` — are still honored from the rc file by
   design: a workflow that runs bare `flecto ci` has delegated its gate to the
-  repository. A workflow gating untrusted pull requests should name `--fail-on`
-  (and its packs) on the command line, where the rc file cannot reach them.
+  repository. `ignore` is one of those settings: it names key paths that are not
+  diffed, so a committed `.flectorc` can narrow what a run looks at and a change
+  that would otherwise fail the gate can pass once the ignored key is out of
+  scope. That is accepted — refusing it would break legitimate per-repository
+  configuration — but a reviewer should treat an `ignore` edit the same way they
+  would a change to `snapshotRef` or `failOn`. On a repository that takes
+  outside pull requests, either review `.flectorc` changes as gate changes, or
+  pass `--ignore` explicitly on the command line so the CLI wins. A workflow
+  gating untrusted pull requests should name `--fail-on` (and its packs) on the
+  command line, where the rc file cannot reach them.
 
 ## Review record
 

@@ -617,6 +617,33 @@ The cost is real and is why this is 4.0: RE2 omits lookaround, backreferences,
 and `v`-flag set subtraction, so a pack using them now fails to load with a
 message naming the rule and the construct.
 
+## Accepted consequences
+
+### `ignore` in `.flectorc` can narrow what the merge gate sees — by design
+
+`ignore` is a setting, not an action: it names key paths that `diffTrees` does
+not emit, so they never reach `--fail-on` or a policy pack. A committed
+`.flectorc` can set or widen it, and a pull request that adds
+`{"defaults": {"ignore": "server"}}` stops diffing everything under `server` —
+so `flecto ci --fail-on changed,policy,error` exits `0` on a change that fired
+before the rc file was present. Confirmed end to end ([#220]): `tls: true →
+false` and `pool: 10 → 1000` under `server` are silent once that one key is
+named.
+
+This is the same trust boundary [`SECURITY.md`](../SECURITY.md) already draws
+for `failOn` and `policies`: a workflow that runs bare `flecto ci` has
+delegated its gate to the repository, and "don't diff these keys" is a
+legitimate per-repository choice. Refusing `ignore` from `.flectorc` the way
+`snapshotRef` is refused would break real configurations for no security gain —
+the operator chose to let the rc file shape the run.
+
+**What to do on a repository that takes outside pull requests:** treat every
+`.flectorc` change — especially `ignore` — as a gate change in code review, the
+same suspicion `snapshotRef` already earns; or pass `--ignore` on the command
+line so the CLI wins over the rc file. Options to union rather than override,
+or to gate rc-declared `ignore` behind an environment variable, are product
+decisions tracked on [#188]; this record names the consequence only.
+
 ## Not yet closed
 
 Nothing from the original "not yet reviewed" list remains open. The last item —
@@ -709,3 +736,5 @@ choose. It narrows where to look; it does not replace looking.
 
 [#185]: https://github.com/myselfsiddharth/Flecto/issues/185
 [#186]: https://github.com/myselfsiddharth/Flecto/issues/186
+[#188]: https://github.com/myselfsiddharth/Flecto/issues/188
+[#220]: https://github.com/myselfsiddharth/Flecto/issues/220
