@@ -1493,7 +1493,7 @@ program
         }
         if (before === NEW_FILE) {
           renderWarn(
-            `${relative(cwd, filepath)} is not in ${effective.snapshotRef}: reporting it as a new file,`
+            `${relative(cwd, filepath).replaceAll('\\', '/')} is not in ${effective.snapshotRef}: reporting it as a new file,`
             + ' every key added (--new-files added).',
           );
           before = emptyBaselineLike(after);
