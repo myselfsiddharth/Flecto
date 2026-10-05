@@ -78,8 +78,13 @@ const URL_CREDENTIALS_RE = /[a-z][a-z0-9+.-]{0,32}:\/\/[^\s/:@]+:([^\s/@]+)@/gi;
  * Values that only *reference* a secret. Redacting these adds noise and, worse,
  * would make the policy rule fire on configs that correctly keep secrets out of
  * the file.
+ *
+ * `$(NAME)` is Kubernetes' env-var expansion in a container's env and args, and
+ * `{{ ... }}` a Helm or Jinja template expression: in a connection string such
+ * as `postgres://app:$(DB_PASSWORD)@db/app` both are the reference, not the
+ * credential.
  */
-const PLACEHOLDER_RE = /^(?:\$\{[^}]*\}|\$[A-Za-z_][A-Za-z0-9_]*|%[A-Za-z0-9_]+%|<[^>]*>|\*+)$/;
+const PLACEHOLDER_RE = /^(?:\$\{[^}]*\}|\$\([A-Za-z_][A-Za-z0-9_]*\)|\{\{[^}]*\}\}|\$[A-Za-z_][A-Za-z0-9_]*|%[A-Za-z0-9_]+%|<[^>]*>|\*+)$/;
 
 /**
  * High-entropy fallback gates. Every one of these must pass:

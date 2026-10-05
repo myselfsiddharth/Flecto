@@ -115,8 +115,32 @@ describe('value-based secret detection', () => {
   });
 
   test('ignores placeholders and environment references', () => {
-    for (const value of ['${DATABASE_PASSWORD}', '$DATABASE_PASSWORD', '%DB_PASSWORD%', '<your-token-here>', '***']) {
+    for (const value of [
+      '${DATABASE_PASSWORD}', '$DATABASE_PASSWORD', '%DB_PASSWORD%', '<your-token-here>', '***',
+      '$(DB_PASSWORD)', '{{ .Values.db.password }}', '{{.Values.db.password}}',
+    ]) {
       assert.equal(looksLikeSecret(value), false, `expected ${value} to be ignored`);
+    }
+  });
+
+  test('a connection string whose password is a reference is not a credential (#225)', () => {
+    // From a real k8s ConfigMap: $(DB_PASSWORD) is expanded by the kubelet.
+    for (const value of [
+      'postgresql+asyncpg://openoncology:$(DB_PASSWORD)@db:5432/openoncology',
+      'postgres://app:${DB_PASSWORD}@db:5432/app',
+      'postgres://app:{{.Values.db.password}}@db:5432/app',
+    ]) {
+      assert.equal(detectSecretKind(value), null, `expected ${value} to be ignored`);
+    }
+  });
+
+  test('a literal password beside the placeholder shapes is still caught', () => {
+    for (const value of [
+      'postgres://app:hunter2hunter2@db:5432/app',
+      'postgres://app:$(DB_PASSWORD)x@db:5432/app',
+      'postgres://app:pre{{.Values.p}}@db:5432/app',
+    ]) {
+      assert.equal(detectSecretKind(value), 'url-credentials', `expected ${value} to be flagged`);
     }
   });
 });

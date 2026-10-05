@@ -7,6 +7,17 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- **A connection string whose password is a reference is no longer reported as
+  a leaked credential** ([#225]). `postgres://app:$(DB_PASSWORD)@db/app`, the
+  Kubernetes form of env-var expansion, and `{{ .Values.x }}` Helm expressions
+  were flagged `url-credentials` (error), although `${DB_PASSWORD}` already
+  was not. A literal password in the same position is still caught. Found on
+  a real repository's ConfigMap during outreach.
+
+[#225]: https://github.com/myselfsiddharth/Flecto/issues/225
+
 ### Added
 
 - **`--new-files added`: a pull request that adds a config file no longer has to
