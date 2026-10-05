@@ -77,7 +77,7 @@ aws_db_instance.main.#action
 
 Flecto PR Risk is on the
 [GitHub Marketplace](https://github.com/marketplace/actions/flecto-pr-risk), so
-`myselfsiddharth/Flecto@v4.1.2` is the whole reference.
+`myselfsiddharth/Flecto@v4.2.0` is the whole reference.
 
 **Terraform** — point it at the plan JSON:
 
@@ -91,7 +91,7 @@ steps:
   - run: |
       terraform plan -out=tf.plan
       terraform show -json tf.plan > plan.json
-  - uses: myselfsiddharth/Flecto@v4.1.2
+  - uses: myselfsiddharth/Flecto@v4.2.0
     with:
       terraform-plan: plan.json
       fail-on: error
@@ -109,7 +109,7 @@ steps:
     with:
       fetch-depth: 0
   - run: helm template ./chart > rendered.yaml
-  - uses: myselfsiddharth/Flecto@v4.1.2
+  - uses: myselfsiddharth/Flecto@v4.2.0
     with:
       targets: rendered.yaml
       policies: kubernetes

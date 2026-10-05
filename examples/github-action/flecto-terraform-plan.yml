@@ -34,7 +34,7 @@ jobs:
           terraform show -json tf.plan > plan.json
 
       - name: Flecto risk review
-        uses: myselfsiddharth/Flecto/.github/actions/flecto-pr-risk@v4.1.2
+        uses: myselfsiddharth/Flecto/.github/actions/flecto-pr-risk@v4.2.0
         with:
           terraform-plan: plan.json
           # `error` is what the terraform pack reserves for changes that should
