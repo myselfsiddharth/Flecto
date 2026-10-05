@@ -361,6 +361,48 @@ function identityMap(items, idKey) {
   return map;
 }
 
+// `KEY=VALUE`, or a bare `KEY` (Compose's pass-through from the host).
+export const ASSIGNMENT_RE = /^([A-Za-z_][A-Za-z0-9_.-]*)(?:=|$)/;
+
+/**
+ * Key a list of `KEY=VALUE` strings by KEY, or return null when it is not one.
+ *
+ * Compose writes `environment`, `labels` and `build.args` either as a map or as
+ * a list of assignments, and means the same thing by both. Diffed by position,
+ * one inserted variable turned every later line into a `changed` pairing two
+ * unrelated variables (#226). At least one item must carry an `=`, so a plain
+ * word list such as `command: [python, app.py]` keeps its order-sensitive diff.
+ * @param {unknown[]} items
+ * @returns {Map<string, { value: unknown, index: number }> | null}
+ */
+function assignmentMap(items) {
+  /** @type {Map<string, { value: unknown, index: number }>} */
+  const map = new Map();
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    if (typeof item !== 'string') return null;
+    const match = ASSIGNMENT_RE.exec(item);
+    if (!match || map.has(match[1])) return null;
+    map.set(match[1], { value: item, index: i });
+  }
+  return map;
+}
+
+/**
+ * Both sides are assignment lists and at least one item assigns a value.
+ * @param {unknown[]} before
+ * @param {unknown[]} after
+ * @returns {{ beforeMap: Map<string, { value: unknown, index: number }>, afterMap: Map<string, { value: unknown, index: number }> } | null}
+ */
+function assignmentMaps(before, after) {
+  const beforeMap = assignmentMap(before);
+  const afterMap = beforeMap && assignmentMap(after);
+  if (!beforeMap || !afterMap) return null;
+  const assigns = (item) => typeof item === 'string' && item.includes('=');
+  if (!before.some(assigns) && !after.some(assigns)) return null;
+  return { beforeMap, afterMap };
+}
+
 /**
  * Select a configured identity key, or auto-detect id then name.
  * @param {unknown[]} before
@@ -425,10 +467,11 @@ function arraySignature(value) {
  */
 function diffArrays(before, after, basePath, events, options = {}, ancestors = newAncestors()) {
   const idKey = resolveArrayIdKey(before, after, options);
+  const assignments = !idKey && options.arrayIdentity !== false ? assignmentMaps(before, after) : null;
 
-  if (idKey) {
-    const beforeMap = identityMap(before, idKey);
-    const afterMap = identityMap(after, idKey);
+  if (idKey || assignments) {
+    const { beforeMap, afterMap } = assignments
+      ?? { beforeMap: identityMap(before, idKey), afterMap: identityMap(after, idKey) };
 
     if (beforeMap && afterMap) {
       for (const [key, afterItem] of afterMap) {

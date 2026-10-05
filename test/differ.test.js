@@ -427,3 +427,54 @@ describe('diffTrees', () => {
   });
 
 });
+
+describe('KEY=VALUE lists are keyed by KEY (#226)', () => {
+  const paths = (events) => events.map((e) => `${e.type} ${e.path}`).sort();
+
+  test('an inserted variable is one addition, not a shifted list of changes', () => {
+    const before = { environment: ['A=1', 'B=2', 'C=3'] };
+    const after = { environment: ['A=1', 'NEW=x', 'B=2', 'C=3'] };
+    assert.deepEqual(paths(diffTrees(before, after)), ['added environment["NEW"]']);
+  });
+
+  test('a changed value is reported under its own key', () => {
+    const events = diffTrees({ env: ['DEBUG=false', 'PORT=80'] }, { env: ['PORT=80', 'DEBUG=true'] });
+    assert.deepEqual(events.map((e) => [e.type, e.path, e.before, e.after]), [
+      ['changed', 'env["DEBUG"]', 'DEBUG=false', 'DEBUG=true'],
+    ]);
+  });
+
+  test('a removed variable and a bare pass-through KEY are keyed too', () => {
+    const events = diffTrees({ environment: ['A=1', 'TOKEN', 'GONE=1'] }, { environment: ['A=1', 'TOKEN'] });
+    assert.deepEqual(paths(events), ['removed environment["GONE"]']);
+  });
+
+  test('dotted label keys work', () => {
+    const events = diffTrees(
+      { labels: ['com.example.team=a'] },
+      { labels: ['com.example.team=b', 'traefik.enable=true'] },
+    );
+    assert.deepEqual(paths(events), ['added labels["traefik.enable"]', 'changed labels["com.example.team"]']);
+  });
+
+  test('a plain word list keeps its order-sensitive index diff', () => {
+    const events = diffTrees({ command: ['python', 'app.py'] }, { command: ['app.py', 'python'] });
+    assert.deepEqual(paths(events), ['changed command[0]', 'changed command[1]']);
+  });
+
+  test('flag-style and duplicate items fall back to the index diff', () => {
+    assert.deepEqual(paths(diffTrees({ args: ['--a=1'] }, { args: ['--a=2'] })), ['changed args[0]']);
+    assert.deepEqual(paths(diffTrees({ e: ['A=1', 'A=2'] }, { e: ['A=1', 'A=3'] })), ['changed e[1]']);
+  });
+
+  test('--no-array-id turns it off', () => {
+    const events = diffTrees({ e: ['A=1'] }, { e: ['N=0', 'A=1'] }, { arrayIdentity: false });
+    assert.deepEqual(paths(events), ['added e[1]', 'changed e[0]']);
+  });
+
+  test('k8s env is keyed by name', () => {
+    const before = { env: [{ name: 'A', value: '1' }] };
+    const after = { env: [{ name: 'N', value: '0' }, { name: 'A', value: '2' }] };
+    assert.deepEqual(paths(diffTrees(before, after)), ['added env["N"]', 'changed env["A"].value']);
+  });
+});

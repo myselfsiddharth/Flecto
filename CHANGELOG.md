@@ -7,17 +7,6 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ## [Unreleased]
 
-### Fixed
-
-- **A connection string whose password is a reference is no longer reported as
-  a leaked credential** ([#225]). `postgres://app:$(DB_PASSWORD)@db/app`, the
-  Kubernetes form of env-var expansion, and `{{ .Values.x }}` Helm expressions
-  were flagged `url-credentials` (error), although `${DB_PASSWORD}` already
-  was not. A literal password in the same position is still caught. Found on
-  a real repository's ConfigMap during outreach.
-
-[#225]: https://github.com/myselfsiddharth/Flecto/issues/225
-
 ### Added
 
 - **`--new-files added`: a pull request that adds a config file no longer has to
@@ -36,7 +25,31 @@ The format is based on [Keep a Changelog], and this project adheres to
   Found by replaying Flecto over a real repository's infra history, where one
   commit in twelve added a values file.
 
+### Changed
+
+- **`KEY=VALUE` lists diff by KEY, so one inserted variable is one addition**
+  ([#226]). Compose writes `environment`, `labels` and `build.args` as a map or
+  as a list of `KEY=VALUE` strings, and means the same by both. The list form
+  diffed by position: a real pull request that inserted ten `OIDC_*` variables
+  read as 31 `changed` rows, each pairing two unrelated variables. It now reads
+  as 9 additions under `environment["OIDC_ISSUER_URL"]` and so on, and the
+  language server places diagnostics on the right line.
+
+  Paths for these lists change from `environment[3]` to `environment["KEY"]`.
+  `--no-array-id` restores index paths. A list counts only when every item is a
+  `KEY=VALUE` or bare `KEY` with unique keys and at least one `=`, so `command:
+  [python, app.py]` and `args: [--a=1]` keep their order-sensitive diff.
+
+[#226]: https://github.com/myselfsiddharth/Flecto/issues/226
+
 ### Fixed
+
+- **A connection string whose password is a reference is no longer reported as
+  a leaked credential** ([#225]). `postgres://app:$(DB_PASSWORD)@db/app`, the
+  Kubernetes form of env-var expansion, and `{{ .Values.x }}` Helm expressions
+  were flagged `url-credentials` (error), although `${DB_PASSWORD}` already
+  was not. A literal password in the same position is still caught. Found on
+  a real repository's ConfigMap during outreach.
 
 - **The symlinked-baseline check never fired below the repository root.** It
   asked `git ls-tree` for a root-relative path from inside the file's own
@@ -68,6 +81,7 @@ The format is based on [Keep a Changelog], and this project adheres to
 [#210]: https://github.com/myselfsiddharth/Flecto/issues/210
 [#211]: https://github.com/myselfsiddharth/Flecto/issues/211
 [#212]: https://github.com/myselfsiddharth/Flecto/pull/212
+[#225]: https://github.com/myselfsiddharth/Flecto/issues/225
 
 ## [4.1.1] - 2026-09-29
 

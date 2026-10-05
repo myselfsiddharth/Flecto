@@ -61,6 +61,13 @@ describe('YAML', () => {
     assert.equal(missing.text, 'containers');
   });
 
+  test('a KEY=VALUE list element resolves by its KEY (#226)', () => {
+    const compose = 'services:\n  web:\n    environment:\n      - A=1\n      - SECRET_TOKEN=x\n';
+    const hit = at('docker-compose.yml', compose, 'services.web.environment["SECRET_TOKEN"]');
+    assert.equal(hit.text, 'SECRET_TOKEN=x');
+    assert.equal(hit.precision, 'exact');
+  });
+
   test('a merged-in key anchors at the merge, an alias at its own key', () => {
     const merged = at('a.yaml', doc, 'use.k');
     assert.equal(merged.precision, 'merge');
