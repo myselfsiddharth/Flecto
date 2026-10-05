@@ -248,6 +248,19 @@ for what was wrong.
   untrusted-PR threat model. `--plugins` must be absolute paths. See
   [docs/editor.md](docs/editor.md).
 
+- **`flecto-drift`: compare a declared config file against what is actually
+  running** ([#144]). A **separate binary**, deliberately: every other Flecto
+  command authenticates to nothing, and reading live state cannot keep that
+  promise, so it does not share an entry point with the tool that can. `flecto
+  ci` cannot reach it and installing Flecto does not enable it.
+  It holds **no credentials** — Kubernetes and SSM are read through `kubectl`
+  and `aws`, which you have already authenticated, so Flecto inherits exactly
+  what those are entitled to. Read-only is structural: argv is built from a
+  fixed verb allowlist and nothing from the URI can reach it as a flag. Values
+  from a secret store are compared **by shape** (length and digest), never by
+  value, with no flag to change that; SSM is read without `--with-decryption`.
+  Terraform state exposes only `outputs`. See [docs/drift.md](docs/drift.md).
+
 ### Security
 
 - **BREAKING: `snapshotRef` declared in `.flectorc` is refused** ([#121]). The
@@ -293,20 +306,6 @@ for what was wrong.
   are cached and shared across every file in a run, and a `g` regex carries a
   mutable `lastIndex` that `.test()` advances, so such a rule matched every
   other value it saw.
-### Added
-
-- **`flecto-drift`: compare a declared config file against what is actually
-  running** ([#144]). A **separate binary**, deliberately: every other Flecto
-  command authenticates to nothing, and reading live state cannot keep that
-  promise, so it does not share an entry point with the tool that can. `flecto
-  ci` cannot reach it and installing Flecto does not enable it.
-  It holds **no credentials** — Kubernetes and SSM are read through `kubectl`
-  and `aws`, which you have already authenticated, so Flecto inherits exactly
-  what those are entitled to. Read-only is structural: argv is built from a
-  fixed verb allowlist and nothing from the URI can reach it as a flag. Values
-  from a secret store are compared **by shape** (length and digest), never by
-  value, with no flag to change that; SSM is read without `--with-decryption`.
-  Terraform state exposes only `outputs`. See [docs/drift.md](docs/drift.md).
 
 ### Fixed
 
@@ -421,6 +420,31 @@ for what was wrong.
   the still-vulnerable 2.1.0. `SECURITY.md` now says so, and the full matrix and
   publish recommendation are in
   [`docs/ghsa-wq8m-fc3q-8m5x-2x.md`](docs/ghsa-wq8m-fc3q-8m5x-2x.md).
+
+- **Two denial-of-service vectors fixed, found while resuming the 3.0 security
+  review** ([#121]). (1) Secret detection (`src/secrets.js`), which runs on every
+  changed string value under the `default` pack, had two `O(n²)` regexes — the
+  PEM private-key and URL-credential patterns — so a single ~500 KB value in a
+  pull request could hang the CI job. Both are now linear; 1 MB scans in under a
+  second, and detection of real (including unterminated) keys is unchanged. (2) A
+  YAML alias bomb ("billion laughs") — a few hundred bytes of nested aliases that
+  `normalizeParsedValue` expanded into an exponentially large tree — now fails
+  fast against a node budget instead of exhausting memory. Regression tests for
+  both in `test/security.test.js`. The review's findings and its "checked, solid"
+  list are recorded in [docs/security-review.md](docs/security-review.md); a
+  residual limitation (attacker-supplied regexes in custom packs, which Node
+  cannot time out) is noted in [SECURITY.md](SECURITY.md).
+
+- **Terraform plan JSON is refused by every command except `flecto plan`.**
+  Terraform's `before_sensitive` / `after_sensitive` redaction is applied only by
+  `flecto plan`; a plan file is ordinary JSON, so `ci`, `watch`, `compare`,
+  `report`, and snapshot writes read it as a plain config tree and printed the
+  values Terraform itself refuses to print. `--mask-secrets` was not a backstop —
+  it fires on the attribute *name*, and `user_data` does not match. Realistic
+  ways to hit it: `flecto ci "**/*.json"`, a committed `tfplan.json`, or
+  `.flectorc` `files` patterns that sweep JSON. Those commands now fail with a
+  pointer to `flecto plan`, mirroring the guard `flecto plan` already had in the
+  other direction. ([#113])
 
 ### Added
 
@@ -847,33 +871,6 @@ for what was wrong.
   success. `--format pr-comment` was never affected — its body is capped at
   60,000 characters to fit GitHub's comment limit, which lands under one pipe
   buffer.
-
-### Security
-
-- **Two denial-of-service vectors fixed, found while resuming the 3.0 security
-  review** ([#121]). (1) Secret detection (`src/secrets.js`), which runs on every
-  changed string value under the `default` pack, had two `O(n²)` regexes — the
-  PEM private-key and URL-credential patterns — so a single ~500 KB value in a
-  pull request could hang the CI job. Both are now linear; 1 MB scans in under a
-  second, and detection of real (including unterminated) keys is unchanged. (2) A
-  YAML alias bomb ("billion laughs") — a few hundred bytes of nested aliases that
-  `normalizeParsedValue` expanded into an exponentially large tree — now fails
-  fast against a node budget instead of exhausting memory. Regression tests for
-  both in `test/security.test.js`. The review's findings and its "checked, solid"
-  list are recorded in [docs/security-review.md](docs/security-review.md); a
-  residual limitation (attacker-supplied regexes in custom packs, which Node
-  cannot time out) is noted in [SECURITY.md](SECURITY.md).
-
-- **Terraform plan JSON is refused by every command except `flecto plan`.**
-  Terraform's `before_sensitive` / `after_sensitive` redaction is applied only by
-  `flecto plan`; a plan file is ordinary JSON, so `ci`, `watch`, `compare`,
-  `report`, and snapshot writes read it as a plain config tree and printed the
-  values Terraform itself refuses to print. `--mask-secrets` was not a backstop —
-  it fires on the attribute *name*, and `user_data` does not match. Realistic
-  ways to hit it: `flecto ci "**/*.json"`, a committed `tfplan.json`, or
-  `.flectorc` `files` patterns that sweep JSON. Those commands now fail with a
-  pointer to `flecto plan`, mirroring the guard `flecto plan` already had in the
-  other direction. ([#113])
 
 ## [3.0.1] - 2026-08-07
 
