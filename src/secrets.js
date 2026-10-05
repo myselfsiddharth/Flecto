@@ -111,10 +111,14 @@ const PLACEHOLDER_RE = /^(?:\$\{[^}]*\}|\$[A-Za-z_][A-Za-z0-9_]*|%[A-Za-z0-9_]+%
  * subresource-integrity strings (sha512-…), and base64 of ordinary ASCII text.
  *
  * Measured on a corpus of 3,000 random base64url/base62 tokens (lengths 24–64)
- * and a hand-built corpus of benign config values: 0 false positives, ~5% of
- * random tokens missed (worst at length 24, ~7%). Standard-base64 secrets that
- * contain "/" are always missed by this fallback by construction — the known
- * formats above are what covers those.
+ * and a hand-built corpus of benign config values: 0 false positives on that
+ * corpus; ~5% of random tokens missed (worst at length 24, ~7%). Other
+ * corpora can still yield false positives when a value is an opaque public
+ * identifier structurally indistinguishable from secret material — e.g. Google
+ * Place IDs (ChIJN1t_tDeuEmsRUsoyG83frY4) and IPFS CIDv0 hashes
+ * (QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG). Standard-base64 secrets
+ * that contain "/" are always missed by this fallback by construction — the
+ * known formats above are what covers those.
  */
 const ENTROPY_MIN_LENGTH = 24;
 const ENTROPY_MIN_BITS = 4.0;
