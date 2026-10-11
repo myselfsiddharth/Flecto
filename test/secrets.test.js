@@ -2,7 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  containsSecret, detectSecretKind, holdsSecretCandidate, isSecretCandidate, looksLikeSecret, redactSecretString,
+  containsSecret, detectSecretKind, holdsSecretCandidate, isSecretCandidate, looksLikeSecret, looksLikeSecretPath, redactSecretString,
 } from '../src/secrets.js';
 import { maskSensitiveValue } from '../src/renderer.js';
 import { maskState } from '../src/snapshot-store.js';
@@ -275,5 +275,44 @@ describe('a secret-sounding key whose value cannot be the secret (#224)', () => 
     assert.equal(stored.keycloak.adminPasswordKey, 'keycloak-admin-password');
     assert.notEqual(stored.db.password, 'hunter2');
     assert.notEqual(stored.cache.password, 12345);
+  });
+});
+
+describe('which keys name a credential (#248)', () => {
+  test('a credential named by its own key, its parent, or through data/stringData', () => {
+    for (const path of [
+      'db.password', 'postgresql.auth.postgresPassword', 'auth.google.clientSecret', 'api_key', 'apiKey',
+      'minio.secretKey', 'aws_secret_key', 'vault.secret_id', 'services.db.environment.MYSQL_PASSWORD',
+      'env["DB_PASSWORD"]', 'DBPASSWORD', 'accesstoken', 'rootToken', 'initialClusterToken',
+      'sharedSecret.value', 'secrets.db', 'secrets.prod.db', 'credentials.github', 'global.password.mysql',
+      'encryptedSecret.stringData.key1', 'encryptedSecret.data.key1', 'mySecret.data.name',
+      'secrets.env.DATABASE_URL', 'tls.privateKey', 'private_key',
+    ]) {
+      assert.equal(looksLikeSecretPath(path), true, path);
+    }
+  });
+
+  test('real-world paths that only mention a secret are not credentials', () => {
+    for (const path of [
+      'redisSecretInit.containerSecurityContext.capabilities.drop[0]',
+      'spec.rules.authentication.admin.apiKey.selector.matchLabels.app',
+      'spec.rules.authentication.apikey.credentials.authorizationHeader.prefix',
+      'router.tokenizer.flavor', 'tokenizer.port',
+      'spec.properties.oauth2.properties.clientSecretRef.type',
+      'spec.properties.clientSecret.description', 'spec.properties.credentials.maxProperties',
+      'global.appConfig.incomingEmail.password.key', 'notifications.secret.name',
+      'controller.admissionWebhooks.createSecretJob.activeDeadlineSeconds',
+      'auth.token.tokenRefreshInterval', 'global.registry.tokenIssuer', 'auth.tokenReviewConfig.cacheTTL',
+      'ingress.tlsSecretName', 'imagePullSecrets[0].name', 'volumes[0].secret.defaultMode',
+      'serviceAccountToken.audience', 'serviceAccountToken.expirationSeconds', 'prometheus.bearerTokenFile',
+      'config.data.LOG_LEVEL', 'services.api.environment.PORT',
+    ]) {
+      assert.equal(looksLikeSecretPath(path), false, path);
+    }
+  });
+
+  test('boolean-like strings are not secrets, even under a credential key', () => {
+    assert.equal(isSecretCandidate('false', 'nginx.config.server-tokens'), false);
+    assert.equal(isSecretCandidate('hunter2', 'nginx.config.server-tokens'), true);
   });
 });

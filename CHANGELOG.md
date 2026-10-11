@@ -7,6 +7,29 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- **A secret word anywhere above a value no longer makes it a "secret"**
+  ([#248]). Key-name matching tested the whole path, inside longer words too,
+  so it masked and flagged `capabilities.drop[0]` under `redisSecretInit`,
+  `matchLabels.app` under `apiKey`, `tokenizer.flavor`, `server-tokens:
+  "false"`, and the `type`/`description` of every CRD schema property named
+  `clientSecret`. Measured over every YAML leaf in 24 real repositories, 1,102
+  leaves were flagged; now 222, and none that were not flagged before.
+
+  A key now names a credential when the word is whole (after camelCase and
+  punctuation splitting, or ending a compound like `DBPASSWORD`) and its last
+  word is not metadata (`secretName`, `createSecretJob`, `tokenTTL`). A leaf
+  is a secret when its own key names one, or an ancestor does with no
+  structure or metadata key in between (`secrets.prod.db` yes;
+  `apiKey.selector.matchLabels.app` no), or it sits in a credential's
+  `data`/`stringData` under any name. `key` and `id` stay credential words
+  (`apiKey`, Vault `secret_id`). Display masking, the snapshot store, and
+  `secret-key-changed` all use this rule; the value detector still runs on
+  every value regardless.
+
+[#248]: https://github.com/myselfsiddharth/Flecto/issues/248
+
 ## [4.4.0] - 2026-10-05
 
 ### Changed

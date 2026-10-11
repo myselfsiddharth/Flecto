@@ -351,8 +351,151 @@ export function redactSecretString(value) {
  */
 export const SECRET_PATH_RE = /(secret|token|password|api[_-]?key|private[_-]?key|credential)/i;
 
+// Whole words that name a credential, after splitting a key on camelCase and
+// punctuation. A word that *ends* in one also counts, for keys written with no
+// separator (`DBPASSWORD`, `accesstoken`), but one that only *starts* with one
+// does not: `tokenizer` is not a token, `passwordless` is not a password.
+const SECRET_WORDS = ['secrets', 'secret', 'tokens', 'token', 'passwords', 'password', 'passwd', 'credentials', 'credential', 'apikey', 'privatekey'];
+const SECRET_PAIRS = [['api', 'key'], ['private', 'key']];
+/**
+ * A last word that makes a secret-named key *about* the secret rather than the
+ * secret: `secretName`, `passwordPolicy`, `tokenTTL`, `secretUser`. Not `key`
+ * (`apiKey`, `secretKey` are credentials) and not `id` (Vault's `secret_id`).
+ */
+const METADATA_WORDS = new Set([
+  'name', 'names', 'ref', 'refs', 'user', 'username', 'policy', 'policies', 'ttl', 'expiry', 'expiration',
+  'lifetime', 'timeout', 'length', 'path', 'file', 'url', 'uri', 'endpoint', 'header', 'type', 'enabled',
+  'mode', 'format', 'rotation', 'version', 'count', 'size', 'prefix', 'suffix', 'store', 'provider',
+  'manager', 'namespace', 'selector', 'annotations', 'labels', 'mount', 'volume', 'dir', 'location',
+  'interval', 'issuer', 'threshold', 'duration', 'seconds', 'retry', 'config', 'configuration', 'settings',
+  'options', 'job', 'jobs', 'generator', 'source', 'review', 'init', 'controller', 'operator', 'webhook',
+  'sync', 'cache',
+]);
+/**
+ * Keys that are structure, not content, when their parent names a secret:
+ * `password: { secret: db, key: password }` (a reference), `clientSecret: {
+ * type: string }` (a schema), a projected `serviceAccountToken: { audience,
+ * expirationSeconds, path }`.
+ */
+const STRUCTURAL_KEYS = new Set([
+  'name', 'key', 'namespace', 'type', 'description', 'format', 'enabled', 'enable', 'optional', 'required',
+  'mode', 'defaultmode', 'items', 'path', 'mountpath', 'subpath', 'readonly', 'audience', 'aud',
+  'expirationseconds', 'issuer', 'provider', 'kind', 'apiversion', 'version', 'labels', 'annotations',
+  'selector', 'prefix', 'suffix', 'header', 'ttl', 'rotationpolicy', 'algorithm', 'encoding', 'size',
+  'length', 'image', 'repository', 'registry', 'tag', 'pullpolicy', 'digest', 'create', 'secretname',
+  // JSON-schema keywords: a CRD's `clientSecret: { type: string, maxLength: 64 }`.
+  'properties', 'additionalproperties', 'maxproperties', 'minproperties', 'maxlength', 'minlength',
+  'pattern', 'enum', 'default', 'minimum', 'maximum', 'nullable', 'xkubernetesmaptype',
+  'xkuberneteslisttype', 'xkubernetespreserveunknownfields', 'xkubernetesvalidations',
+]);
+
+// Last words of keys that group structure: `containerSecurityContext`,
+// `matchLabels`, `matchExpressions`, `podSpec`.
+const STRUCTURE_WORDS = new Set(['context', 'labels', 'expressions', 'spec', 'metadata', 'status', 'template', 'resources', 'probe', 'affinity', 'tolerations', 'ports', 'service', 'ingress', 'rules', 'schema']);
+
+// Containers that carry a secret's contents under arbitrary keys.
+const TRANSPARENT_KEYS = new Set(['data', 'stringdata', 'values', 'value', 'env', 'environment', 'vars', 'variables', 'entries', 'keys']);
+
+/**
+ * The named keys of a diff path, indices dropped: `a.b[0]["C"]` -> a, b, C.
+ * @param {string} path
+ * @returns {string[]}
+ */
+function pathKeys(path) {
+  /** @type {string[]} */
+  const keys = [];
+  for (const match of path.matchAll(/\["((?:[^"\\]|\\.)*)"\]|\[[^\]]*\]|([^.[\]]+)/g)) {
+    if (match[1] !== undefined) {
+      try {
+        keys.push(JSON.parse(`"${match[1]}"`));
+      } catch {
+        keys.push(match[1]);
+      }
+    } else if (match[2] !== undefined) {
+      keys.push(match[2]);
+    }
+  }
+  return keys;
+}
+
+/**
+ * Lowercased words of a key: `adminPasswordKey` -> admin, password, key.
+ * @param {string} key
+ * @returns {string[]}
+ */
+function keyWords(key) {
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+}
+
+/**
+ * Index of the word that names a credential, or -1.
+ * @param {string[]} words
+ * @returns {number}
+ */
+function secretWordIndex(words) {
+  for (let i = 0; i < words.length; i++) {
+    if (SECRET_WORDS.some((word) => words[i] === word || words[i].endsWith(word))) return i;
+    if (SECRET_PAIRS.some(([a, b]) => words[i] === a && words[i + 1] === b)) return i + 1;
+  }
+  return -1;
+}
+
+/**
+ * Lowercase alphanumerics only: `x-kubernetes-map-type` -> `xkubernetesmaptype`.
+ * @param {string} key
+ * @returns {string}
+ */
+function normalizeKey(key) {
+  return key.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+/**
+ * A key that groups structure rather than content, so a credential name above
+ * it does not reach below it: `selector`, `matchLabels`, `securityContext`,
+ * `authorizationHeader`, `tokenReviewConfig`.
+ * @param {string} key
+ * @returns {boolean}
+ */
+function isStructureOrMetadata(key) {
+  if (STRUCTURAL_KEYS.has(normalizeKey(key))) return true;
+  const last = keyWords(key).at(-1);
+  return last !== undefined && (METADATA_WORDS.has(last) || STRUCTURE_WORDS.has(last));
+}
+
+/**
+ * A key that names a credential: a secret word whose key does not end in a
+ * metadata word. `password`, `apiKey`, `DB_PASSWORD` yes; `secretName`,
+ * `createSecretJob`, `tokenRefreshInterval` no.
+ * @param {string} key
+ * @returns {boolean}
+ */
+function namesCredential(key) {
+  const words = keyWords(key);
+  const at = secretWordIndex(words);
+  return at >= 0 && !(at < words.length - 1 && METADATA_WORDS.has(words.at(-1)));
+}
+
 /**
  * True when a configuration path names a credential.
+ *
+ * Decided on the leaf's own key and its parent, not on any key anywhere above
+ * it. Matching the whole path (as SECRET_PATH_RE did) masked and flagged
+ * `capabilities.drop[0]` under `redisSecretInit`, `matchLabels.app` under
+ * `apiKey`, `tokenizer.flavor`, and the `type`/`description` of every CRD
+ * schema property called `clientSecret` (#248). So:
+ *
+ * - own key names a credential (whole word, or ending in one), unless its last
+ *   word is metadata (`secretName`, `passwordPolicy`, `tokenTTL`)
+ * - or the parent does (`sharedSecret.value`, `secrets.db`), unless the leaf is
+ *   structural (`name`, `key`, `type`, `audience`, ...)
+ *
+ * A credential stored deeper, or under an innocuous name, is the value
+ * detector's job; it runs on every value regardless.
  *
  * Lives here rather than beside either caller because there are two of them —
  * the renderer masking a diff for display, and the snapshot store masking a
@@ -363,7 +506,29 @@ export const SECRET_PATH_RE = /(secret|token|password|api[_-]?key|private[_-]?ke
  * @returns {boolean}
  */
 export function looksLikeSecretPath(path) {
-  return SECRET_PATH_RE.test(path);
+  const keys = pathKeys(path);
+  const own = keys.at(-1);
+  if (own === undefined) return false;
+  if (secretWordIndex(keyWords(own)) >= 0) return namesCredential(own);
+  // Walk up to the nearest key that names a credential. A Secret's `data` /
+  // `stringData` (and the like) are looked through, and make the leaf a secret
+  // whatever it is called: `encryptedSecret.stringData.key1`. Otherwise the leaf
+  // must not be structural (`password.key` is a reference), and the walk stops
+  // at a key that is structure or metadata (`apiKey.selector.matchLabels.app`,
+  // `credentials.authorizationHeader.prefix`), which is where matching any
+  // ancestor went wrong. `secrets.prod.db` still counts.
+  const leafIsStructural = STRUCTURAL_KEYS.has(normalizeKey(own));
+  let throughData = false;
+  for (let i = keys.length - 2; i >= 0; i--) {
+    const key = keys[i];
+    if (TRANSPARENT_KEYS.has(key.toLowerCase())) {
+      throughData = true;
+      continue;
+    }
+    if (namesCredential(key)) return throughData || !leafIsStructural;
+    if (isStructureOrMetadata(key)) return false;
+  }
+  return false;
 }
 
 /**
@@ -430,10 +595,13 @@ function lastPathSegment(path) {
  * @returns {boolean}
  */
 export function isSecretCandidate(value, path = '') {
+  if (!looksLikeSecretPath(path)) return false;
   if (value === null || value === undefined || typeof value === 'boolean') return false;
   if (typeof value !== 'string') return true;
   const trimmed = value.trim();
   if (!trimmed || KEY_PLACEHOLDER_RE.test(trimmed)) return false;
+  // YAML 1.1 booleans that arrive as strings (`server-tokens: "false"`).
+  if (/^(?:true|false|yes|no|on|off)$/i.test(trimmed)) return false;
   const assignment = ASSIGNMENT_RE.exec(trimmed);
   if (assignment && KEY_PLACEHOLDER_RE.test(assignment[1].trim())) return false;
   const isReference = REFERENCE_KEY_RE.test(lastPathSegment(path)) || SECRET_KEY_REF_RE.test(path);
