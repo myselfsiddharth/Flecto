@@ -115,6 +115,19 @@ jobs:
               '_Automated review — does not count as a maintainer approval._',
             ].join('\n');
 
+            // A pull request from a fork gets a read-only token, so posting a
+            // review fails with 403 and turned every outside contributor's
+            // check red, verdict "OK" or not (#249). Put the review in the job
+            // summary instead and let the verdict alone decide the check. Not
+            // pull_request_target: that would hand fork code a write token.
+            const fromFork = pr.head?.repo?.full_name !== `${context.repo.owner}/${context.repo.repo}`;
+            if (fromFork) {
+              await core.summary.addRaw(body).write();
+              core.notice(`Pull request from a fork: review written to the job summary (${ok ? 'OK' : 'changes requested'}).`);
+              if (!ok) core.setFailed('Automated review requested changes. See the job summary.');
+              return;
+            }
+
             const reviews = await github.paginate(github.rest.pulls.listReviews, {
               owner: context.repo.owner,
               repo: context.repo.repo,
