@@ -7,6 +7,17 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- **The `node-runtime` pack catches Compose's list-form environment** ([#242],
+  fixed by [@kragent66-glitch](https://github.com/kragent66-glitch) in
+  [#249]). `- NODE_OPTIONS=--inspect=...` and `- NODE_TLS_REJECT_UNAUTHORIZED=0`
+  produced no findings, while the same variables in map form did, including
+  the error-level TLS one. Each rule now matches both forms.
+
+[#242]: https://github.com/myselfsiddharth/Flecto/issues/242
+[#249]: https://github.com/myselfsiddharth/Flecto/pull/249
+
 ## [4.4.2] - 2026-10-11
 
 ### Fixed
