@@ -552,3 +552,35 @@ test('ci gates a committed rendered manifest against a git ref', () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('removing a whole container is not weakening it (homer-operator#104)', () => {
+  const hardened = { resources: { limits: { cpu: '500m', memory: '128Mi' } }, securityContext: { allowPrivilegeEscalation: false, runAsNonRoot: true } };
+  const before = deployment();
+  before.spec.template.spec.containers.push({ name: 'kube-rbac-proxy', image: 'gcr.io/kubebuilder/kube-rbac-proxy:v0.15.0', ...hardened });
+  assert.deepEqual(firedIds(before, deployment()), []);
+});
+
+test('a surviving container that loses its hardening still fires', () => {
+  const before = withSecurityContext({ allowPrivilegeEscalation: false, runAsNonRoot: true });
+  assert.deepEqual(firedIds(before, deployment()), ['k8s-allow-privilege-escalation', 'k8s-run-as-non-root-weakened']);
+  const limited = deployment({ container: { resources: { limits: { cpu: '1', memory: '1Gi' } } } });
+  assert.deepEqual(firedIds(limited, deployment()), ['k8s-resource-limits-removed']);
+});
+
+test('renaming a Deployment is not weakening the old one (netchecks#348)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'flecto-k8s-rename-'));
+  try {
+    const manifest = (name) => [
+      'apiVersion: apps/v1', 'kind: Deployment', `metadata: {name: ${name}, namespace: prod}`, 'spec:', '  template:', '    spec:',
+      '      containers:', '        - name: ui', '          image: ghcr.io/acme/ui:1.0.0', '          securityContext:',
+      '            allowPrivilegeEscalation: false', '            runAsNonRoot: true', '---',
+      'apiVersion: v1', 'kind: Service', 'metadata: {name: ui, namespace: prod}', 'spec: {type: ClusterIP}', '',
+    ].join('\n');
+    writeFileSync(join(dir, 'before.yaml'), manifest('netchecks-operator-ui'));
+    writeFileSync(join(dir, 'after.yaml'), manifest('policy-reporter-ui'));
+    const findings = evaluatePack(pack, diffTrees(parseFile(join(dir, 'before.yaml')), parseFile(join(dir, 'after.yaml'))));
+    assert.deepEqual(findings.map((finding) => finding.id), []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

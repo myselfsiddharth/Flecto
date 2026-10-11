@@ -7,6 +7,20 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- **Removing or renaming a container or resource no longer reads as weakening
+  it** ([#253]). The `kubernetes` pack expanded a removed sidecar, a renamed
+  Deployment, or last release's ClusterServiceVersion into leaf removals, so
+  `k8s-allow-privilege-escalation`, `k8s-run-as-non-root-weakened` and
+  `k8s-resource-limits-removed` fired on settings that went away with their
+  owner. That was 4 of the 5 strongest-looking findings across 116 real
+  repositories. A removed list element or whole document is no longer expanded;
+  a removed block inside something that remains (a container's
+  `securityContext`) still is, and still fires.
+
+[#253]: https://github.com/myselfsiddharth/Flecto/issues/253
+
 ## [4.4.1] - 2026-10-11
 
 ### Fixed

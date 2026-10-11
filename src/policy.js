@@ -1006,6 +1006,12 @@ export function expandChangeSubtrees(changes) {
     const side = change.type === 'added' ? 'after' : 'before';
     const value = change[side];
     if (!isObject(value) && !Array.isArray(value)) continue;
+    // A removed list element (`containers["kube-rbac-proxy"]`) or a removed
+    // document (a renamed Deployment, last release's ClusterServiceVersion) no
+    // longer exists, so nothing in it was weakened. Expanding it made every
+    // `removed` rule fire on settings that went away with their owner. A removed
+    // block of something that still exists (`securityContext`) still expands.
+    if (change.type === 'removed' && isWholeEntityRemoval(change)) continue;
 
     /** @type {Array<{ path: string, value: unknown }>} */
     const leaves = [];
@@ -1015,6 +1021,19 @@ export function expandChangeSubtrees(changes) {
     }
   }
   return expanded;
+}
+
+/**
+ * A removal of a whole list element or a whole multi-document resource, rather
+ * than of a block inside something that remains.
+ * @param {import('./differ.js').ChangeEvent} change
+ * @returns {boolean}
+ */
+function isWholeEntityRemoval(change) {
+  const path = change.path ?? '';
+  // The document prefix stripped leaves nothing: the change is the document.
+  if (path && secretMatchPath(change) === '') return true;
+  return path.endsWith(']');
 }
 
 /**
