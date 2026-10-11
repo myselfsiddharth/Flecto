@@ -7,6 +7,8 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ## [Unreleased]
 
+## [4.4.2] - 2026-10-11
+
 ### Fixed
 
 - **Removing or renaming a container or resource no longer reads as weakening
@@ -1490,7 +1492,8 @@ fixed — those runs were never actually gated — but the failure is new.
 - Misconfigured policy packs/plugins cause `watch` to exit non-zero instead of
   continuing with no policies.
 
-[Unreleased]: https://github.com/myselfsiddharth/Flecto/compare/v4.4.1...HEAD
+[Unreleased]: https://github.com/myselfsiddharth/Flecto/compare/v4.4.2...HEAD
+[4.4.2]: https://github.com/myselfsiddharth/Flecto/compare/v4.4.1...v4.4.2
 [4.4.1]: https://github.com/myselfsiddharth/Flecto/compare/v4.4.0...v4.4.1
 [4.4.0]: https://github.com/myselfsiddharth/Flecto/compare/v4.3.0...v4.4.0
 [4.3.0]: https://github.com/myselfsiddharth/Flecto/compare/v4.2.0...v4.3.0
