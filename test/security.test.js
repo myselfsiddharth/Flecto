@@ -1629,6 +1629,22 @@ describe('a file the baseline commit does not have (--new-files)', () => {
     }
   });
 
+  test('--new-files added marks the file as new in pr-comment headings', () => {
+    const dir = repoAddingAFile('replicas: 2\n');
+    try {
+      const run = runFlecto(dir, [
+        'ci', 'config/new.yaml', 'config/old.yaml', '--snapshot-ref', 'HEAD~1', '--new-files', 'added',
+        '--format', 'pr-comment', '--fail-on', 'policy,error',
+      ]);
+      assert.equal(run.status, 0, run.stderr);
+      assert.match(run.stdout, /\*\*`config\/new\.yaml`\*\* \(new file\) — 1 change/);
+      assert.match(run.stdout, /\*\*`config\/old\.yaml`\*\* — 1 change/);
+      assert.doesNotMatch(run.stdout, /\*\*`config\/old\.yaml`\*\* \(new file\)/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('newFiles declared in .flectorc is refused, not honored', () => {
     // A rename reads as a new file, so from .flectorc this would let a pull
     // request move a file and have every `changed` reported as `added`.

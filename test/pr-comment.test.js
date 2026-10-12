@@ -113,6 +113,24 @@ test('renderPrComment summarizes changes without findings', () => {
   assert.match(body, /\| removed \| `cache\.ttl` \| `60` \| — \|/u);
 });
 
+test('renderPrComment marks a new file in the heading', () => {
+  const body = renderPrComment([
+    {
+      ...result('/repo/config/new.yaml', [
+        { type: 'added', path: 'replicas', after: 2 },
+      ]),
+      isNew: true,
+    },
+    result('/repo/config/old.yaml', [
+      { type: 'changed', path: 'replicas', before: 1, after: 2 },
+    ]),
+  ], { cwd: '/repo' });
+
+  assert.match(body, /\*\*`config\/new\.yaml`\*\* \(new file\) — 1 change/u);
+  assert.match(body, /\*\*`config\/old\.yaml`\*\* — 1 change/u);
+  assert.doesNotMatch(body, /\*\*`config\/old\.yaml`\*\* \(new file\)/u);
+});
+
 test('renderPrComment omits the status prefix when the outcome is unknown', () => {
   const body = renderPrComment([result('/repo/a.json', [])], { cwd: '/repo' });
   assert.doesNotMatch(body, /Check (failing|passing)/u);

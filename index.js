@@ -1491,12 +1491,14 @@ program
             `${effective.snapshotRef ? ` (ref: ${effective.snapshotRef})` : ''}: ${err.message}`
           );
         }
+        let isNew = false;
         if (before === NEW_FILE) {
           renderWarn(
             `${relative(cwd, filepath).replaceAll('\\', '/')} is not in ${effective.snapshotRef}: reporting it as a new file,`
             + ' every key added (--new-files added).',
           );
           before = emptyBaselineLike(after);
+          isNew = true;
         }
         const events = diffTrees(before, after, dOpts);
         const rawFindings = await evaluatePolicies(events, {
@@ -1525,6 +1527,7 @@ program
           outboundChanges: maybeMaskChanges(events, maskSecrets),
           outboundFindings: maybeMaskFindings(policyFindings, events, maskSecrets),
           changesFail: shouldFailFromChanges(events, failOn),
+          isNew,
         });
         diffed += 1;
       }
@@ -1600,6 +1603,7 @@ program
             policies: active,
           }),
           policies: active,
+          ...(f.isNew ? { isNew: true } : {}),
         };
       });
 

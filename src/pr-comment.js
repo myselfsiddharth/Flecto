@@ -21,7 +21,7 @@ const SEVERITY_HEADINGS = { error: 'Errors', warn: 'Warnings', info: 'Notices' }
 const SEVERITY_NOUNS = { error: 'error', warn: 'warning', info: 'notice' };
 
 /**
- * @typedef {{ file: string, envelope: import('./envelope.js').FlectoEnvelope, policies?: import('./policy.js').PolicyFinding[] }} CiResult
+ * @typedef {{ file: string, envelope: import('./envelope.js').FlectoEnvelope, policies?: import('./policy.js').PolicyFinding[], isNew?: boolean }} CiResult
  * @typedef {{ provider?: string, prNumber: number, token: string, apiUrl: string,
  *   repo?: string, projectId?: string, webUrl?: string, workspace?: string, repoSlug?: string
  * }} PrCommentContext The fields a delivery adapter resolved; which ones are
@@ -237,7 +237,8 @@ export function renderPrComment(results, options = {}) {
       const changes = changesOf(result);
       if (changes.length === 0) continue;
       const file = displayPath(result.file, cwd);
-      lines.push('', `**${inlineCode(file)}** — ${plural(changes.length, 'change')}`, '');
+      const tag = result.isNew ? ' (new file)' : '';
+      lines.push('', `**${inlineCode(file)}**${tag} — ${plural(changes.length, 'change')}`, '');
       lines.push('| Change | Path | Before | After |', '|---|---|---|---|');
       for (const change of changes) {
         const kind = change.note ? `${change.type} (${change.note})` : String(change.type);
