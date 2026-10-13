@@ -9,6 +9,12 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ### Fixed
 
+- **The PR comment marks a file that is new in this PR** ([#246], fixed by
+  [@Adityaaop](https://github.com/Adityaaop) in [#259]). With `--new-files
+  added`, a new file's heading read like an edit to an existing one; it is now
+  ``**`path`** (new file) — N changes``. `--format json` and `ndjson` gain
+  `"isNew": true` on that file's entry, outside the envelope.
+
 - **The `node-runtime` pack catches Compose's list-form environment** ([#242],
   fixed by [@kragent66-glitch](https://github.com/kragent66-glitch) in
   [#249]). `- NODE_OPTIONS=--inspect=...` and `- NODE_TLS_REJECT_UNAUTHORIZED=0`
@@ -17,6 +23,8 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 [#242]: https://github.com/myselfsiddharth/Flecto/issues/242
 [#249]: https://github.com/myselfsiddharth/Flecto/pull/249
+[#246]: https://github.com/myselfsiddharth/Flecto/issues/246
+[#259]: https://github.com/myselfsiddharth/Flecto/pull/259
 
 ## [4.4.2] - 2026-10-11
 
