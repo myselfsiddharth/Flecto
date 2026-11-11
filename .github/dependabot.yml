@@ -21,6 +21,10 @@ updates:
       # supported runtime for. Revisit with the Node floor itself (#104).
       - dependency-name: "chalk"
         update-types: ["version-update:semver-major"]
+      # chokidar 6 requires Node >=22.22 (see #265); the engines test caught it.
+      # Revisit with the Node floor itself (#104).
+      - dependency-name: "chokidar"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
