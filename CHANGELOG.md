@@ -7,6 +7,8 @@ The format is based on [Keep a Changelog], and this project adheres to
 
 ## [Unreleased]
 
+## [4.4.3] - 2026-11-11
+
 ### Fixed
 
 - **The PR comment marks a file that is new in this PR** ([#246], fixed by
@@ -1511,7 +1513,8 @@ fixed — those runs were never actually gated — but the failure is new.
 - Misconfigured policy packs/plugins cause `watch` to exit non-zero instead of
   continuing with no policies.
 
-[Unreleased]: https://github.com/myselfsiddharth/Flecto/compare/v4.4.2...HEAD
+[Unreleased]: https://github.com/myselfsiddharth/Flecto/compare/v4.4.3...HEAD
+[4.4.3]: https://github.com/myselfsiddharth/Flecto/compare/v4.4.2...v4.4.3
 [4.4.2]: https://github.com/myselfsiddharth/Flecto/compare/v4.4.1...v4.4.2
 [4.4.1]: https://github.com/myselfsiddharth/Flecto/compare/v4.4.0...v4.4.1
 [4.4.0]: https://github.com/myselfsiddharth/Flecto/compare/v4.3.0...v4.4.0
